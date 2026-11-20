@@ -166,9 +166,9 @@ object VariationTableEngine {
             rawNodes
         }
 
-        // Determine if function is defined toward -∞ and +∞
-        val defNegInf = expr.eval(-1e4, m).isFinite()
-        val defPosInf = expr.eval(1e4, m).isFinite()
+        // Determine if function is defined toward -∞ and +∞ (note: overflow to ±Infinity means IN domain, only NaN means outside!)
+        val defNegInf = isDefinedTowardInfinity(expr, -1.0, m)
+        val defPosInf = isDefinedTowardInfinity(expr, 1.0, m)
 
         val nodes = mutableListOf<TableNode>()
 
@@ -312,6 +312,16 @@ object VariationTableEngine {
         )
     }
 
+    private fun isDefinedTowardInfinity(expr: MathExprParser.Expr, sign: Double, m: Double): Boolean {
+        val probes = doubleArrayOf(50.0, 200.0, 1e3, 1e4)
+        var definedCount = 0
+        for (p in probes) {
+            val v = expr.eval(sign * p, m)
+            if (!v.isNaN()) definedCount++
+        }
+        return definedCount >= 3
+    }
+
     private fun buildDomainDescription(
         defNegInf: Boolean,
         defPosInf: Boolean,
@@ -328,34 +338,52 @@ object VariationTableEngine {
                 "D = ℝ \\ {$list}"
             }
         }
-        if (!defNegInf && defPosInf && boundaries.size == 1 && poles.isEmpty()) {
-            val b = boundaries.first()
-            val closed = expr.eval(b, m).isFinite()
+        // Handle one-sided domains whose boundary is either a finite endpoint (sqrt(x)) OR a vertical pole (ln(x))
+        val edgePoints = (boundaries + poles).distinct().sorted()
+        if (!defNegInf && defPosInf && edgePoints.isNotEmpty()) {
+            val b = edgePoints.first()
+            val closed = b in boundaries && expr.eval(b, m).isFinite()
             val br = if (closed) "[" else "("
-            return "D = $br${Geo2DMathHelpers.formatNum(b)}; +∞)"
+            val extraPoles = poles.filter { it > b + 0.05 }
+            val base = "$br${Geo2DMathHelpers.formatNum(b)}; +∞)"
+            return if (extraPoles.isEmpty()) "D = $base"
+            else "D = $base \\ {${extraPoles.take(4).joinToString("; ") { Geo2DMathHelpers.formatNum(it) }}}"
         }
-        if (defNegInf && !defPosInf && boundaries.size == 1 && poles.isEmpty()) {
-            val b = boundaries.first()
-            val closed = expr.eval(b, m).isFinite()
+        if (defNegInf && !defPosInf && edgePoints.isNotEmpty()) {
+            val b = edgePoints.last()
+            val closed = b in boundaries && expr.eval(b, m).isFinite()
             val br = if (closed) "]" else ")"
-            return "D = (-∞; ${Geo2DMathHelpers.formatNum(b)}$br"
+            val extraPoles = poles.filter { it < b - 0.05 }
+            val base = "(-∞; ${Geo2DMathHelpers.formatNum(b)}$br"
+            return if (extraPoles.isEmpty()) "D = $base"
+            else "D = $base \\ {${extraPoles.take(4).joinToString("; ") { Geo2DMathHelpers.formatNum(it) }}}"
         }
-        if (!defNegInf && !defPosInf && boundaries.size == 2) {
-            val b1 = boundaries[0]
-            val b2 = boundaries[1]
-            val lBr = if (expr.eval(b1, m).isFinite()) "[" else "("
-            val rBr = if (expr.eval(b2, m).isFinite()) "]" else ")"
+        if (!defNegInf && !defPosInf && edgePoints.size >= 2) {
+            val b1 = edgePoints.first()
+            val b2 = edgePoints.last()
+            val lBr = if (b1 in boundaries && expr.eval(b1, m).isFinite()) "[" else "("
+            val rBr = if (b2 in boundaries && expr.eval(b2, m).isFinite()) "]" else ")"
             return "D = $lBr${Geo2DMathHelpers.formatNum(b1)}; ${Geo2DMathHelpers.formatNum(b2)}$rBr"
         }
         return if (poles.isEmpty()) "Tập xác định trên miền vẽ" else "D loại các điểm {${poles.take(4).joinToString("; ") { Geo2DMathHelpers.formatNum(it) }}}"
     }
 
     private fun formatLimitAtInfinity(expr: MathExprParser.Expr, sign: Double, m: Double): String {
-        val y1 = expr.eval(sign * 1e3, m)
-        val y2 = expr.eval(sign * 1e4, m)
-        val y3 = expr.eval(sign * 1e5, m)
-        if (!y2.isFinite() && !y1.isFinite()) return "✕"
-        val yRef = if (y3.isFinite()) y3 else if (y2.isFinite()) y2 else y1
+        val xs = doubleArrayOf(50.0, 200.0, 1e3, 1e4, 1e5)
+        val ys = DoubleArray(xs.size) { idx -> expr.eval(sign * xs[idx], m) }
+        val nonNaN = ys.filter { !it.isNaN() }
+        if (nonNaN.isEmpty()) return "✕"
+
+        // If it overflowed to ±Infinity (e.g. e^x, 2^x, x^100), report ±∞ directly!
+        val lastNonNaN = nonNaN.last()
+        if (lastNonNaN.isInfinite()) {
+            return if (lastNonNaN > 0.0) "+∞" else "-∞"
+        }
+
+        val y1 = ys[2]
+        val y2 = ys[3]
+        val y3 = ys[4]
+        val yRef = listOf(y3, y2, y1, ys[1], ys[0]).firstOrNull { it.isFinite() } ?: return "✕"
         if (y1.isFinite() && y2.isFinite() && y3.isFinite()) {
             if (abs(y3 - y2) < 5e-3 && abs(y3) < 1e4) {
                 val yCheck = expr.eval(sign * 1e5 + 1.9, m)
@@ -368,6 +396,13 @@ object VariationTableEngine {
                 return if (y3 > 0) "+∞" else "-∞"
             }
         }
+        // Slow divergence such as ln(x) as x -> +∞: monotonically growing across orders of magnitude
+        if (ys[0].isFinite() && ys[2].isFinite() && ys[4].isFinite()) {
+            val d1 = ys[2] - ys[0]
+            val d2 = ys[4] - ys[2]
+            if (d1 > 1.5 && d2 > 2.0 && ys[4] > 8.0) return "+∞"
+            if (d1 < -1.5 && d2 < -2.0 && ys[4] < -8.0) return "-∞"
+        }
         return when {
             !yRef.isFinite() -> if (y1 > 0) "+∞" else "-∞"
             yRef > 500.0 -> "+∞"
@@ -377,15 +412,29 @@ object VariationTableEngine {
     }
 
     private fun formatOneSidedLimit(expr: MathExprParser.Expr, x0: Double, side: Double, m: Double): String {
+        val yCloser = expr.eval(x0 + side * 1e-8, m)
         val yNear = expr.eval(x0 + side * 1e-5, m)
         val yMid = expr.eval(x0 + side * 1e-3, m)
         val yFar = expr.eval(x0 + side * 1e-2, m)
-        if (!yNear.isFinite() && !yMid.isFinite()) return "✕"
-        val ref = if (yNear.isFinite()) yNear else yMid
-        if (yMid.isFinite() && yFar.isFinite() && abs(ref) > max(abs(yFar) * 2.0, 12.0)) {
-            return if (ref > 0) "+∞" else "-∞"
+        if (yCloser.isInfinite()) return if (yCloser > 0.0) "+∞" else "-∞"
+        if (yNear.isInfinite()) return if (yNear > 0.0) "+∞" else "-∞"
+        if (yNear.isNaN() && yMid.isNaN()) return "✕"
+        val ref = when {
+            yCloser.isFinite() -> yCloser
+            yNear.isFinite() -> yNear
+            yMid.isFinite() -> yMid
+            else -> return "✕"
         }
-        return if (ref.isFinite()) Geo2DMathHelpers.formatNum(snapVal(ref)) else "✕"
+        if (yMid.isFinite() && yFar.isFinite()) {
+            val rapidGrowth = abs(ref) > max(abs(yFar) * 2.0, 12.0)
+            val logDivergence = yCloser.isFinite() && yNear.isFinite() &&
+                abs(yCloser) > abs(yNear) + 2.0 && abs(yNear) > abs(yMid) + 1.5 && abs(yCloser) > 10.0 &&
+                ((yCloser > 0 && yNear > 0) || (yCloser < 0 && yNear < 0))
+            if (rapidGrowth || logDivergence) {
+                return if (ref > 0) "+∞" else "-∞"
+            }
+        }
+        return Geo2DMathHelpers.formatNum(snapVal(ref))
     }
 
     private fun snapVal(v: Double): Double {
@@ -487,10 +536,12 @@ fun VariationTableDialog(
                                 fontWeight = FontWeight.Bold
                             )
                         }
+                        val safeMin = minOf(paramMMin, paramMMax).toFloat()
+                        val safeMax = maxOf(paramMMin, paramMMax).toFloat().let { if (it <= safeMin) safeMin + 1f else it }
                         Slider(
-                            value = paramM.toFloat().coerceIn(paramMMin.toFloat(), paramMMax.toFloat()),
+                            value = paramM.toFloat().coerceIn(safeMin, safeMax),
                             onValueChange = { onChangeParamM(it.toDouble()) },
-                            valueRange = paramMMin.toFloat()..paramMMax.toFloat(),
+                            valueRange = safeMin..safeMax,
                             modifier = Modifier.height(30.dp)
                         )
                     }

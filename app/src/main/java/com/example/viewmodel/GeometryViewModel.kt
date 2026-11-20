@@ -35,6 +35,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
     private var replayJob: Job? = null
     private var fullSnapshotBeforeReplay: GeometrySnapshot? = null
     private var dragHistoryRecorded = false
+    private var idSeq = 1
 
     private data class ActiveDrag(
         val name: String,
@@ -92,6 +93,8 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
     }
 
     // ================= HISTORY & SNAPSHOT APPLICATION =================
+    private fun nextId(prefix: String): String = "${prefix}_${System.currentTimeMillis()}_${idSeq++}"
+
     private fun pushHistory(snap: GeometrySnapshot = _uiState.value.snapshot) {
         if (undoStack.lastOrNull() == snap) return
         undoStack.addLast(snap)
@@ -99,12 +102,58 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         redoStack.clear()
     }
 
-    private fun scheduleDebouncedAutoSave(snapshot: GeometrySnapshot) {
+    /**
+     * Never persist a truncated Replay step to disk. If Replay is active, mirror live view/camera
+     * settings onto fullSnapshotBeforeReplay and save that full snapshot instead.
+     */
+    private fun snapshotForDisk(liveSnap: GeometrySnapshot): GeometrySnapshot {
+        val full = fullSnapshotBeforeReplay ?: return liveSnap
+        val merged = full.copy(
+            camera = liveSnap.camera,
+            sensitivity = liveSnap.sensitivity,
+            dashed = liveSnap.dashed,
+            altitude = liveSnap.altitude,
+            labels = liveSnap.labels,
+            showGrid = liveSnap.showGrid,
+            showAxes = liveSnap.showAxes,
+            showCoordsOnLabels = liveSnap.showCoordsOnLabels,
+            snapEnabled = liveSnap.snapEnabled
+        )
+        fullSnapshotBeforeReplay = merged
+        return merged
+    }
+
+    private fun persistSafeAutoSession(liveSnap: GeometrySnapshot) {
+        autoSaveJob?.cancel()
+        persistence.saveAutoSession(snapshotForDisk(liveSnap))
+    }
+
+    private fun scheduleDebouncedAutoSave(liveSnap: GeometrySnapshot) {
+        val toSave = snapshotForDisk(liveSnap)
         autoSaveJob?.cancel()
         autoSaveJob = viewModelScope.launch {
             delay(300)
-            persistence.saveAutoSession(snapshot)
+            persistence.saveAutoSession(toSave)
         }
+    }
+
+    private fun applyResolvedCalcSelections(
+        st: GeometryUiState,
+        scene: BuiltScene,
+        nextSnap: GeometrySnapshot
+    ): GeometryUiState {
+        val keys = scene.pointRegistry.keys.toList()
+        return st.copy(
+            snapshot = nextSnap,
+            scene = scene,
+            canUndo = undoStack.isNotEmpty(),
+            canRedo = redoStack.isNotEmpty(),
+            calcPointA = if (st.calcPointA in scene.pointRegistry) st.calcPointA else keys.getOrElse(0) { "S" },
+            calcPointB = if (st.calcPointB in scene.pointRegistry) st.calcPointB else keys.getOrElse(1) { keys.firstOrNull() ?: "A" },
+            calcPlaneP1 = if (st.calcPlaneP1 in scene.pointRegistry) st.calcPlaneP1 else keys.getOrElse(1) { keys.firstOrNull() ?: "A" },
+            calcPlaneP2 = if (st.calcPlaneP2 in scene.pointRegistry) st.calcPlaneP2 else keys.getOrElse(2) { keys.firstOrNull() ?: "B" },
+            calcPlaneP3 = if (st.calcPlaneP3 in scene.pointRegistry) st.calcPlaneP3 else keys.getOrElse(3) { keys.firstOrNull() ?: "C" }
+        )
     }
 
     private fun updateSnapshot(
@@ -126,24 +175,10 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         } else {
             built
         }
-        val keys = finalScene.pointRegistry.keys.toList()
 
-        _uiState.update { st ->
-            st.copy(
-                snapshot = next,
-                scene = finalScene,
-                canUndo = undoStack.isNotEmpty(),
-                canRedo = redoStack.isNotEmpty(),
-                calcPointA = if (st.calcPointA in finalScene.pointRegistry) st.calcPointA else keys.getOrElse(0) { "S" },
-                calcPointB = if (st.calcPointB in finalScene.pointRegistry) st.calcPointB else keys.getOrElse(1) { keys.firstOrNull() ?: "A" },
-                calcPlaneP1 = if (st.calcPlaneP1 in finalScene.pointRegistry) st.calcPlaneP1 else keys.getOrElse(1) { keys.firstOrNull() ?: "A" },
-                calcPlaneP2 = if (st.calcPlaneP2 in finalScene.pointRegistry) st.calcPlaneP2 else keys.getOrElse(2) { keys.firstOrNull() ?: "B" },
-                calcPlaneP3 = if (st.calcPlaneP3 in finalScene.pointRegistry) st.calcPlaneP3 else keys.getOrElse(3) { keys.firstOrNull() ?: "C" }
-            )
-        }
+        _uiState.update { st -> applyResolvedCalcSelections(st, finalScene, next) }
         if (autoSave) {
-            autoSaveJob?.cancel()
-            persistence.saveAutoSession(next)
+            persistSafeAutoSession(next)
         }
     }
 
@@ -155,43 +190,38 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         val next = transform(_uiState.value.snapshot)
         _uiState.update { it.copy(snapshot = next) }
         if (autoSave) {
-            autoSaveJob?.cancel()
-            persistence.saveAutoSession(next)
+            persistSafeAutoSession(next)
+        } else {
+            snapshotForDisk(next)
         }
     }
 
     fun undo() {
+        if (fullSnapshotBeforeReplay != null) {
+            stopReplay(restoreFull = true)
+        }
         if (undoStack.isEmpty()) return
         redoStack.addLast(_uiState.value.snapshot)
         val prev = undoStack.removeLast()
         val scene = ShapeBuilder.build(prev)
         _uiState.update { st ->
-            st.copy(
-                snapshot = prev,
-                scene = scene,
-                selectedFirstPoint = null,
-                canUndo = undoStack.isNotEmpty(),
-                canRedo = redoStack.isNotEmpty()
-            )
+            applyResolvedCalcSelections(st, scene, prev).copy(selectedFirstPoint = null)
         }
-        persistence.saveAutoSession(prev)
+        persistSafeAutoSession(prev)
     }
 
     fun redo() {
+        if (fullSnapshotBeforeReplay != null) {
+            stopReplay(restoreFull = true)
+        }
         if (redoStack.isEmpty()) return
         undoStack.addLast(_uiState.value.snapshot)
         val next = redoStack.removeLast()
         val scene = ShapeBuilder.build(next)
         _uiState.update { st ->
-            st.copy(
-                snapshot = next,
-                scene = scene,
-                selectedFirstPoint = null,
-                canUndo = undoStack.isNotEmpty(),
-                canRedo = redoStack.isNotEmpty()
-            )
+            applyResolvedCalcSelections(st, scene, next).copy(selectedFirstPoint = null)
         }
-        persistence.saveAutoSession(next)
+        persistSafeAutoSession(next)
     }
 
     // ================= TOAST & UI PANELS =================
@@ -655,7 +685,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         updateSnapshot(recordHistory = true) { snap ->
             snap.copy(
                 customPoints = snap.customPoints + CustomEdgePoint(
-                    id = "pt_${System.currentTimeMillis()}",
+                    id = nextId("pt"),
                     name = name,
                     from = from,
                     to = to,
@@ -675,7 +705,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
             snap.copy(
                 showAxes = true,
                 customXYZPoints = snap.customXYZPoints + CustomXYZPoint(
-                    id = "xyz_${System.currentTimeMillis()}",
+                    id = nextId("xyz"),
                     name = name,
                     x = x,
                     y = y,
@@ -692,7 +722,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         updateSnapshot(recordHistory = true) { snap ->
             snap.copy(
                 customLines = snap.customLines + CustomLine(
-                    id = "ln_${System.currentTimeMillis()}",
+                    id = nextId("ln"),
                     p1 = p1,
                     p2 = p2,
                     style = style,
@@ -711,7 +741,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         updateSnapshot(recordHistory = true) { snap ->
             snap.copy(
                 customPlanes = snap.customPlanes + CustomPlane(
-                    id = "pl_${System.currentTimeMillis()}",
+                    id = nextId("pl"),
                     pts = pts
                 )
             )
@@ -720,8 +750,46 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         return null
     }
 
-    fun removeCustomPoint(id: String) = updateSnapshot(recordHistory = true) { s -> s.copy(customPoints = s.customPoints.filterNot { it.id == id }) }
-    fun removeCustomXYZ(id: String) = updateSnapshot(recordHistory = true) { s -> s.copy(customXYZPoints = s.customXYZPoints.filterNot { it.id == id }) }
+    /** Recursively removes a custom point and any dependent points/lines/planes/dynamic section. */
+    private fun cascadeRemovePointNames(snap: GeometrySnapshot, initialNames: Set<String>): GeometrySnapshot {
+        if (initialNames.isEmpty()) return snap
+        val removed = initialNames.toMutableSet()
+        var changed = true
+        while (changed) {
+            changed = false
+            for (pt in snap.customPoints) {
+                if (pt.name !in removed && (pt.from in removed || pt.to in removed)) {
+                    removed.add(pt.name)
+                    changed = true
+                }
+            }
+        }
+        val cleanedPlanes = snap.customPlanes.mapNotNull { pl ->
+            val kept = pl.pts.filterNot { it in removed }
+            if (kept.size >= 3) pl.copy(pts = kept) else null
+        }
+        val cleanedSec = snap.dynamicSection?.takeUnless { ds ->
+            ds.p1 in removed || ds.p2 in removed || ds.p3 in removed
+        }
+        return snap.copy(
+            customPoints = snap.customPoints.filterNot { it.name in removed },
+            customXYZPoints = snap.customXYZPoints.filterNot { it.name in removed },
+            customLines = snap.customLines.filterNot { it.p1 in removed || it.p2 in removed },
+            customPlanes = cleanedPlanes,
+            dynamicSection = cleanedSec
+        )
+    }
+
+    fun removeCustomPoint(id: String) = updateSnapshot(recordHistory = true) { s ->
+        val name = s.customPoints.firstOrNull { it.id == id }?.name
+        if (name != null) cascadeRemovePointNames(s, setOf(name)) else s
+    }
+
+    fun removeCustomXYZ(id: String) = updateSnapshot(recordHistory = true) { s ->
+        val name = s.customXYZPoints.firstOrNull { it.id == id }?.name
+        if (name != null) cascadeRemovePointNames(s, setOf(name)) else s
+    }
+
     fun removeCustomLine(id: String) = updateSnapshot(recordHistory = true) { s -> s.copy(customLines = s.customLines.filterNot { it.id == id }) }
     fun removeCustomPlane(id: String) = updateSnapshot(recordHistory = true) { s -> s.copy(customPlanes = s.customPlanes.filterNot { it.id == id }) }
 
@@ -1185,19 +1253,18 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
 
     fun loadNamedSlot(slot: SavedSlot) {
         runCatching { GeometryPersistence.jsonToSnapshot(slot.snapshotJson) }.onSuccess { loaded ->
+            if (fullSnapshotBeforeReplay != null) stopReplay(restoreFull = true)
             pushHistory()
             val scene = ShapeBuilder.build(loaded)
             _uiState.update { st ->
-                st.copy(
-                    snapshot = loaded,
-                    scene = scene,
+                applyResolvedCalcSelections(st, scene, loaded).copy(
                     customFileName = slot.name,
                     saveModalOpen = false,
-                    canUndo = undoStack.isNotEmpty(),
-                    canRedo = redoStack.isNotEmpty()
+                    selectedFirstPoint = null,
+                    openCategories = setOf(loaded.shape.category)
                 )
             }
-            persistence.saveAutoSession(loaded)
+            persistSafeAutoSession(loaded)
             showToast("Đã mở bài \"${slot.name}\"!")
         }.onFailure {
             showToast("Không thể mở bài vẽ này!")
@@ -1222,26 +1289,25 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         showToast("Đã chuyển sang chế độ hỏi vị trí mỗi lần lưu")
     }
 
-    fun exportSnapshotJson(): String = GeometryPersistence.snapshotToJson(_uiState.value.snapshot)
+    fun exportSnapshotJson(): String = GeometryPersistence.snapshotToJson(fullSnapshotBeforeReplay ?: _uiState.value.snapshot)
 
     fun exportObjModel(): String = MeshExporter.exportToObj(_uiState.value.snapshot, sanitizedFileName())
 
     fun importSnapshotJson(jsonContent: String, fileName: String? = null) {
         runCatching { GeometryPersistence.jsonToSnapshot(jsonContent) }.onSuccess { loaded ->
+            if (fullSnapshotBeforeReplay != null) stopReplay(restoreFull = true)
             pushHistory()
             val scene = ShapeBuilder.build(loaded)
             val cleanName = fileName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() }
             _uiState.update { st ->
-                st.copy(
-                    snapshot = loaded,
-                    scene = scene,
+                applyResolvedCalcSelections(st, scene, loaded).copy(
                     customFileName = cleanName ?: st.customFileName,
                     saveModalOpen = false,
-                    canUndo = undoStack.isNotEmpty(),
-                    canRedo = redoStack.isNotEmpty()
+                    selectedFirstPoint = null,
+                    openCategories = setOf(loaded.shape.category)
                 )
             }
-            persistence.saveAutoSession(loaded)
+            persistSafeAutoSession(loaded)
             showToast("Đã mở file ${fileName ?: "JSON"} thành công!")
         }.onFailure {
             showToast("File JSON không hợp lệ hoặc bị lỗi!")
@@ -1278,15 +1344,15 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun resetAllToDefault() {
+        if (fullSnapshotBeforeReplay != null) stopReplay(restoreFull = false)
+        autoSaveJob?.cancel()
         persistence.clearAutoSession()
         undoStack.clear()
         redoStack.clear()
         val defaultSnap = GeometrySnapshot()
         val scene = ShapeBuilder.build(defaultSnap)
         _uiState.update { st ->
-            st.copy(
-                snapshot = defaultSnap,
-                scene = scene,
+            applyResolvedCalcSelections(st, scene, defaultSnap).copy(
                 selectedFirstPoint = null,
                 draggingPointName = null,
                 linkedPartners = emptySet(),

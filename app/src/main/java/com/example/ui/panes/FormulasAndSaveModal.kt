@@ -81,7 +81,7 @@ fun FormulasPane(
             verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             m.dimensionRows.forEach { (label, value) ->
-                CalcResultRow(label, value, CyanAccent)
+                CalcResultRow(label, if (hide) "???" else value, CyanAccent)
             }
         }
 

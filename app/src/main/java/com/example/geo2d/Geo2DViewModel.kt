@@ -94,11 +94,53 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         redoStack.clear()
     }
 
-    private fun scheduleDebouncedAutoSave(snapshot: Geo2DSnapshot) {
+    private fun snapshotForDisk(liveSnap: Geo2DSnapshot): Geo2DSnapshot {
+        val full = fullSnapshotBeforeReplay ?: return liveSnap
+        val merged = full.copy(
+            camera = liveSnap.camera,
+            sensitivity = liveSnap.sensitivity,
+            showAxes = liveSnap.showAxes,
+            showGrid = liveSnap.showGrid,
+            snapToGrid = liveSnap.snapToGrid,
+            showPointCoords = liveSnap.showPointCoords,
+            showMeasurements = liveSnap.showMeasurements,
+            showKeyGraphPoints = liveSnap.showKeyGraphPoints,
+            showAsymptotes = liveSnap.showAsymptotes,
+            showTangentOnTrace = liveSnap.showTangentOnTrace
+        )
+        fullSnapshotBeforeReplay = merged
+        return merged
+    }
+
+    private fun stopParamMAnimIfRunning() {
+        if (paramMAnimJob != null || _uiState.value.paramMAnimating) {
+            paramMAnimJob?.cancel()
+            paramMAnimJob = null
+            _uiState.update { it.copy(paramMAnimating = false) }
+        }
+    }
+
+    private fun scheduleDebouncedAutoSave(liveSnap: Geo2DSnapshot) {
+        val toSave = snapshotForDisk(liveSnap)
         autoSaveJob?.cancel()
         autoSaveJob = viewModelScope.launch {
             delay(350)
-            persistence.saveAutoSession(snapshot)
+            persistence.saveAutoSession(toSave)
+        }
+    }
+
+    /** Updates camera/view-only settings without cancelling an active Construction Replay. */
+    private fun updateViewOnly(
+        autoSave: Boolean = true,
+        transform: (Geo2DSnapshot) -> Geo2DSnapshot
+    ) {
+        val next = transform(_uiState.value.snapshot)
+        _uiState.update { it.copy(snapshot = next) }
+        if (autoSave) {
+            autoSaveJob?.cancel()
+            persistence.saveAutoSession(snapshotForDisk(next))
+        } else {
+            snapshotForDisk(next)
         }
     }
 
@@ -119,9 +161,11 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 st.traceResults
             }
+            val validVarId = st.variationTargetFnId?.takeIf { id -> next.functions.any { it.id == id } }
             st.copy(
                 snapshot = next,
                 traceResults = updatedTrace,
+                variationTargetFnId = validVarId,
                 canUndo = undoStack.isNotEmpty(),
                 canRedo = redoStack.isNotEmpty()
             )
@@ -133,32 +177,44 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun undo() {
+        stopParamMAnimIfRunning()
+        if (fullSnapshotBeforeReplay != null) stopReplay(restoreFull = true)
         if (undoStack.isEmpty()) return
         redoStack.addLast(_uiState.value.snapshot)
         val prev = undoStack.removeLast()
         _uiState.update { st ->
+            val validVarId = st.variationTargetFnId?.takeIf { id -> prev.functions.any { it.id == id } }
             st.copy(
                 snapshot = prev,
                 pendingPointIds = emptyList(),
+                variationTargetFnId = validVarId,
+                traceResults = if (st.traceX != null) evaluateTrace(prev, st.traceX) else st.traceResults,
                 canUndo = undoStack.isNotEmpty(),
                 canRedo = redoStack.isNotEmpty()
             )
         }
+        autoSaveJob?.cancel()
         persistence.saveAutoSession(prev)
     }
 
     fun redo() {
+        stopParamMAnimIfRunning()
+        if (fullSnapshotBeforeReplay != null) stopReplay(restoreFull = true)
         if (redoStack.isEmpty()) return
         undoStack.addLast(_uiState.value.snapshot)
         val next = redoStack.removeLast()
         _uiState.update { st ->
+            val validVarId = st.variationTargetFnId?.takeIf { id -> next.functions.any { it.id == id } }
             st.copy(
                 snapshot = next,
                 pendingPointIds = emptyList(),
+                variationTargetFnId = validVarId,
+                traceResults = if (st.traceX != null) evaluateTrace(next, st.traceX) else st.traceResults,
                 canUndo = undoStack.isNotEmpty(),
                 canRedo = redoStack.isNotEmpty()
             )
         }
+        autoSaveJob?.cancel()
         persistence.saveAutoSession(next)
     }
 
@@ -201,7 +257,7 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
     // ================= CAMERA & DISPLAY TOGGLES =================
     fun panCamera(dxPx: Float, dyPx: Float) {
         val sens = _uiState.value.snapshot.sensitivity.pan.toDouble()
-        updateSnapshot(recordHistory = false, autoSave = false) { s ->
+        updateViewOnly(autoSave = false) { s ->
             val ppu = s.camera.pixelsPerUnit
             s.copy(
                 camera = s.camera.copy(
@@ -216,7 +272,7 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         val sens = _uiState.value.snapshot.sensitivity.zoom.toDouble()
         val adjustedZoom = 1.0 + (zoomFactor - 1.0) * sens
         if (adjustedZoom <= 0.05) return
-        updateSnapshot(recordHistory = false, autoSave = false) { s ->
+        updateViewOnly(autoSave = false) { s ->
             val oldCam = s.camera
             val (beforeX, beforeY) = Geo2DRenderer.screenToWorldDouble(focalX, focalY, oldCam, width, height)
             // Effectively infinite zoom: supports viewing spans from 1e-4 up to 1e12 units!
@@ -234,26 +290,26 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
     fun stepZoom(zoomIn: Boolean) {
         val sens = _uiState.value.snapshot.sensitivity.zoom.toDouble()
         val factor = if (zoomIn) (1.0 + 0.45 * sens) else (1.0 / (1.0 + 0.45 * sens))
-        updateSnapshot(recordHistory = false, autoSave = true) { s ->
+        updateViewOnly(autoSave = true) { s ->
             s.copy(camera = s.camera.copy(pixelsPerUnit = (s.camera.pixelsPerUnit * factor).coerceIn(1e-9, 1e7)))
         }
     }
 
     fun resetView() {
-        updateSnapshot(recordHistory = false, autoSave = true) { s ->
+        updateViewOnly(autoSave = true) { s ->
             s.copy(camera = Geo2DCamera())
         }
         showToast("Đã đưa hệ trục về tâm O(0; 0)")
     }
 
-    fun toggleAxes() = updateSnapshot { it.copy(showAxes = !it.showAxes) }
-    fun toggleGrid() = updateSnapshot { it.copy(showGrid = !it.showGrid) }
-    fun toggleSnap() = updateSnapshot { it.copy(snapToGrid = !it.snapToGrid) }
-    fun togglePointCoords() = updateSnapshot { it.copy(showPointCoords = !it.showPointCoords) }
-    fun toggleMeasurements() = updateSnapshot { it.copy(showMeasurements = !it.showMeasurements) }
-    fun toggleKeyGraphPoints() = updateSnapshot { it.copy(showKeyGraphPoints = !it.showKeyGraphPoints) }
-    fun toggleTangentOnTrace() = updateSnapshot { it.copy(showTangentOnTrace = !it.showTangentOnTrace) }
-    fun toggleAsymptotes() = updateSnapshot { it.copy(showAsymptotes = !it.showAsymptotes) }
+    fun toggleAxes() = updateViewOnly { it.copy(showAxes = !it.showAxes) }
+    fun toggleGrid() = updateViewOnly { it.copy(showGrid = !it.showGrid) }
+    fun toggleSnap() = updateViewOnly { it.copy(snapToGrid = !it.snapToGrid) }
+    fun togglePointCoords() = updateViewOnly { it.copy(showPointCoords = !it.showPointCoords) }
+    fun toggleMeasurements() = updateViewOnly { it.copy(showMeasurements = !it.showMeasurements) }
+    fun toggleKeyGraphPoints() = updateViewOnly { it.copy(showKeyGraphPoints = !it.showKeyGraphPoints) }
+    fun toggleTangentOnTrace() = updateViewOnly { it.copy(showTangentOnTrace = !it.showTangentOnTrace) }
+    fun toggleAsymptotes() = updateViewOnly { it.copy(showAsymptotes = !it.showAsymptotes) }
 
     fun toggleVerifyHideAnswers() {
         _uiState.update { it.copy(verifyHideAnswers = !it.verifyHideAnswers) }
@@ -355,6 +411,7 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startReplay() {
+        stopParamMAnimIfRunning()
         val full = fullSnapshotBeforeReplay ?: _uiState.value.snapshot
         val steps = buildReplaySteps(full)
         if (steps.size <= 1) {
@@ -448,7 +505,7 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         zoom: Float = _uiState.value.snapshot.sensitivity.zoom,
         touchRadius: Float = _uiState.value.snapshot.sensitivity.touchRadius
     ) {
-        updateSnapshot(recordHistory = false, autoSave = false) { s ->
+        updateViewOnly(autoSave = false) { s ->
             s.copy(
                 sensitivity = Geo2DSensitivity(
                     pan = pan.coerceIn(0.4f, 2.2f),
@@ -892,6 +949,7 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearAllGeometryAndGraphs() {
+        stopParamMAnimIfRunning()
         updateSnapshot(recordHistory = true) { s ->
             s.copy(points = emptyList(), objects = emptyList(), functions = emptyList())
         }
@@ -900,6 +958,8 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun applyPreset(preset: Geo2DPreset) {
+        stopParamMAnimIfRunning()
+        if (fullSnapshotBeforeReplay != null) stopReplay(restoreFull = true)
         val pts = mutableListOf<Geo2DPoint>()
         val objs = mutableListOf<Geo2DObject>()
         var keepFuncs = _uiState.value.snapshot.functions
@@ -1008,10 +1068,12 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         return if (raw.isEmpty()) "ToolToan-2D-Oxy" else raw.replace(Regex("[\\\\/:*?\"<>|]"), "-")
     }
 
-    fun exportSnapshotJson(): String = Geo2DPersistence.snapshotToJson(_uiState.value.snapshot)
+    fun exportSnapshotJson(): String = Geo2DPersistence.snapshotToJson(fullSnapshotBeforeReplay ?: _uiState.value.snapshot)
 
     fun importSnapshotJson(jsonContent: String, fileName: String? = null) {
         runCatching { Geo2DPersistence.jsonToSnapshot(jsonContent) }.onSuccess { loaded ->
+            stopParamMAnimIfRunning()
+            if (fullSnapshotBeforeReplay != null) stopReplay(restoreFull = true)
             pushHistory()
             val cleanName = fileName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() }
             _uiState.update { st ->
@@ -1020,10 +1082,14 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
                     customFileName = cleanName ?: st.customFileName,
                     saveModalOpen = false,
                     pendingPointIds = emptyList(),
+                    variationTargetFnId = null,
+                    traceX = null,
+                    traceResults = emptyList(),
                     canUndo = undoStack.isNotEmpty(),
                     canRedo = redoStack.isNotEmpty()
                 )
             }
+            autoSaveJob?.cancel()
             persistence.saveAutoSession(loaded)
             showToast("Đã mở file 2D ${fileName ?: "JSON"}!")
         }.onFailure {

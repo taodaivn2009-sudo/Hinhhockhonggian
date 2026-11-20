@@ -260,13 +260,19 @@ class Geo2DPersistence(context: Context) {
                 )
             } ?: Geo2DCamera()
 
+            val rawMin = o.optDouble("paramMMin", -5.0).takeIf { it.isFinite() } ?: -5.0
+            val rawMax = o.optDouble("paramMMax", 5.0).takeIf { it.isFinite() } ?: 5.0
+            val safeMin = minOf(rawMin, rawMax)
+            val safeMax = if (maxOf(rawMin, rawMax) <= safeMin + 1e-3) safeMin + 10.0 else maxOf(rawMin, rawMax)
+            val rawM = o.optDouble("paramM", 1.0).takeIf { it.isFinite() } ?: 1.0
+
             return Geo2DSnapshot(
                 points = points,
                 objects = objects,
                 functions = functions,
-                paramM = o.optDouble("paramM", 1.0).takeIf { it.isFinite() } ?: 1.0,
-                paramMMin = o.optDouble("paramMMin", -5.0).takeIf { it.isFinite() } ?: -5.0,
-                paramMMax = o.optDouble("paramMMax", 5.0).takeIf { it.isFinite() } ?: 5.0,
+                paramM = rawM.coerceIn(safeMin, safeMax),
+                paramMMin = safeMin,
+                paramMMax = safeMax,
                 showAxes = o.optBoolean("showAxes", true),
                 showGrid = o.optBoolean("showGrid", true),
                 snapToGrid = o.optBoolean("snapToGrid", true),

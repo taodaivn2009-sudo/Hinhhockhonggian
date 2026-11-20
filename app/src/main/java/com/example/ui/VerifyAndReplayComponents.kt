@@ -48,8 +48,12 @@ object VerifyAnswerEvaluator {
         if (direct != null && direct.isFinite()) return direct
         return when (val res = MathExprParser.parse(normalized)) {
             is MathExprParser.ParseResult.Ok -> {
-                val v = res.expr.eval(0.0, 0.0)
-                if (v.isFinite()) v else null
+                if (res.expr.containsVarM()) return null
+                // Reject expressions containing free variable 'x' by comparing eval at two distinct x values
+                val v0 = res.expr.eval(0.0, 0.0)
+                val v1 = res.expr.eval(1.73205, 0.0)
+                if (!v0.isFinite() || !v1.isFinite() || abs(v0 - v1) > 1e-9) return null
+                v0
             }
             is MathExprParser.ParseResult.Error -> null
         }
@@ -118,7 +122,7 @@ fun VerifyModeCard3D(
         }
     }
 
-    LaunchedEffect(selectedTarget, uiState.snapshot.shape, uiState.snapshot.a, uiState.snapshot.b, uiState.snapshot.h) {
+    LaunchedEffect(selectedTarget, expectedValue) {
         checkResult = null
         revealAnswer = false
     }
@@ -365,7 +369,7 @@ fun VerifyModeCard2D(
         }
     }
 
-    LaunchedEffect(selectedTarget, x0Input) {
+    LaunchedEffect(selectedTarget, x0Input, expectedValue) {
         checkResult = null
         revealAnswer = false
     }
@@ -778,10 +782,12 @@ fun ParameterMSliderOverlay(
                 }
             }
 
+            val safeMin = minOf(minVal, maxVal).toFloat()
+            val safeMax = maxOf(minVal, maxVal).toFloat().let { if (it <= safeMin) safeMin + 1f else it }
             Slider(
-                value = paramM.toFloat().coerceIn(minVal.toFloat(), maxVal.toFloat()),
+                value = paramM.toFloat().coerceIn(safeMin, safeMax),
                 onValueChange = { onValueChange(it.toDouble()) },
-                valueRange = minVal.toFloat()..maxVal.toFloat(),
+                valueRange = safeMin..safeMax,
                 modifier = Modifier
                     .height(28.dp)
                     .testTag("param_m_slider"),

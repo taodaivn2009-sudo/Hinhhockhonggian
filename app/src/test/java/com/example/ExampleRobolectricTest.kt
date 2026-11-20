@@ -362,5 +362,59 @@ class ExampleRobolectricTest {
         assertTrue(com.example.ui.VerifyAnswerEvaluator.isCorrect(4.0 * PI / 3.0, vPi))
         val vComma = com.example.ui.VerifyAnswerEvaluator.evaluate("35,26°")!!
         assertTrue(com.example.ui.VerifyAnswerEvaluator.isCorrect(35.264, vComma))
+
+        // 3. Verify Answer Evaluator must reject free variables x or m
+        assertEquals(null, com.example.ui.VerifyAnswerEvaluator.evaluate("x"))
+        assertEquals(null, com.example.ui.VerifyAnswerEvaluator.evaluate("2*x + 1"))
+        assertEquals(null, com.example.ui.VerifyAnswerEvaluator.evaluate("m"))
+    }
+
+    @Test
+    fun `regression fixes for exp log variation table paramM bounds and svg round bodies`() {
+        // 1. Exponential e^x and 2^x must report D = R, lim(-inf)=0, lim(+inf)=+inf (no IEEE overflow bug)
+        val bbtExp = VariationTableEngine.analyze("e^x", m = 0.0)!!
+        assertEquals("D = ℝ", bbtExp.domainText)
+        assertEquals("0", bbtExp.nodes.first().yCenterLabel)
+        assertEquals("+∞", bbtExp.nodes.last().yCenterLabel)
+
+        val bbtPow2 = VariationTableEngine.analyze("2^x", m = 0.0)!!
+        assertEquals("D = ℝ", bbtPow2.domainText)
+        assertEquals("0", bbtPow2.nodes.first().yCenterLabel)
+        assertEquals("+∞", bbtPow2.nodes.last().yCenterLabel)
+
+        // 2. Natural log ln(x) must report D = (0; +inf), lim(0+)=-inf, lim(+inf)=+inf
+        val bbtLn = VariationTableEngine.analyze("ln(x)", m = 0.0)!!
+        assertEquals("D = (0; +∞)", bbtLn.domainText)
+        assertEquals("+∞", bbtLn.nodes.last().yCenterLabel)
+        val zeroNode = bbtLn.nodes.firstOrNull { kotlin.math.abs(it.x) < 0.05 }
+        assertTrue("ln(x) should have boundary node at 0", zeroNode != null)
+        assertEquals("-∞", zeroNode!!.yRightLabel)
+
+        // 3. Inverted or equal paramMMin/paramMMax in imported JSON must be sanitized safely
+        val badRangeJson = """{"paramM": 99, "paramMMin": 5, "paramMMax": 5}"""
+        val safeSnap = Geo2DPersistence.jsonToSnapshot(badRangeJson)
+        assertTrue(safeSnap.paramMMax > safeSnap.paramMMin)
+        assertTrue(safeSnap.paramM in safeSnap.paramMMin..safeSnap.paramMMax)
+
+        // 4. 3D SVG export includes round-body silhouettes and never emits NaN/Infinity
+        listOf(ShapeType.CYLINDER, ShapeType.CONE, ShapeType.SPHERE).forEach { shape ->
+            val snap = GeometrySnapshot(shape = shape, a = 4f, h = 5f)
+            val ui = GeometryUiState(snapshot = snap, scene = ShapeBuilder.build(snap))
+            val svg = SvgExporter.export3DToSvg(1080, 1080, ui, transparentBg = true)
+            assertTrue("${shape.key} SVG must not contain NaN", !svg.contains("NaN"))
+            assertTrue("${shape.key} SVG must not contain Infinity", !svg.contains("Infinity"))
+            assertTrue("${shape.key} SVG should contain silhouette geometry", svg.contains("<line") || svg.contains("<polygon"))
+        }
+
+        // 5. 2D SVG export stays free of NaN/Infinity even under extreme zoom
+        val extremeUi2D = Geo2DUiState(
+            snapshot = Geo2DSnapshot(
+                functions = listOf(GraphFunction("f1", "f1(x)", "e^x", "#38BDF8", true)),
+                camera = Geo2DCamera(centerX = 0.0, centerY = 0.0, pixelsPerUnit = 1e6)
+            )
+        )
+        val svg2D = SvgExporter.export2DToSvg(1080, 1080, extremeUi2D, transparentBg = true)
+        assertTrue(!svg2D.contains("NaN"))
+        assertTrue(!svg2D.contains("Infinity"))
     }
 }

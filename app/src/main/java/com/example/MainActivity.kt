@@ -10,6 +10,7 @@ import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -90,6 +91,14 @@ fun GeometryStudioScreen(
     val context = LocalContext.current
     val density = LocalDensity.current.density
     var canvasSize by remember { mutableStateOf(IntSize(1080, 1920)) }
+
+    BackHandler(enabled = uiState.replayStep != null || uiState.sensitivityPopoverOpen) {
+        if (uiState.sensitivityPopoverOpen) {
+            viewModel.closeSensitivityPopover()
+        } else if (uiState.replayStep != null) {
+            viewModel.stopReplay(restoreFull = true)
+        }
+    }
 
     fun writePngToUri(uri: Uri, locationSuffix: String = "") {
         runCatching {

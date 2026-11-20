@@ -129,6 +129,76 @@ object SvgExporter {
             sb.appendLine("""  <line x1="${f(a.x)}" y1="${f(a.y)}" x2="${f(b.x)}" y2="${f(b.y)}" stroke="$stroke" stroke-width="$sw" stroke-linecap="round"$dashAttr/>""")
         }
 
+        // 2b. Round Body Silhouette Outlines (Cylinder, Cone, Sphere)
+        scene.roundBodyHint?.let { hint ->
+            when (hint) {
+                is RoundBodyHint.Cylinder -> {
+                    val axisMid = (hint.centerBottom + hint.centerTop) * 0.5f
+                    val axisVec = hint.centerTop - hint.centerBottom
+                    val roots = findSilhouetteRoots { theta ->
+                        val c = cos(theta); val s = sin(theta)
+                        val botPt = Vec3(hint.centerBottom.x + c * hint.radius, hint.centerBottom.y, hint.centerBottom.z + s * hint.radius)
+                        val midPt = botPt + axisVec * 0.5f
+                        var n = Vec3(-s, 0f, c).cross(axisVec).normalized()
+                        if (n.dot(midPt - axisMid) < 0f) n = -n
+                        n.dot(camPos - midPt)
+                    }
+                    for (theta in roots) {
+                        val c = cos(theta); val s = sin(theta)
+                        val bPt = proj.project(Vec3(hint.centerBottom.x + c * hint.radius, hint.centerBottom.y, hint.centerBottom.z + s * hint.radius))
+                        val tPt = proj.project(Vec3(hint.centerTop.x + c * hint.radius, hint.centerTop.y, hint.centerTop.z + s * hint.radius))
+                        if (bPt.visible && tPt.visible) {
+                            sb.appendLine("""  <line x1="${f(bPt.x)}" y1="${f(bPt.y)}" x2="${f(tPt.x)}" y2="${f(tPt.y)}" stroke="$solidColor" stroke-width="2.8" stroke-linecap="round"/>""")
+                        }
+                    }
+                }
+                is RoundBodyHint.Cone -> {
+                    val axisMid = (hint.centerBottom + hint.apex) * 0.5f
+                    val apex2d = proj.project(hint.apex)
+                    if (apex2d.visible) {
+                        val roots = findSilhouetteRoots { theta ->
+                            val c = cos(theta); val s = sin(theta)
+                            val basePt = Vec3(hint.centerBottom.x + c * hint.radius, hint.centerBottom.y, hint.centerBottom.z + s * hint.radius)
+                            var n = Vec3(-s, 0f, c).cross(hint.apex - basePt).normalized()
+                            val midPt = (basePt + hint.apex) * 0.5f
+                            if (n.dot(midPt - axisMid) < 0f) n = -n
+                            n.dot(camPos - midPt)
+                        }
+                        for (theta in roots) {
+                            val c = cos(theta); val s = sin(theta)
+                            val bPt = proj.project(Vec3(hint.centerBottom.x + c * hint.radius, hint.centerBottom.y, hint.centerBottom.z + s * hint.radius))
+                            if (bPt.visible) {
+                                sb.appendLine("""  <line x1="${f(apex2d.x)}" y1="${f(apex2d.y)}" x2="${f(bPt.x)}" y2="${f(bPt.y)}" stroke="$solidColor" stroke-width="2.8" stroke-linecap="round"/>""")
+                            }
+                        }
+                    }
+                }
+                is RoundBodyHint.Sphere -> {
+                    val toCam = camPos - hint.center
+                    val d = toCam.length()
+                    val r = hint.radius
+                    if (d > r + 0.02f) {
+                        val dir = toCam / d
+                        val cSil = hint.center + dir * ((r * r) / d)
+                        val ratio = (r / d).coerceIn(0f, 0.999f)
+                        val rSil = r * sqrt(1f - ratio * ratio)
+                        val refUp = if (abs(dir.y) > 0.9f) Vec3(1f, 0f, 0f) else Vec3(0f, 1f, 0f)
+                        val u = refUp.cross(dir).normalized()
+                        val v = dir.cross(u).normalized()
+                        val segs = 64
+                        val ptsStr = (0 until segs).mapNotNull { i ->
+                            val t = (i.toFloat() / segs) * (2.0 * PI).toFloat()
+                            val p2 = proj.project(cSil + u * (cos(t) * rSil) + v * (sin(t) * rSil))
+                            if (p2.visible) "${f(p2.x)},${f(p2.y)}" else null
+                        }
+                        if (ptsStr.size >= 16) {
+                            sb.appendLine("""  <polygon points="${ptsStr.joinToString(" ")}" fill="none" stroke="$solidColor" stroke-width="2.8" stroke-linejoin="round"/>""")
+                        }
+                    }
+                }
+            }
+        }
+
         // 3. Section & dynamic section borders
         fun appendClosedPoly(pts: List<Vec3>, stroke: String, sw: String, dash: String = "") {
             val p2 = pts.map { proj.project(it) }
@@ -211,6 +281,32 @@ object SvgExporter {
 
         sb.appendLine("</svg>")
         return sb.toString()
+    }
+
+    private fun findSilhouetteRoots(evalFacing: (Float) -> Float): List<Float> {
+        val steps = 72
+        val stepSize = (2.0 * PI / steps).toFloat()
+        val roots = ArrayList<Float>(4)
+        var prevT = 0f
+        var prevV = evalFacing(0f)
+        for (i in 1..steps) {
+            val curT = i * stepSize
+            val curV = evalFacing(curT)
+            if ((prevV <= 0f && curV > 0f) || (prevV >= 0f && curV < 0f)) {
+                var lo = prevT
+                var hi = curT
+                var loV = prevV
+                repeat(10) {
+                    val mid = (lo + hi) * 0.5f
+                    val midV = evalFacing(mid)
+                    if ((loV <= 0f && midV > 0f) || (loV >= 0f && midV < 0f)) hi = mid else { lo = mid; loV = midV }
+                }
+                roots.add((lo + hi) * 0.5f)
+            }
+            prevT = curT
+            prevV = curV
+        }
+        return roots
     }
 
     /**
@@ -320,7 +416,7 @@ object SvgExporter {
                 if (wy.isFinite()) {
                     val sy = (h * 0.5 - (wy - cam.centerY) * cam.pixelsPerUnit)
                     val jump = penDown && prevWy.isFinite() && abs(wy - prevWy) > maxJumpWorld
-                    if (sy in (-h * 1.5)..(h * 2.5)) {
+                    if (sy.isFinite() && sy in (-h * 1.5)..(h * 2.5)) {
                         if (!penDown || jump) {
                             d.append("M ").append(fd(sx)).append(' ').append(fd(sy)).append(' ')
                             penDown = true
@@ -364,16 +460,22 @@ object SvgExporter {
                     when (a) {
                         is GraphAsymptote.Vertical -> {
                             val sx = toSx(a.x)
-                            sb.appendLine("""  <line x1="${f(sx)}" y1="0" x2="${f(sx)}" y2="${f(h)}" stroke="#F43F5E" stroke-width="2" stroke-dasharray="8,6"/>""")
+                            if (sx.isFinite() && sx in -20f..(w + 20f)) {
+                                sb.appendLine("""  <line x1="${f(sx)}" y1="0" x2="${f(sx)}" y2="${f(h)}" stroke="#F43F5E" stroke-width="2" stroke-dasharray="8,6"/>""")
+                            }
                         }
                         is GraphAsymptote.Horizontal -> {
                             val sy = toSy(a.y)
-                            sb.appendLine("""  <line x1="0" y1="${f(sy)}" x2="${f(w)}" y2="${f(sy)}" stroke="#F59E0B" stroke-width="2" stroke-dasharray="8,6"/>""")
+                            if (sy.isFinite() && sy in -20f..(h + 20f)) {
+                                sb.appendLine("""  <line x1="0" y1="${f(sy)}" x2="${f(w)}" y2="${f(sy)}" stroke="#F59E0B" stroke-width="2" stroke-dasharray="8,6"/>""")
+                            }
                         }
                         is GraphAsymptote.Oblique -> {
                             val s1y = toSy(a.a * xMin + a.b)
                             val s2y = toSy(a.a * xMax + a.b)
-                            sb.appendLine("""  <line x1="0" y1="${f(s1y)}" x2="${f(w)}" y2="${f(s2y)}" stroke="#A855F7" stroke-width="2" stroke-dasharray="8,6"/>""")
+                            if (s1y.isFinite() && s2y.isFinite()) {
+                                sb.appendLine("""  <line x1="0" y1="${f(s1y.coerceIn(-h * 2f, h * 3f))}" x2="${f(w)}" y2="${f(s2y.coerceIn(-h * 2f, h * 3f))}" stroke="#A855F7" stroke-width="2" stroke-dasharray="8,6"/>""")
+                            }
                         }
                     }
                 }
@@ -399,7 +501,10 @@ object SvgExporter {
                         obj.fixedRadius != null -> obj.fixedRadius
                         else -> continue
                     }
-                    sb.appendLine("""  <circle cx="${f(toSx(c.x.toDouble()))}" cy="${f(toSy(c.y.toDouble()))}" r="${f((r * cam.pixelsPerUnit).toFloat())}" fill="${escapeXml(obj.colorHex)}" fill-opacity="0.12" stroke="${escapeXml(obj.colorHex)}" stroke-width="2.6"/>""")
+                    val screenR = (r * cam.pixelsPerUnit).toFloat()
+                    if (screenR.isFinite() && screenR > 0.5f && screenR < max(w, h) * 8f) {
+                        sb.appendLine("""  <circle cx="${f(toSx(c.x.toDouble()))}" cy="${f(toSy(c.y.toDouble()))}" r="${f(screenR)}" fill="${escapeXml(obj.colorHex)}" fill-opacity="0.12" stroke="${escapeXml(obj.colorHex)}" stroke-width="2.6"/>""")
+                    }
                 }
                 is Geo2DObject.Segment -> {
                     val p1 = ptMap[obj.p1Id] ?: continue

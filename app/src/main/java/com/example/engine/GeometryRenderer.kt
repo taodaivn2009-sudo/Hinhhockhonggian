@@ -355,6 +355,7 @@ object GeometryRenderer {
                 isOrigin -> 0xFFEF4444.toInt()
                 isMoved -> 0xFFF472B6.toInt()
                 isCustom -> 0xFFFBBF24.toInt()
+                transparentBackground -> 0xFF0F172A.toInt()
                 else -> 0xFFCBD5E1.toInt()
             }
             canvas.drawCircle(p.x, p.y, radius, dotPaint)

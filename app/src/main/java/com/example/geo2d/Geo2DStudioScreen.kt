@@ -140,6 +140,10 @@ fun Geo2DStudioScreen(
         viewModel.refreshExportFolder()
     }
 
+    BackHandler(enabled = uiState.replayStep != null) {
+        viewModel.stopReplay(restoreFull = true)
+    }
+
     fun writePngToUri(uri: Uri, locationSuffix: String = "") {
         runCatching {
             val bmp = viewModel.renderExportBitmap(
