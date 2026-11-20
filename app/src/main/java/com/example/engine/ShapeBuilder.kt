@@ -134,7 +134,15 @@ object ShapeBuilder {
             sectionBorder = pts
         }
 
-        fun addCircleEdges(radius: Float, yPos: Float, smartHidden: Boolean, cx: Float = 0f, cz: Float = 0f, segments: Int = 56) {
+        fun addCircleEdges(
+            radius: Float,
+            yPos: Float,
+            smartHidden: Boolean,
+            cx: Float = 0f,
+            cz: Float = 0f,
+            segments: Int = 56,
+            capNormalY: Float? = -1f
+        ) {
             for (i in 0 until segments) {
                 val t1 = (i.toFloat() / segments) * (2.0 * PI).toFloat()
                 val t2 = ((i + 1).toFloat() / segments) * (2.0 * PI).toFloat()
@@ -143,7 +151,11 @@ object ShapeBuilder {
                 if (smartHidden) {
                     val mid = (p1 + p2) * 0.5f
                     val n = Vec3(mid.x - cx, 0f, mid.z - cz).normalized()
-                    edges.add(SmartEdge(p1, p2, listOf(n, Vec3(0f, -1f, 0f)), listOf(mid, mid)))
+                    if (capNormalY != null) {
+                        edges.add(SmartEdge(p1, p2, listOf(n, Vec3(0f, capNormalY, 0f)), listOf(mid, Vec3(cx, yPos, cz))))
+                    } else {
+                        edges.add(SmartEdge(p1, p2, listOf(n), listOf(mid)))
+                    }
                 } else {
                     edges.add(SmartEdge(p1, p2, forceStyle = EdgeRenderStyle.ALWAYS_SOLID))
                 }
@@ -415,13 +427,45 @@ object ShapeBuilder {
                 val vA = ov("A", Vec3(vO.x + defaultR, vO.y, vO.z))
                 val vB = ov("B", Vec3(vO.x - defaultR, vO.y, vO.z))
                 val actualR = max(0.2f, vA.distanceTo(vO))
-                val actualH = max(0.2f, vO1.distanceTo(vO))
-                addCircleEdges(actualR, vO.y, true, vO.x, vO.z)
-                addCircleEdges(actualR, vO1.y, false, vO1.x, vO1.z)
+                val segments = 40
+                val botPts = (0 until segments).map { i ->
+                    val t = (i.toFloat() / segments) * (2.0 * PI).toFloat()
+                    Vec3(vO.x + cos(t) * actualR, vO.y, vO.z + sin(t) * actualR)
+                }
+                val topPts = (0 until segments).map { i ->
+                    val t = (i.toFloat() / segments) * (2.0 * PI).toFloat()
+                    Vec3(vO1.x + cos(t) * actualR, vO1.y, vO1.z + sin(t) * actualR)
+                }
+                val axisMid = (vO + vO1) * 0.5f
+                for (i in 0 until segments) {
+                    val next = (i + 1) % segments
+                    val b1 = botPts[i]
+                    val b2 = botPts[next]
+                    val t1 = topPts[i]
+                    val t2 = topPts[next]
+                    val fc = (b1 + b2 + t2 + t1) * 0.25f
+                    var n = (b2 - b1).cross(t1 - b1).normalized()
+                    if (n.dot(fc - axisMid) < 0f) n = -n
+
+                    if (snap.faces) {
+                        faces.add(RenderFace(listOf(b1, b2, t2, t1), n, fc, COLOR_FACE_DEFAULT, isCurvedMesh = true))
+                    }
+                    // Smart hidden-edge visibility on BOTH bottom and top rims (works from above and below)
+                    edges.add(SmartEdge(b1, b2, listOf(n, Vec3(0f, -1f, 0f)), listOf(fc, vO)))
+                    edges.add(SmartEdge(t1, t2, listOf(n, Vec3(0f, 1f, 0f)), listOf(fc, vO1)))
+                }
+                if (snap.faces) {
+                    faces.add(RenderFace(botPts, Vec3(0f, -1f, 0f), vO, COLOR_FACE_DEFAULT, isCurvedMesh = true))
+                    faces.add(RenderFace(topPts, Vec3(0f, 1f, 0f), vO1, COLOR_FACE_DEFAULT, isCurvedMesh = true))
+                }
+                edges.add(SmartEdge(vA, vB, forceStyle = EdgeRenderStyle.ALWAYS_DASHED, colorArgb = COLOR_DIAGONAL))
                 registry["O"] = vO; registry["O'"] = vO1; registry["A"] = vA; registry["B"] = vB
                 altitude = AltitudeVisual(vO1, vO, vA); addSegment("O'", "O"); addSegment("A", "B")
                 roundHint = RoundBodyHint.Cylinder(vO, vO1, actualR)
-                if (showSection) addCircleSection(actualR, vO.y + actualH * (1f - secRatio), vO.x, vO.z)
+                if (showSection) {
+                    val secCenter = Vec3.lerp(vO, vO1, 1f - secRatio)
+                    addCircleSection(actualR, secCenter.y, secCenter.x, secCenter.z)
+                }
             }
 
             ShapeType.CONE -> {
@@ -431,13 +475,37 @@ object ShapeBuilder {
                 val vA = ov("A", Vec3(vO.x + defaultR, vO.y, vO.z))
                 val vB = ov("B", Vec3(vO.x - defaultR, vO.y, vO.z))
                 val actualR = max(0.2f, vA.distanceTo(vO))
-                val actualH = max(0.2f, abs(vS.y - vO.y))
-                addCircleEdges(actualR, vO.y, true, vO.x, vO.z)
+                val segments = 40
+                val basePts = (0 until segments).map { i ->
+                    val t = (i.toFloat() / segments) * (2.0 * PI).toFloat()
+                    Vec3(vO.x + cos(t) * actualR, vO.y, vO.z + sin(t) * actualR)
+                }
+                val axisMid = (vO + vS) * 0.5f
+                for (i in 0 until segments) {
+                    val next = (i + 1) % segments
+                    val p1 = basePts[i]
+                    val p2 = basePts[next]
+                    val fc = (vS + p1 + p2) / 3f
+                    var n = (p2 - p1).cross(vS - p1).normalized()
+                    if (n.dot(fc - axisMid) < 0f) n = -n
+
+                    if (snap.faces) {
+                        faces.add(RenderFace(listOf(vS, p1, p2), n, fc, COLOR_FACE_DEFAULT, isCurvedMesh = true))
+                    }
+                    edges.add(SmartEdge(p1, p2, listOf(n, Vec3(0f, -1f, 0f)), listOf(fc, vO)))
+                }
+                if (snap.faces) {
+                    faces.add(RenderFace(basePts, Vec3(0f, -1f, 0f), vO, COLOR_FACE_DEFAULT, isCurvedMesh = true))
+                }
+                edges.add(SmartEdge(vA, vB, forceStyle = EdgeRenderStyle.ALWAYS_DASHED, colorArgb = COLOR_DIAGONAL))
                 registry["S"] = vS; registry["O"] = vO; registry["A"] = vA; registry["B"] = vB
                 altitude = AltitudeVisual(vS, vO, vA)
                 addSegment("S", "O"); addSegment("S", "A"); addSegment("S", "B"); addSegment("A", "B")
                 roundHint = RoundBodyHint.Cone(vS, vO, actualR)
-                if (showSection) addCircleSection(actualR * secRatio, vO.y + actualH * (1f - secRatio), vO.x, vO.z)
+                if (showSection) {
+                    val secCenter = Vec3.lerp(vS, vO, secRatio)
+                    addCircleSection(actualR * secRatio, secCenter.y, secCenter.x, secCenter.z)
+                }
             }
 
             ShapeType.SPHERE -> {
@@ -447,7 +515,58 @@ object ShapeBuilder {
                 val actualR = max(0.2f, vA.distanceTo(vO))
                 val vB = ov("B", Vec3(vO.x - (vA.x - vO.x), vO.y, vO.z - (vA.z - vO.z)))
                 val vN = ov("N", Vec3(vO.x, vO.y + actualR, vO.z))
-                addCircleEdges(actualR, vO.y, true, vO.x, vO.z)
+
+                // True 3D UV Sphere mesh for volumetric lighting & proper depth sorting with sections
+                if (snap.faces) {
+                    val latSteps = 14
+                    val lonSteps = 28
+                    for (lat in 0 until latSteps) {
+                        val phi1 = (-PI / 2.0 + PI * lat / latSteps).toFloat()
+                        val phi2 = (-PI / 2.0 + PI * (lat + 1) / latSteps).toFloat()
+                        val y1 = sin(phi1) * actualR
+                        val r1 = cos(phi1) * actualR
+                        val y2 = sin(phi2) * actualR
+                        val r2 = cos(phi2) * actualR
+                        for (lon in 0 until lonSteps) {
+                            val t1 = (2.0 * PI * lon / lonSteps).toFloat()
+                            val t2 = (2.0 * PI * (lon + 1) / lonSteps).toFloat()
+                            val p00 = Vec3(vO.x + cos(t1) * r1, vO.y + y1, vO.z + sin(t1) * r1)
+                            val p10 = Vec3(vO.x + cos(t2) * r1, vO.y + y1, vO.z + sin(t2) * r1)
+                            val p11 = Vec3(vO.x + cos(t2) * r2, vO.y + y2, vO.z + sin(t2) * r2)
+                            val p01 = Vec3(vO.x + cos(t1) * r2, vO.y + y2, vO.z + sin(t1) * r2)
+                            val pts = when (lat) {
+                                0 -> listOf(p00, p11, p01)
+                                latSteps - 1 -> listOf(p00, p10, p11)
+                                else -> listOf(p00, p10, p11, p01)
+                            }
+                            var fc = Vec3.ZERO
+                            pts.forEach { fc += it }
+                            fc /= pts.size.toFloat()
+                            val n = (fc - vO).normalized()
+                            faces.add(RenderFace(pts, n, fc, COLOR_FACE_DEFAULT, isCurvedMesh = true))
+                        }
+                    }
+                }
+
+                // Equator great circle (exact spherical horizon visibility from all angles)
+                addCircleEdges(actualR, vO.y, true, vO.x, vO.z, segments = 56, capNormalY = null)
+
+                // Prime Meridian great circle through N, A, B so horizontal & vertical rotation feels unmistakably 3D
+                val uDir = Vec3(vA.x - vO.x, 0f, vA.z - vO.z).let {
+                    if (it.lengthSq() < 1e-4f) Vec3(1f, 0f, 0f) else it.normalized()
+                }
+                val meridianSegs = 48
+                for (i in 0 until meridianSegs) {
+                    val t1 = (i.toFloat() / meridianSegs) * (2.0 * PI).toFloat()
+                    val t2 = ((i + 1).toFloat() / meridianSegs) * (2.0 * PI).toFloat()
+                    val p1 = vO + uDir * (cos(t1) * actualR) + Vec3(0f, sin(t1) * actualR, 0f)
+                    val p2 = vO + uDir * (cos(t2) * actualR) + Vec3(0f, sin(t2) * actualR, 0f)
+                    val mid = (p1 + p2) * 0.5f
+                    val n = (mid - vO).normalized()
+                    edges.add(SmartEdge(p1, p2, listOf(n), listOf(mid), colorArgb = 0xAA94A3B8.toInt()))
+                }
+
+                edges.add(SmartEdge(vA, vB, forceStyle = EdgeRenderStyle.ALWAYS_DASHED, colorArgb = COLOR_DIAGONAL))
                 registry["O"] = vO; registry["A"] = vA; registry["B"] = vB; registry["N"] = vN
                 altitude = AltitudeVisual(vN, vO, vA); addSegment("N", "O"); addSegment("A", "B")
                 roundHint = RoundBodyHint.Sphere(vO, actualR)

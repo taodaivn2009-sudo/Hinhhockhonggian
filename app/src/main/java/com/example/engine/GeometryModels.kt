@@ -137,7 +137,8 @@ data class RenderFace(
     val center: Vec3,
     val fillColorArgb: Int,
     val isSection: Boolean = false,
-    val isCustomPlane: Boolean = false
+    val isCustomPlane: Boolean = false,
+    val isCurvedMesh: Boolean = false
 )
 
 data class SmartEdge(
@@ -275,6 +276,8 @@ data class GeometryUiState(
     val toastMessage: String? = null,
     val saveModalOpen: Boolean = false,
     val customFileName: String = "Chop-SABC-Oxyz",
+    val exportFolderUri: String? = null,
+    val exportFolderLabel: String? = null,
     val savedSlots: List<SavedSlot> = emptyList(),
     val calcPointA: String = "S",
     val calcPointB: String = "A"

@@ -1,8 +1,12 @@
 package com.example
 
+import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -57,49 +61,90 @@ fun GeometryStudioScreen(
     val density = LocalDensity.current.density
     var canvasSize by remember { mutableStateOf(IntSize(1080, 1920)) }
 
-    // SAF PNG Export Launcher (Zero permissions required)
-    val exportPngLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("image/png")
-    ) { uri ->
-        if (uri != null) {
-            runCatching {
-                val bmp = viewModel.renderExportBitmap(
-                    widthPx = canvasSize.width.coerceAtLeast(1080),
-                    heightPx = canvasSize.height.coerceAtLeast(1080),
-                    density = density
-                )
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-                }
-                bmp.recycle()
-            }.onSuccess {
-                viewModel.closeSaveModal()
-                viewModel.showToast("Đã xuất ảnh ${viewModel.sanitizedFileName()}.png!")
-            }.onFailure {
-                viewModel.showToast("Lỗi xuất ảnh PNG!")
-            }
+    fun writePngToUri(uri: Uri, locationSuffix: String = "") {
+        runCatching {
+            val bmp = viewModel.renderExportBitmap(
+                widthPx = canvasSize.width.coerceAtLeast(1080),
+                heightPx = canvasSize.height.coerceAtLeast(1080),
+                density = density
+            )
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+            } ?: error("Không thể mở luồng ghi tệp")
+            bmp.recycle()
+        }.onSuccess {
+            viewModel.closeSaveModal()
+            viewModel.showToast("Đã lưu ảnh ${viewModel.sanitizedFileName()}.png$locationSuffix")
+        }.onFailure {
+            viewModel.showToast("Lỗi lưu ảnh PNG!")
         }
     }
 
-    // SAF JSON Export Launcher
+    fun writeObjToUri(uri: Uri, locationSuffix: String = "") {
+        runCatching {
+            val objText = viewModel.exportObjModel()
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                OutputStreamWriter(out, Charsets.UTF_8).use { writer ->
+                    writer.write(objText)
+                }
+            } ?: error("Không thể mở luồng ghi tệp")
+        }.onSuccess {
+            viewModel.closeSaveModal()
+            viewModel.showToast("Đã lưu mô hình ${viewModel.sanitizedFileName()}.obj$locationSuffix")
+        }.onFailure {
+            viewModel.showToast("Lỗi lưu mô hình 3D (.OBJ)!")
+        }
+    }
+
+    fun writeJsonToUri(uri: Uri, locationSuffix: String = "") {
+        runCatching {
+            val jsonText = viewModel.exportSnapshotJson()
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                OutputStreamWriter(out, Charsets.UTF_8).use { writer ->
+                    writer.write(jsonText)
+                }
+            } ?: error("Không thể mở luồng ghi tệp")
+        }.onSuccess {
+            viewModel.closeSaveModal()
+            viewModel.showToast("Đã lưu file ${viewModel.sanitizedFileName()}.json$locationSuffix")
+        }.onFailure {
+            viewModel.showToast("Lỗi lưu file dự án (.JSON)!")
+        }
+    }
+
+    // SAF Folder Picker (Pick default external save directory — zero storage permissions required)
+    val pickExportFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri ->
+        if (treeUri != null) {
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(treeUri, flags)
+            }
+            val label = formatTreeUriLabel(treeUri)
+            viewModel.setExportFolder(treeUri.toString(), label)
+        }
+    }
+
+    // SAF PNG Export Launcher (Pick location per file)
+    val exportPngLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("image/png")
+    ) { uri ->
+        if (uri != null) writePngToUri(uri)
+    }
+
+    // SAF 3D Model (.OBJ) Export Launcher (Pick location per file)
+    val exportObjLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        if (uri != null) writeObjToUri(uri)
+    }
+
+    // SAF JSON Project Export Launcher (Pick location per file)
     val exportJsonLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
-        if (uri != null) {
-            runCatching {
-                val jsonText = viewModel.exportSnapshotJson()
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    OutputStreamWriter(out, Charsets.UTF_8).use { writer ->
-                        writer.write(jsonText)
-                    }
-                }
-            }.onSuccess {
-                viewModel.closeSaveModal()
-                viewModel.showToast("Đã xuất file ${viewModel.sanitizedFileName()}.json!")
-            }.onFailure {
-                viewModel.showToast("Lỗi xuất file JSON!")
-            }
-        }
+        if (uri != null) writeJsonToUri(uri)
     }
 
     // SAF JSON Import Launcher
@@ -120,6 +165,28 @@ fun GeometryStudioScreen(
                 viewModel.showToast("Không thể đọc file JSON!")
             }
         }
+    }
+
+    fun handleExport(
+        forcePicker: Boolean,
+        mimeType: String,
+        extension: String,
+        onDirectUri: (Uri, String) -> Unit,
+        launchPicker: (String) -> Unit
+    ) {
+        val fileName = "${viewModel.sanitizedFileName()}.$extension"
+        val folderUri = uiState.exportFolderUri
+        val folderLabel = uiState.exportFolderLabel
+        if (!forcePicker && !folderUri.isNullOrBlank()) {
+            val createdUri = createDocumentInTree(context, folderUri, mimeType, fileName)
+            if (createdUri != null) {
+                onDirectUri(createdUri, if (folderLabel != null) " vào $folderLabel" else "")
+                return
+            }
+            // Persisted folder permission expired or folder deleted -> fall back to system picker
+            viewModel.clearExportFolder()
+        }
+        launchPicker(fileName)
     }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -185,9 +252,63 @@ fun GeometryStudioScreen(
         SaveExportModal(
             uiState = uiState,
             viewModel = viewModel,
-            onExportPngClick = { exportPngLauncher.launch("${viewModel.sanitizedFileName()}.png") },
-            onExportJsonClick = { exportJsonLauncher.launch("${viewModel.sanitizedFileName()}.json") },
+            onPickExportFolderClick = { pickExportFolderLauncher.launch(null) },
+            onExportPngClick = { forcePicker ->
+                handleExport(
+                    forcePicker = forcePicker,
+                    mimeType = "image/png",
+                    extension = "png",
+                    onDirectUri = ::writePngToUri,
+                    launchPicker = { exportPngLauncher.launch(it) }
+                )
+            },
+            onExportObjClick = { forcePicker ->
+                handleExport(
+                    forcePicker = forcePicker,
+                    mimeType = "application/octet-stream",
+                    extension = "obj",
+                    onDirectUri = ::writeObjToUri,
+                    launchPicker = { exportObjLauncher.launch(it) }
+                )
+            },
+            onExportJsonClick = { forcePicker ->
+                handleExport(
+                    forcePicker = forcePicker,
+                    mimeType = "application/json",
+                    extension = "json",
+                    onDirectUri = ::writeJsonToUri,
+                    launchPicker = { exportJsonLauncher.launch(it) }
+                )
+            },
             onImportJsonClick = { importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
         )
     }
+}
+
+private fun createDocumentInTree(
+    context: Context,
+    treeUriString: String,
+    mimeType: String,
+    fileName: String
+): Uri? {
+    return runCatching {
+        val treeUri = Uri.parse(treeUriString)
+        val parentDocId = DocumentsContract.getTreeDocumentId(treeUri)
+        val parentDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, parentDocId)
+        DocumentsContract.createDocument(context.contentResolver, parentDocUri, mimeType, fileName)
+    }.getOrNull()
+}
+
+private fun formatTreeUriLabel(treeUri: Uri): String {
+    val docId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
+    if (!docId.isNullOrBlank()) {
+        val parts = docId.split(":", limit = 2)
+        if (parts.size == 2) {
+            val root = if (parts[0].equals("primary", ignoreCase = true)) "Bộ nhớ trong" else "Bộ nhớ ngoài (${parts[0]})"
+            val sub = parts[1].trim('/').replace("/", " / ")
+            return if (sub.isBlank()) root else "$root / $sub"
+        }
+        return docId
+    }
+    return Uri.decode(treeUri.lastPathSegment ?: "Thư mục đã chọn")
 }

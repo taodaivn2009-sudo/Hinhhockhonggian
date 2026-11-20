@@ -22,6 +22,26 @@ class GeometryPersistence(context: Context) {
         prefs.edit().remove(KEY_SESSION).apply()
     }
 
+    fun saveExportFolder(uri: String, label: String) {
+        prefs.edit()
+            .putString(KEY_EXPORT_FOLDER_URI, uri)
+            .putString(KEY_EXPORT_FOLDER_LABEL, label)
+            .apply()
+    }
+
+    fun loadExportFolder(): Pair<String, String>? {
+        val uri = prefs.getString(KEY_EXPORT_FOLDER_URI, null) ?: return null
+        val label = prefs.getString(KEY_EXPORT_FOLDER_LABEL, null) ?: "Thư mục đã chọn"
+        return uri to label
+    }
+
+    fun clearExportFolder() {
+        prefs.edit()
+            .remove(KEY_EXPORT_FOLDER_URI)
+            .remove(KEY_EXPORT_FOLDER_LABEL)
+            .apply()
+    }
+
     fun loadNamedSlots(): List<SavedSlot> {
         val raw = prefs.getString(KEY_SLOTS, null) ?: return emptyList()
         return runCatching {
@@ -68,6 +88,8 @@ class GeometryPersistence(context: Context) {
         private const val PREFS_NAME = "geo3d_oxyz_storage_v1"
         private const val KEY_SESSION = "auto_session_json"
         private const val KEY_SLOTS = "named_slots_json"
+        private const val KEY_EXPORT_FOLDER_URI = "export_folder_uri"
+        private const val KEY_EXPORT_FOLDER_LABEL = "export_folder_label"
 
         /**
          * 100% schema-compatible with the HTML tool's JSON export/import format.

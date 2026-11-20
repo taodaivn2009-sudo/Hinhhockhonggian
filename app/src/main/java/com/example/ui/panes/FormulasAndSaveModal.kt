@@ -121,11 +121,14 @@ private fun StatCard(label: String, value: String, valueColor: Color, modifier: 
 fun SaveExportModal(
     uiState: GeometryUiState,
     viewModel: GeometryViewModel,
-    onExportPngClick: () -> Unit,
-    onExportJsonClick: () -> Unit,
+    onPickExportFolderClick: () -> Unit,
+    onExportPngClick: (forcePicker: Boolean) -> Unit,
+    onExportObjClick: (forcePicker: Boolean) -> Unit,
+    onExportJsonClick: (forcePicker: Boolean) -> Unit,
     onImportJsonClick: () -> Unit
 ) {
     if (!uiState.saveModalOpen) return
+    val hasPinnedFolder = !uiState.exportFolderUri.isNullOrBlank()
 
     Dialog(
         onDismissRequest = { viewModel.closeSaveModal() },
@@ -133,24 +136,30 @@ fun SaveExportModal(
     ) {
         Column(
             modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 24.dp)
-                .widthIn(max = 420.dp)
+                .padding(horizontal = 14.dp, vertical = 20.dp)
+                .widthIn(max = 440.dp)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(16.dp))
                 .background(SlateDark)
-                .border(1.dp, SlateMuted, RoundedCornerShape(14.dp))
+                .border(1.dp, SlateMuted, RoundedCornerShape(16.dp))
         ) {
             // Header
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(SlateSurface)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("Đặt tên File & Lưu / Xuất", style = MaterialTheme.typography.titleSmall, color = SlateTextPrimary)
-                IconButton(onClick = { viewModel.closeSaveModal() }, modifier = Modifier.size(32.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Default.SaveAlt, contentDescription = null, tint = IndigoSoft, modifier = Modifier.size(19.dp))
+                    Text("Lưu & Xuất File Khối Hình", style = MaterialTheme.typography.titleSmall, color = SlateTextPrimary)
+                }
+                IconButton(onClick = { viewModel.closeSaveModal() }, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Default.Close, contentDescription = "Đóng hộp thoại", tint = SlateTextSecondary)
                 }
             }
@@ -161,9 +170,9 @@ fun SaveExportModal(
                     .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Section 1: File Name & Direct Actions
+                // Section 1: File Name & External Save Location
                 SettingBox(
-                    title = "1. Đặt tên File (Gắn vào ảnh PNG & file JSON)",
+                    title = "1. Tên File & Vị Trí Lưu Ngoài Máy",
                     titleColor = IndigoSoft,
                     borderColor = IndigoBright,
                     containerColor = IndigoPrimary.copy(alpha = 0.14f)
@@ -171,79 +180,187 @@ fun SaveExportModal(
                     OutlinedTextField(
                         value = uiState.customFileName,
                         onValueChange = { viewModel.updateCustomFileName(it) },
-                        placeholder = { Text("VD: Chop-SABCD-Cau45", color = SlateTextSecondary) },
+                        placeholder = { Text("VD: Hinh-Tru-Cau12", color = SlateTextSecondary) },
                         singleLine = true,
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = SlateTextPrimary, fontWeight = FontWeight.SemiBold),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            color = SlateTextPrimary,
+                            fontWeight = FontWeight.SemiBold
+                        ),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = SlateDark,
                             unfocusedContainerColor = SlateDark,
                             focusedBorderColor = IndigoBright,
                             unfocusedBorderColor = SlateMuted
                         ),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("custom_filename_input")
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("custom_filename_input")
                     )
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
-                        Button(
-                            onClick = onExportPngClick,
-                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldDark),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(vertical = 9.dp, horizontal = 8.dp),
-                            modifier = Modifier.weight(1f).testTag("export_png_btn")
+                    // External Save Location Card
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(SlateDeepest)
+                            .border(
+                                1.dp,
+                                if (hasPinnedFolder) EmeraldAccent.copy(alpha = 0.55f) else SkyBlue.copy(alpha = 0.45f),
+                                RoundedCornerShape(10.dp)
+                            )
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Tải ảnh .PNG", style = MaterialTheme.typography.labelMedium)
+                            Icon(
+                                imageVector = if (hasPinnedFolder) Icons.Default.Folder else Icons.Default.CreateNewFolder,
+                                contentDescription = null,
+                                tint = if (hasPinnedFolder) EmeraldAccent else CyanAccent,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (hasPinnedFolder) "Thư mục lưu mặc định" else "Chọn vị trí khi bấm lưu",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (hasPinnedFolder) EmeraldAccent else CyanAccent,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = uiState.exportFolderLabel
+                                        ?: "Mỗi lần lưu sẽ mở trình quản lý tệp để bạn chọn thư mục tùy ý",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = SlateTextLight,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
-                        Button(
-                            onClick = onExportJsonClick,
-                            colors = ButtonDefaults.buttonColors(containerColor = SkyBlue),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(vertical = 9.dp, horizontal = 8.dp),
-                            modifier = Modifier.weight(1f).testTag("export_json_btn")
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Tải .JSON", style = MaterialTheme.typography.labelMedium)
+                            Button(
+                                onClick = onPickExportFolderClick,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (hasPinnedFolder) SlateMuted else SkyBlue
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 40.dp)
+                                    .testTag("pick_export_folder_btn")
+                            ) {
+                                Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(5.dp))
+                                Text(
+                                    text = if (hasPinnedFolder) "Đổi vị trí lưu" else "Chọn thư mục lưu",
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                            }
+                            if (hasPinnedFolder) {
+                                OutlinedButton(
+                                    onClick = { viewModel.clearExportFolder() },
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, SlateMuted),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                    modifier = Modifier
+                                        .heightIn(min = 40.dp)
+                                        .testTag("clear_export_folder_btn")
+                                ) {
+                                    Text("Hỏi mỗi lần", style = MaterialTheme.typography.labelSmall, color = SlateTextLight)
+                                }
+                            }
                         }
                     }
+                }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
+                // Section 2: Export External Files (3 Formats)
+                SettingBox(
+                    title = "2. Xuất File Khối Hình Ra Ngoài",
+                    titleColor = EmeraldAccent,
+                    borderColor = EmeraldDark.copy(alpha = 0.65f),
+                    containerColor = SlateSurface.copy(alpha = 0.45f)
+                ) {
+                    ExportFormatRow(
+                        icon = Icons.Default.ViewInAr,
+                        title = "Lưu mô hình 3D (.OBJ)",
+                        subtitle = "Lưới 3D thật mở được trong Blender, 3D Viewer, CAD",
+                        accentColor = IndigoBright,
+                        hasPinnedFolder = hasPinnedFolder,
+                        testTag = "export_obj_btn",
+                        onPrimaryClick = { onExportObjClick(false) },
+                        onPickOtherClick = { onExportObjClick(true) }
+                    )
+                    ExportFormatRow(
+                        icon = Icons.Default.PhotoCamera,
+                        title = "Lưu ảnh khối 3D (.PNG)",
+                        subtitle = "Ảnh sắc nét độ phân giải cao kèm thẻ thông số V, Stp, h",
+                        accentColor = EmeraldDark,
+                        hasPinnedFolder = hasPinnedFolder,
+                        testTag = "export_png_btn",
+                        onPrimaryClick = { onExportPngClick(false) },
+                        onPickOtherClick = { onExportPngClick(true) }
+                    )
+                    ExportFormatRow(
+                        icon = Icons.Default.Description,
+                        title = "Lưu file dự án (.JSON)",
+                        subtitle = "Giữ nguyên đỉnh, nét vẽ, Oxyz để chia sẻ hoặc mở sửa tiếp",
+                        accentColor = SkyBlue,
+                        hasPinnedFolder = hasPinnedFolder,
+                        testTag = "export_json_btn",
+                        onPrimaryClick = { onExportJsonClick(false) },
+                        onPickOtherClick = { onExportJsonClick(true) }
+                    )
+                }
+
+                // Section 3: In-App Quick Slots & Import External File
+                SettingBox(title = "3. Mở File Ngoài & Bài Đã Lưu Trong App", titleColor = CyanAccent) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         Button(
                             onClick = { viewModel.saveNamedSlot() },
                             colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
                             shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(vertical = 8.dp, horizontal = 8.dp),
-                            modifier = Modifier.weight(1f).testTag("save_named_slot_btn")
+                            contentPadding = PaddingValues(vertical = 10.dp, horizontal = 8.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 44.dp)
+                                .testTag("save_named_slot_btn")
                         ) {
                             Icon(Icons.Default.BookmarkAdd, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
+                            Spacer(Modifier.width(5.dp))
                             Text("Lưu trong app", style = MaterialTheme.typography.labelMedium)
                         }
                         Button(
                             onClick = onImportJsonClick,
                             colors = ButtonDefaults.buttonColors(containerColor = SlateMuted),
                             shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(vertical = 8.dp, horizontal = 8.dp),
-                            modifier = Modifier.weight(1f).testTag("import_json_btn")
+                            contentPadding = PaddingValues(vertical = 10.dp, horizontal = 8.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 44.dp)
+                                .testTag("import_json_btn")
                         ) {
-                            Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Mở .JSON", style = MaterialTheme.typography.labelMedium)
+                            Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text("Mở .JSON ngoài", style = MaterialTheme.typography.labelMedium)
                         }
                     }
-                }
 
-                // Section 2: Saved Named Slots
-                SettingBox(title = "2. Các bài đã lưu trong máy (1 chạm mở lại)", titleColor = CyanAccent) {
                     if (uiState.savedSlots.isEmpty()) {
                         Text(
-                            text = "Chưa có bài nào được lưu. Đặt tên ở mục 1 rồi bấm \"Lưu trong app\" để lưu nhanh!",
+                            text = "Chưa có bài lưu nhanh nào trong app.",
                             style = MaterialTheme.typography.bodySmall,
                             color = SlateTextSecondary,
                             textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp)
                         )
                     } else {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -258,7 +375,11 @@ fun SaveExportModal(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                                    Column(
+                                        Modifier
+                                            .weight(1f)
+                                            .padding(end = 8.dp)
+                                    ) {
                                         Text(
                                             text = slot.name,
                                             style = MaterialTheme.typography.labelLarge,
@@ -281,18 +402,23 @@ fun SaveExportModal(
                                             colors = ButtonDefaults.buttonColors(containerColor = BlueAxis),
                                             shape = RoundedCornerShape(6.dp),
                                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                            modifier = Modifier.height(32.dp)
+                                            modifier = Modifier.height(34.dp)
                                         ) {
                                             Text("Mở", style = MaterialTheme.typography.labelSmall)
                                         }
                                         IconButton(
                                             onClick = { viewModel.deleteNamedSlot(slot.name) },
                                             modifier = Modifier
-                                                .size(32.dp)
+                                                .size(34.dp)
                                                 .clip(RoundedCornerShape(6.dp))
                                                 .background(RoseAccent.copy(alpha = 0.22f))
                                         ) {
-                                            Icon(Icons.Default.Close, contentDescription = "Xóa ${slot.name}", tint = RoseLight, modifier = Modifier.size(16.dp))
+                                            Icon(
+                                                Icons.Default.Close,
+                                                contentDescription = "Xóa ${slot.name}",
+                                                tint = RoseLight,
+                                                modifier = Modifier.size(16.dp)
+                                            )
                                         }
                                     }
                                 }
@@ -300,6 +426,72 @@ fun SaveExportModal(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExportFormatRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    accentColor: Color,
+    hasPinnedFolder: Boolean,
+    testTag: String,
+    onPrimaryClick: () -> Unit,
+    onPickOtherClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Button(
+            onClick = onPrimaryClick,
+            colors = ButtonDefaults.buttonColors(containerColor = accentColor),
+            shape = RoundedCornerShape(10.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+            modifier = Modifier
+                .weight(1f)
+                .heightIn(min = 52.dp)
+                .testTag(testTag)
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 10.5.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        if (hasPinnedFolder) {
+            IconButton(
+                onClick = onPickOtherClick,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(SlateDark)
+                    .border(1.dp, SlateBorder, RoundedCornerShape(10.dp))
+                    .testTag("${testTag}_pick_other")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.DriveFileMove,
+                    contentDescription = "Chọn vị trí lưu khác cho $title",
+                    tint = SlateTextLight,
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
     }

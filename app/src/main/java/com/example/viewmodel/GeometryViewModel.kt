@@ -48,6 +48,14 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
 
     init {
         val slots = persistence.loadNamedSlots()
+        val savedFolder = persistence.loadExportFolder()?.takeIf { (uriStr, _) ->
+            application.contentResolver.persistedUriPermissions.any {
+                it.uri.toString() == uriStr && it.isWritePermission
+            }
+        }
+        if (savedFolder == null && persistence.loadExportFolder() != null) {
+            persistence.clearExportFolder()
+        }
         val restored = persistence.loadAutoSession()
         if (restored != null) {
             val scene = ShapeBuilder.build(restored)
@@ -56,6 +64,8 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
                 snapshot = restored,
                 scene = scene,
                 savedSlots = slots,
+                exportFolderUri = savedFolder?.first,
+                exportFolderLabel = savedFolder?.second,
                 openCategories = setOf(restored.shape.category),
                 calcPointA = pts.getOrElse(0) { "S" },
                 calcPointB = pts.getOrElse(1) { pts.firstOrNull() ?: "A" }
@@ -67,7 +77,9 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
             _uiState.value = _uiState.value.copy(
                 snapshot = initSnap,
                 scene = scene,
-                savedSlots = slots
+                savedSlots = slots,
+                exportFolderUri = savedFolder?.first,
+                exportFolderLabel = savedFolder?.second
             )
         }
     }
@@ -965,7 +977,21 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         showToast("Đã xóa \"$name\"")
     }
 
+    fun setExportFolder(uriString: String, label: String) {
+        persistence.saveExportFolder(uriString, label)
+        _uiState.update { it.copy(exportFolderUri = uriString, exportFolderLabel = label) }
+        showToast("Đã chọn vị trí lưu: $label")
+    }
+
+    fun clearExportFolder() {
+        persistence.clearExportFolder()
+        _uiState.update { it.copy(exportFolderUri = null, exportFolderLabel = null) }
+        showToast("Đã chuyển sang chế độ hỏi vị trí mỗi lần lưu")
+    }
+
     fun exportSnapshotJson(): String = GeometryPersistence.snapshotToJson(_uiState.value.snapshot)
+
+    fun exportObjModel(): String = MeshExporter.exportToObj(_uiState.value.snapshot, sanitizedFileName())
 
     fun importSnapshotJson(jsonContent: String, fileName: String? = null) {
         runCatching { GeometryPersistence.jsonToSnapshot(jsonContent) }.onSuccess { loaded ->

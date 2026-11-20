@@ -17,7 +17,9 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 object GeometryRenderer {
 
@@ -54,12 +56,7 @@ object GeometryRenderer {
             drawGrid(canvas, proj, density)
         }
 
-        // 3. Round Body Translucent Surface (Cylinder / Cone / Sphere)
-        if (snap.faces) {
-            scene.roundBodyHint?.let { drawRoundBodySurface(canvas, proj, it, density) }
-        }
-
-        // 4. Translucent Polyhedron, Section, and Custom Plane Faces (Painter's Algorithm)
+        // 3. Translucent 3D Surfaces: Polyhedra, Curved Meshes (Cylinder/Cone/Sphere), Sections & Custom Planes
         val sortedFaces = scene.faces.mapNotNull { face ->
             val projected = face.points.map { proj.project(it) }
             if (projected.any { !it.visible }) return@mapNotNull null
@@ -68,6 +65,9 @@ object GeometryRenderer {
         }.sortedByDescending { it.third }
 
         val facePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        // Contiguous tessellated curved strips use non-AA fill to prevent hairline alpha cracks between adjacent quads
+        val curvedMeshPaint = Paint().apply { style = Paint.Style.FILL; isAntiAlias = false }
+
         for ((face, pts2d, _) in sortedFaces) {
             val path = Path().apply {
                 moveTo(pts2d[0].x, pts2d[0].y)
@@ -76,16 +76,37 @@ object GeometryRenderer {
             }
             if (face.isSection || face.isCustomPlane) {
                 facePaint.color = face.fillColorArgb
+                canvas.drawPath(path, facePaint)
+            } else if (face.isCurvedMesh) {
+                val viewDir = (camPos - face.center).normalized()
+                val facing = face.normal.dot(viewDir)
+                val isFront = facing >= 0f
+                val effectiveNormal = if (isFront) face.normal else -face.normal
+                val halfLambert = ((effectiveNormal.dot(lightDir) + 1f) * 0.5f).coerceIn(0f, 1f)
+                val halfVec = (lightDir + viewDir).normalized()
+                val spec = if (isFront) max(0f, effectiveNormal.dot(halfVec)).pow(10f) else 0f
+                val rim = if (isFront) (1f - abs(facing)).pow(2.4f) * 0.22f else 0f
+
+                val baseAlpha = if (isFront) (44 + halfLambert * 34 + spec * 45 + rim * 38) else (24 + halfLambert * 18)
+                val aInt = baseAlpha.toInt().coerceIn(20, 128)
+                val rInt = (74 + halfLambert * 58 + spec * 115 + rim * 40).toInt().coerceIn(0, 255)
+                val gInt = (84 + halfLambert * 62 + spec * 120 + rim * 55).toInt().coerceIn(0, 255)
+                val bInt = (186 + halfLambert * 64 + spec * 50 + rim * 30).toInt().coerceIn(0, 255)
+                curvedMeshPaint.color = Color.argb(aInt, rInt, gInt, bInt)
+                canvas.drawPath(path, curvedMeshPaint)
             } else {
-                // Subtle diffuse directional shading
-                val shade = (0.65f + 0.35f * abs(face.normal.dot(lightDir))).coerceIn(0.45f, 1f)
-                val baseA = (0x36 * (0.85f + 0.25f * shade)).toInt().coerceIn(28, 80)
+                // Smooth half-Lambert directional shading for crisp 3D polyhedron depth
+                val viewDir = (camPos - face.center).normalized()
+                val isFront = face.normal.dot(viewDir) >= 0f
+                val ndl = ((face.normal.dot(lightDir) + 1f) * 0.5f).coerceIn(0f, 1f)
+                val shade = (0.54f + 0.46f * ndl).coerceIn(0.45f, 1f)
+                val baseA = ((if (isFront) 62f else 36f) * (0.85f + 0.25f * shade)).toInt().coerceIn(24, 92)
                 val r = (99 * shade).toInt().coerceIn(0, 255)
                 val g = (102 * shade).toInt().coerceIn(0, 255)
                 val b = (241 * shade).toInt().coerceIn(0, 255)
                 facePaint.color = Color.argb(baseA, r, g, b)
+                canvas.drawPath(path, facePaint)
             }
-            canvas.drawPath(path, facePaint)
         }
 
         // 5. Smart Hidden-Edge Dashing for Solid Edges
@@ -134,8 +155,8 @@ object GeometryRenderer {
             paint.color = prevColor
         }
 
-        // 5b. Round Body Silhouette Generators (Dynamic tangent edges for cylinder/cone/sphere)
-        scene.roundBodyHint?.let { drawRoundBodySilhouettes(canvas, proj, it, solidEdgePaint) }
+        // 5b. Round Body Silhouette Generators (Exact 3D perspective tangent outlines for cylinder/cone/sphere)
+        scene.roundBodyHint?.let { drawRoundBodySilhouettes(canvas, proj, camPos, it, solidEdgePaint) }
 
         // 6. Section & Custom Plane Borders
         scene.sectionBorder?.let { pts ->
@@ -271,92 +292,135 @@ object GeometryRenderer {
         }
     }
 
-    private fun drawRoundBodySurface(canvas: Canvas, proj: CameraProjection, hint: RoundBodyHint, density: Float) {
-        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-            color = 0x2E6366F1
-        }
+    private fun drawRoundBodySilhouettes(
+        canvas: Canvas,
+        proj: CameraProjection,
+        camPos: Vec3,
+        hint: RoundBodyHint,
+        paint: Paint
+    ) {
         when (hint) {
             is RoundBodyHint.Cylinder -> {
-                val side = proj.right.let { Vec3(it.x, 0f, it.z) }.let {
-                    if (it.lengthSq() < 1e-4f) Vec3(1f, 0f, 0f) else it.normalized()
+                // Exact 3D perspective silhouette tangent lines (handles both right & oblique cylinders)
+                val axisMid = (hint.centerBottom + hint.centerTop) * 0.5f
+                val axisVec = hint.centerTop - hint.centerBottom
+                fun evalFacing(theta: Float): Float {
+                    val c = cos(theta)
+                    val s = sin(theta)
+                    val botPt = Vec3(hint.centerBottom.x + c * hint.radius, hint.centerBottom.y, hint.centerBottom.z + s * hint.radius)
+                    val midPt = botPt + axisVec * 0.5f
+                    val tangent = Vec3(-s, 0f, c)
+                    var n = tangent.cross(axisVec).normalized()
+                    if (n.dot(midPt - axisMid) < 0f) n = -n
+                    return n.dot(camPos - midPt)
                 }
-                val bL = proj.project(hint.centerBottom - side * hint.radius)
-                val bR = proj.project(hint.centerBottom + side * hint.radius)
-                val tR = proj.project(hint.centerTop + side * hint.radius)
-                val tL = proj.project(hint.centerTop - side * hint.radius)
-                if (bL.visible && bR.visible && tR.visible && tL.visible) {
-                    val path = Path().apply {
-                        moveTo(bL.x, bL.y); lineTo(bR.x, bR.y); lineTo(tR.x, tR.y); lineTo(tL.x, tL.y); close()
+
+                val roots = findSilhouetteRoots(::evalFacing)
+                for (theta in roots) {
+                    val c = cos(theta)
+                    val s = sin(theta)
+                    val bPt = proj.project(Vec3(hint.centerBottom.x + c * hint.radius, hint.centerBottom.y, hint.centerBottom.z + s * hint.radius))
+                    val tPt = proj.project(Vec3(hint.centerTop.x + c * hint.radius, hint.centerTop.y, hint.centerTop.z + s * hint.radius))
+                    if (bPt.visible && tPt.visible) {
+                        canvas.drawLine(bPt.x, bPt.y, tPt.x, tPt.y, paint)
                     }
-                    canvas.drawPath(path, fillPaint)
                 }
             }
             is RoundBodyHint.Cone -> {
-                val side = proj.right.let { Vec3(it.x, 0f, it.z) }.let {
-                    if (it.lengthSq() < 1e-4f) Vec3(1f, 0f, 0f) else it.normalized()
+                // Exact 3D perspective silhouette tangent generators (handles right & oblique cones, hides cleanly from top view)
+                val axisMid = (hint.centerBottom + hint.apex) * 0.5f
+                fun evalFacing(theta: Float): Float {
+                    val c = cos(theta)
+                    val s = sin(theta)
+                    val basePt = Vec3(hint.centerBottom.x + c * hint.radius, hint.centerBottom.y, hint.centerBottom.z + s * hint.radius)
+                    val genVec = hint.apex - basePt
+                    val tangent = Vec3(-s, 0f, c)
+                    var n = tangent.cross(genVec).normalized()
+                    val midPt = (basePt + hint.apex) * 0.5f
+                    if (n.dot(midPt - axisMid) < 0f) n = -n
+                    return n.dot(camPos - midPt)
                 }
-                val apex = proj.project(hint.apex)
-                val bL = proj.project(hint.centerBottom - side * hint.radius)
-                val bR = proj.project(hint.centerBottom + side * hint.radius)
-                if (apex.visible && bL.visible && bR.visible) {
-                    val path = Path().apply {
-                        moveTo(apex.x, apex.y); lineTo(bL.x, bL.y); lineTo(bR.x, bR.y); close()
+
+                val apex2d = proj.project(hint.apex)
+                if (apex2d.visible) {
+                    val roots = findSilhouetteRoots(::evalFacing)
+                    for (theta in roots) {
+                        val c = cos(theta)
+                        val s = sin(theta)
+                        val bPt = proj.project(Vec3(hint.centerBottom.x + c * hint.radius, hint.centerBottom.y, hint.centerBottom.z + s * hint.radius))
+                        if (bPt.visible) {
+                            canvas.drawLine(apex2d.x, apex2d.y, bPt.x, bPt.y, paint)
+                        }
                     }
-                    canvas.drawPath(path, fillPaint)
                 }
             }
             is RoundBodyHint.Sphere -> {
-                val c = proj.project(hint.center)
-                val edge = proj.project(hint.center + proj.right * hint.radius)
-                if (c.visible && edge.visible) {
-                    val screenR = hypot(edge.x - c.x, edge.y - c.y)
-                    val sphereGrad = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                        shader = RadialGradient(
-                            c.x - screenR * 0.28f, c.y - screenR * 0.28f, max(1f, screenR * 1.15f),
-                            intArrayOf(0x52818CF8, 0x264F46E5, 0x181E293B),
-                            floatArrayOf(0f, 0.65f, 1f),
-                            Shader.TileMode.CLAMP
-                        )
+                // Exact 3D perspective tangent circle on the sphere (projects to the true perspective ellipse silhouette)
+                val toCam = camPos - hint.center
+                val d = toCam.length()
+                val r = hint.radius
+                if (d > r + 0.02f) {
+                    val dir = toCam / d
+                    val cSil = hint.center + dir * ((r * r) / d)
+                    val ratio = (r / d).coerceIn(0f, 0.999f)
+                    val rSil = r * sqrt(1f - ratio * ratio)
+                    val refUp = if (abs(dir.y) > 0.9f) Vec3(1f, 0f, 0f) else Vec3(0f, 1f, 0f)
+                    val u = refUp.cross(dir).normalized()
+                    val v = dir.cross(u).normalized()
+                    val segs = 64
+                    val path = Path()
+                    var started = false
+                    for (i in 0..segs) {
+                        val t = (i.toFloat() / segs) * (2.0 * PI).toFloat()
+                        val pt3 = cSil + u * (cos(t) * rSil) + v * (sin(t) * rSil)
+                        val p2 = proj.project(pt3)
+                        if (p2.visible) {
+                            if (!started) {
+                                path.moveTo(p2.x, p2.y)
+                                started = true
+                            } else {
+                                path.lineTo(p2.x, p2.y)
+                            }
+                        }
                     }
-                    canvas.drawCircle(c.x, c.y, screenR, sphereGrad)
+                    if (started) {
+                        path.close()
+                        canvas.drawPath(path, paint)
+                    }
                 }
             }
         }
     }
 
-    private fun drawRoundBodySilhouettes(canvas: Canvas, proj: CameraProjection, hint: RoundBodyHint, paint: Paint) {
-        when (hint) {
-            is RoundBodyHint.Cylinder -> {
-                val side = proj.right.let { Vec3(it.x, 0f, it.z) }.let {
-                    if (it.lengthSq() < 1e-4f) Vec3(1f, 0f, 0f) else it.normalized()
+    private fun findSilhouetteRoots(evalFacing: (Float) -> Float): List<Float> {
+        val steps = 72
+        val stepSize = (2.0 * PI / steps).toFloat()
+        val roots = mutableListOf<Float>()
+        var prevT = 0f
+        var prevV = evalFacing(0f)
+        for (i in 1..steps) {
+            val curT = i * stepSize
+            val curV = evalFacing(curT)
+            if ((prevV <= 0f && curV > 0f) || (prevV >= 0f && curV < 0f)) {
+                var lo = prevT
+                var hi = curT
+                var loV = prevV
+                repeat(10) {
+                    val mid = (lo + hi) * 0.5f
+                    val midV = evalFacing(mid)
+                    if ((loV <= 0f && midV > 0f) || (loV >= 0f && midV < 0f)) {
+                        hi = mid
+                    } else {
+                        lo = mid
+                        loV = midV
+                    }
                 }
-                val bL = proj.project(hint.centerBottom - side * hint.radius)
-                val tL = proj.project(hint.centerTop - side * hint.radius)
-                val bR = proj.project(hint.centerBottom + side * hint.radius)
-                val tR = proj.project(hint.centerTop + side * hint.radius)
-                if (bL.visible && tL.visible) canvas.drawLine(bL.x, bL.y, tL.x, tL.y, paint)
-                if (bR.visible && tR.visible) canvas.drawLine(bR.x, bR.y, tR.x, tR.y, paint)
+                roots.add((lo + hi) * 0.5f)
             }
-            is RoundBodyHint.Cone -> {
-                val side = proj.right.let { Vec3(it.x, 0f, it.z) }.let {
-                    if (it.lengthSq() < 1e-4f) Vec3(1f, 0f, 0f) else it.normalized()
-                }
-                val apex = proj.project(hint.apex)
-                val bL = proj.project(hint.centerBottom - side * hint.radius)
-                val bR = proj.project(hint.centerBottom + side * hint.radius)
-                if (apex.visible && bL.visible) canvas.drawLine(apex.x, apex.y, bL.x, bL.y, paint)
-                if (apex.visible && bR.visible) canvas.drawLine(apex.x, apex.y, bR.x, bR.y, paint)
-            }
-            is RoundBodyHint.Sphere -> {
-                val c = proj.project(hint.center)
-                val edge = proj.project(hint.center + proj.right * hint.radius)
-                if (c.visible && edge.visible) {
-                    val screenR = hypot(edge.x - c.x, edge.y - c.y)
-                    canvas.drawCircle(c.x, c.y, screenR, paint)
-                }
-            }
+            prevT = curT
+            prevV = curV
         }
+        return roots
     }
 
     private fun drawClosedPolyline(canvas: Canvas, proj: CameraProjection, pts: List<Vec3>, paint: Paint) {

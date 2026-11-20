@@ -84,4 +84,20 @@ class ExampleRobolectricTest {
         assertEquals(0.65f, restored.sensitivity.drag, 0.01f)
         assertEquals(1.30f, restored.sensitivity.touchRadius, 0.01f)
     }
+
+    @Test
+    fun `round shapes generate full 3D curved surface meshes and valid OBJ export`() {
+        val roundShapes = listOf(ShapeType.CYLINDER, ShapeType.CONE, ShapeType.SPHERE)
+        roundShapes.forEach { shape ->
+            val snap = GeometrySnapshot(shape = shape, a = 4f, h = 5f, faces = true)
+            val built = ShapeBuilder.build(snap)
+            assertTrue("${shape.key} should build 3D curved faces", built.faces.size >= 40)
+            assertTrue("${shape.key} should mark curved mesh faces", built.faces.any { it.isCurvedMesh })
+
+            // Verify Wavefront OBJ export works even when preview faces toggle is off
+            val obj = MeshExporter.exportToObj(snap.copy(faces = false), "Test-${shape.key}")
+            assertTrue("${shape.key} OBJ should contain vertices", obj.contains("\nv "))
+            assertTrue("${shape.key} OBJ should contain faces", obj.contains("\nf "))
+        }
+    }
 }
