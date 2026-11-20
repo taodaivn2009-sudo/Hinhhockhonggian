@@ -33,6 +33,7 @@ import com.example.geo2d.Geo2DPersistence
 import com.example.geo2d.Geo2DStudioScreen
 import com.example.geo2d.MathWorkspace
 import com.example.ui.BottomStudioDock
+import com.example.ui.ConstructionReplayBar
 import com.example.ui.GeometryCanvasView
 import com.example.ui.RightCanvasQuickControls
 import com.example.ui.SensitivityQuickPopover
@@ -42,6 +43,8 @@ import com.example.ui.TopStudioHeader
 import com.example.ui.panes.SaveExportModal
 import com.example.ui.theme.Geo3DTheme
 import com.example.viewmodel.GeometryViewModel
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
 import java.io.OutputStreamWriter
 
 class MainActivity : ComponentActivity() {
@@ -101,9 +104,27 @@ fun GeometryStudioScreen(
             bmp.recycle()
         }.onSuccess {
             viewModel.closeSaveModal()
-            viewModel.showToast("Đã lưu ảnh ${viewModel.sanitizedFileName()}.png$locationSuffix")
+            val bgTag = if (uiState.exportTransparentBg) " (nền trong suốt)" else ""
+            viewModel.showToast("Đã lưu ảnh ${viewModel.sanitizedFileName()}.png$bgTag$locationSuffix")
         }.onFailure {
             viewModel.showToast("Lỗi lưu ảnh PNG!")
+        }
+    }
+
+    fun writeSvgToUri(uri: Uri, locationSuffix: String = "") {
+        runCatching {
+            val svgText = viewModel.exportSvgModel(
+                widthPx = canvasSize.width.coerceAtLeast(1080),
+                heightPx = canvasSize.height.coerceAtLeast(1080)
+            )
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                OutputStreamWriter(out, Charsets.UTF_8).use { it.write(svgText) }
+            } ?: error("Không thể mở luồng ghi tệp")
+        }.onSuccess {
+            viewModel.closeSaveModal()
+            viewModel.showToast("Đã lưu vector ${viewModel.sanitizedFileName()}.svg$locationSuffix")
+        }.onFailure {
+            viewModel.showToast("Lỗi lưu ảnh Vector (.SVG)!")
         }
     }
 
@@ -158,6 +179,13 @@ fun GeometryStudioScreen(
         contract = ActivityResultContracts.CreateDocument("image/png")
     ) { uri ->
         if (uri != null) writePngToUri(uri)
+    }
+
+    // SAF Vector SVG Export Launcher
+    val exportSvgLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("image/svg+xml")
+    ) { uri ->
+        if (uri != null) writeSvgToUri(uri)
     }
 
     // SAF 3D Model (.OBJ) Export Launcher (Pick location per file)
@@ -279,12 +307,30 @@ fun GeometryStudioScreen(
             modifier = Modifier.align(if (isCompactWidth) Alignment.BottomCenter else Alignment.CenterStart)
         )
 
-        // 6. Intuitive 2-Tier Bottom Studio Dock
-        BottomStudioDock(
-            uiState = uiState,
-            viewModel = viewModel,
-            modifier = Modifier.align(Alignment.BottomCenter)
-        )
+        // 6. Intuitive 2-Tier Bottom Studio Dock OR Step-by-Step Construction Replay Bar
+        val replayStep = uiState.replayStep
+        if (replayStep != null) {
+            ConstructionReplayBar(
+                step = replayStep,
+                totalSteps = uiState.replayTotalSteps,
+                stepLabel = uiState.replayStepLabel,
+                isPlaying = uiState.replayPlaying,
+                onPrev = { viewModel.stepReplay(-1) },
+                onTogglePlay = { viewModel.toggleReplayPlay() },
+                onNext = { viewModel.stepReplay(1) },
+                onClose = { viewModel.stopReplay(restoreFull = true) },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 14.dp)
+            )
+        } else {
+            BottomStudioDock(
+                uiState = uiState,
+                viewModel = viewModel,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
 
         // 7. Floating Toast Notification
         ToastBanner(
@@ -304,6 +350,15 @@ fun GeometryStudioScreen(
                     extension = "png",
                     onDirectUri = ::writePngToUri,
                     launchPicker = { exportPngLauncher.launch(it) }
+                )
+            },
+            onExportSvgClick = { forcePicker ->
+                handleExport(
+                    forcePicker = forcePicker,
+                    mimeType = "image/svg+xml",
+                    extension = "svg",
+                    onDirectUri = ::writeSvgToUri,
+                    launchPicker = { exportSvgLauncher.launch(it) }
                 )
             },
             onExportObjClick = { forcePicker ->

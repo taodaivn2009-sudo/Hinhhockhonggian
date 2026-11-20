@@ -51,7 +51,8 @@ fun TopStudioHeader(
     modifier: Modifier = Modifier
 ) {
     val m = uiState.scene.metrics
-    fun f2(v: Float) = String.format(Locale.US, "%.2f", v)
+    val hide = uiState.verifyHideAnswers
+    fun f2(v: Float) = if (hide) "???" else String.format(Locale.US, "%.2f", v)
 
     Column(
         modifier = modifier
@@ -155,6 +156,13 @@ fun TopStudioHeader(
                     )
                 }
                 TopIconBtn(
+                    icon = Icons.Default.PlayCircleOutline,
+                    contentDescription = "Tua lại từng bước dựng hình",
+                    tint = AmberAccent,
+                    testTag = "replay_3d_btn",
+                    onClick = { viewModel.startReplay() }
+                )
+                TopIconBtn(
                     icon = Icons.Default.CenterFocusStrong,
                     contentDescription = "Đặt lại góc nhìn camera chuẩn",
                     tint = CyanAccent,
@@ -163,7 +171,7 @@ fun TopStudioHeader(
                 )
                 TopIconBtn(
                     icon = Icons.Default.Save,
-                    contentDescription = "Lưu bài hoặc xuất PNG/JSON",
+                    contentDescription = "Lưu bài hoặc xuất PNG/SVG/OBJ/JSON",
                     tint = EmeraldLight,
                     testTag = "rail_save_btn",
                     onClick = { viewModel.openSaveModal() }

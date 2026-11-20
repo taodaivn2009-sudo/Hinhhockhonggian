@@ -110,6 +110,12 @@ data class CustomPlane(
     val pts: List<String>
 )
 
+data class DynamicSection3Points(
+    val p1: String,
+    val p2: String,
+    val p3: String
+)
+
 data class CameraOrbitState(
     val target: Vec3 = Vec3(0f, 1.8f, 0f),
     val radius: Float = 11.9f,
@@ -185,7 +191,9 @@ data class BuiltScene(
     val customPlaneBorders: List<List<Vec3>>,
     val clickableSegments: List<SegmentRef>,
     val metrics: GeometryMetrics,
-    val roundBodyHint: RoundBodyHint? = null
+    val roundBodyHint: RoundBodyHint? = null,
+    val dynamicSectionBorder: List<Vec3>? = null,
+    val dynamicSectionArea: Float? = null
 )
 
 sealed class RoundBodyHint {
@@ -250,6 +258,7 @@ data class GeometrySnapshot(
     val customXYZPoints: List<CustomXYZPoint> = emptyList(),
     val customLines: List<CustomLine> = emptyList(),
     val customPlanes: List<CustomPlane> = emptyList(),
+    val dynamicSection: DynamicSection3Points? = null,
     val camera: CameraOrbitState = CameraOrbitState.DEFAULT
 )
 
@@ -280,5 +289,14 @@ data class GeometryUiState(
     val exportFolderLabel: String? = null,
     val savedSlots: List<SavedSlot> = emptyList(),
     val calcPointA: String = "S",
-    val calcPointB: String = "A"
+    val calcPointB: String = "A",
+    val calcPlaneP1: String = "A",
+    val calcPlaneP2: String = "B",
+    val calcPlaneP3: String = "C",
+    val replayStep: Int? = null,
+    val replayTotalSteps: Int = 0,
+    val replayPlaying: Boolean = false,
+    val replayStepLabel: String = "",
+    val verifyHideAnswers: Boolean = false,
+    val exportTransparentBg: Boolean = false
 )

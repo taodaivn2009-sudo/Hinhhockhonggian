@@ -172,7 +172,7 @@ fun StudioInspectorSheet(
                     LeftPane.DRAW -> DrawPane(uiState, viewModel)
                     LeftPane.COORDS -> CoordsPane(uiState, viewModel)
                     LeftPane.SETTINGS -> SettingsPane(uiState, viewModel, onImportJsonClick)
-                    LeftPane.FORMULAS -> FormulasPane(uiState)
+                    LeftPane.FORMULAS -> FormulasPane(uiState, viewModel)
                 }
             }
         }

@@ -58,6 +58,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.ui.ConstructionReplayBar
+import com.example.ui.ParameterMSliderOverlay
 import com.example.ui.ToastBanner
 import com.example.ui.theme.*
 import java.io.OutputStreamWriter
@@ -151,9 +153,27 @@ fun Geo2DStudioScreen(
             bmp.recycle()
         }.onSuccess {
             viewModel.closeSaveModal()
-            viewModel.showToast("Đã lưu ảnh ${viewModel.sanitizedFileName()}.png$locationSuffix")
+            val bgTag = if (uiState.exportTransparentBg) " (nền trong suốt)" else ""
+            viewModel.showToast("Đã lưu ảnh ${viewModel.sanitizedFileName()}.png$bgTag$locationSuffix")
         }.onFailure {
             viewModel.showToast("Lỗi lưu ảnh PNG 2D!")
+        }
+    }
+
+    fun writeSvgToUri(uri: Uri, locationSuffix: String = "") {
+        runCatching {
+            val svgText = viewModel.exportSvgModel(
+                widthPx = canvasSize.width.coerceAtLeast(1080),
+                heightPx = canvasSize.height.coerceAtLeast(1080)
+            )
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                OutputStreamWriter(out, Charsets.UTF_8).use { it.write(svgText) }
+            } ?: error("Không thể mở luồng ghi tệp")
+        }.onSuccess {
+            viewModel.closeSaveModal()
+            viewModel.showToast("Đã lưu vector ${viewModel.sanitizedFileName()}.svg$locationSuffix")
+        }.onFailure {
+            viewModel.showToast("Lỗi lưu file Vector SVG 2D!")
         }
     }
 
@@ -184,6 +204,10 @@ fun Geo2DStudioScreen(
     val exportPngLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("image/png")
     ) { uri -> if (uri != null) writePngToUri(uri) }
+
+    val exportSvgLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("image/svg+xml")
+    ) { uri -> if (uri != null) writeSvgToUri(uri) }
 
     val exportJsonLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
@@ -283,12 +307,53 @@ fun Geo2DStudioScreen(
             modifier = Modifier.align(if (isCompactWidth) Alignment.BottomCenter else Alignment.CenterStart)
         )
 
-        // 5. 2-Tier Bottom 2D Studio Dock
-        Geo2DBottomDock(
-            uiState = uiState,
-            viewModel = viewModel,
-            modifier = Modifier.align(Alignment.BottomCenter)
-        )
+        // 4b. Floating Parameter m Slider Overlay (auto-shown when any active function contains parameter m)
+        val hasActiveParamM = remember(uiState.snapshot.functions) {
+            uiState.snapshot.functions.any {
+                (it.visible || it.showDerivative) &&
+                    (MathExprParser.parse(it.expression) as? MathExprParser.ParseResult.Ok)?.expr?.containsVarM() == true
+            }
+        }
+        if (hasActiveParamM && uiState.activeTab == null && uiState.replayStep == null) {
+            val topOffset = if (uiState.traceX != null && uiState.traceResults.isNotEmpty()) 130.dp else 60.dp
+            ParameterMSliderOverlay(
+                paramM = uiState.snapshot.paramM,
+                minVal = uiState.snapshot.paramMMin,
+                maxVal = uiState.snapshot.paramMMax,
+                isAnimating = uiState.paramMAnimating,
+                onValueChange = { viewModel.updateParamM(it) },
+                onToggleAnimate = { viewModel.toggleParamMAnimate() },
+                onReset = { viewModel.resetParamM() },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = topOffset)
+            )
+        }
+
+        // 5. Construction Replay Bar OR 2-Tier Bottom 2D Studio Dock
+        if (uiState.replayStep != null) {
+            ConstructionReplayBar(
+                step = uiState.replayStep!!,
+                totalSteps = uiState.replayTotalSteps,
+                stepLabel = uiState.replayStepLabel,
+                isPlaying = uiState.replayPlaying,
+                onPrev = { viewModel.stepReplay(-1) },
+                onTogglePlay = { viewModel.toggleReplayPlay() },
+                onNext = { viewModel.stepReplay(1) },
+                onClose = { viewModel.stopReplay() },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 12.dp)
+            )
+        } else {
+            Geo2DBottomDock(
+                uiState = uiState,
+                viewModel = viewModel,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
 
         // 6. Floating Toast
         ToastBanner(
@@ -304,11 +369,29 @@ fun Geo2DStudioScreen(
             onExportPngClick = { forcePicker ->
                 handleExport(forcePicker, "image/png", "png", ::writePngToUri) { exportPngLauncher.launch(it) }
             },
+            onExportSvgClick = { forcePicker ->
+                handleExport(forcePicker, "image/svg+xml", "svg", ::writeSvgToUri) { exportSvgLauncher.launch(it) }
+            },
             onExportJsonClick = { forcePicker ->
                 handleExport(forcePicker, "application/json", "json", ::writeJsonToUri) { exportJsonLauncher.launch(it) }
             },
             onImportJsonClick = { importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
         )
+
+        // 8. Automatic Variation Table (Bảng biến thiên) Dialog
+        uiState.variationTargetFnId?.let { targetId ->
+            val targetFn = uiState.snapshot.functions.firstOrNull { it.id == targetId }
+            if (targetFn != null) {
+                VariationTableDialog(
+                    fn = targetFn,
+                    paramM = uiState.snapshot.paramM,
+                    paramMMin = uiState.snapshot.paramMMin,
+                    paramMMax = uiState.snapshot.paramMMax,
+                    onChangeParamM = { viewModel.updateParamM(it) },
+                    onDismiss = { viewModel.closeVariationTable() }
+                )
+            }
+        }
     }
 }
 
@@ -453,7 +536,7 @@ private fun Geo2DTopHeader(
                 }
             }
 
-            // Right Action Strip: Undo, Redo, Center O, Save
+            // Right Action Strip: Undo, Redo, Replay, Center O, Save
             Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(10.dp))
@@ -464,6 +547,7 @@ private fun Geo2DTopHeader(
             ) {
                 TopIconBtn(Icons.AutoMirrored.Filled.Undo, "Hoàn tác", enabled = uiState.canUndo) { viewModel.undo() }
                 TopIconBtn(Icons.AutoMirrored.Filled.Redo, "Làm lại", enabled = uiState.canRedo) { viewModel.redo() }
+                TopIconBtn(Icons.Default.PlayCircleOutline, "Tua lại từng bước dựng", tint = AmberAccent, testTag = "replay_2d_btn") { viewModel.startReplay() }
                 TopIconBtn(Icons.Default.MyLocation, "Về tâm O(0;0)") { viewModel.resetView() }
                 TopIconBtn(Icons.Default.SaveAlt, "Lưu / Xuất 2D", tint = EmeraldAccent) { viewModel.openSaveModal() }
             }
@@ -490,8 +574,8 @@ private fun Geo2DTopHeader(
                     )
                     uiState.traceResults.take(3).forEach { res ->
                         val c = try { Color(AndroidColor.parseColor(res.colorHex)) } catch (_: Exception) { CyanAccent }
-                        val yText = if (res.y.isFinite()) Geo2DMathHelpers.formatNum(res.y) else "Không XĐ"
-                        val slopeText = if (res.slope.isFinite()) " • f'(x)=${Geo2DMathHelpers.formatNum(res.slope)}" else ""
+                        val yText = if (uiState.verifyHideAnswers) "???" else if (res.y.isFinite()) Geo2DMathHelpers.formatNum(res.y) else "Không XĐ"
+                        val slopeText = if (uiState.verifyHideAnswers) "" else if (res.slope.isFinite()) " • f'(x)=${Geo2DMathHelpers.formatNum(res.slope)}" else ""
                         Text(
                             text = "${res.functionLabel} = $yText$slopeText",
                             style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
@@ -515,12 +599,15 @@ private fun TopIconBtn(
     contentDesc: String,
     enabled: Boolean = true,
     tint: Color = SlateTextPrimary,
+    testTag: String? = null,
     onClick: () -> Unit
 ) {
     IconButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.size(36.dp)
+        modifier = Modifier
+            .size(36.dp)
+            .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
     ) {
         Icon(
             imageVector = icon,

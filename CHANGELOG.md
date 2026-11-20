@@ -2,6 +2,24 @@
 
 ## Bản cập nhật mới nhất
 
+### Hình học không gian 3D (Oxyz nâng cao)
+- **Dựng thiết diện (mặt cắt) động 3D:** Chọn 3 điểm bất kỳ trên khối chóp/lăng trụ để tự động tính đa giác giao tuyến cắt qua tất cả các cạnh, tô màu mặt cắt nổi bật và tính diện tích thiết diện theo thời gian thực khi kéo đỉnh.
+- **Tính góc đường thẳng – mặt phẳng & Khoảng cách Oxyz:** Bổ sung tính năng chọn mặt phẳng `(P)` qua 3 điểm trong tab **Oxyz** để tự động viết phương trình mặt phẳng, tính khoảng cách `d(A, (P))`, `d(B, (P))` và góc `φ(AB, (P))` theo thời gian thực.
+
+### Đồ thị & Khảo sát hàm số 2D
+- **Thanh trượt tham số `m`:** Nhập hàm chứa tham số `m` (VD: `x^3 - 3*m*x + 1`), tự động hiện thanh trượt động trên đồ thị với nút **Chạy m** (tự động biến thiên) để quan sát trực tiếp sự thay đổi số nghiệm, cực trị và tiệm cận.
+- **Tự động nhận diện điểm đặc biệt & Tiệm cận:** Ngoài nghiệm, cực đại (`CĐ`), cực tiểu (`CT`) và giao điểm 2 đồ thị, bổ sung tự động phát hiện **Điểm uốn (`U`)** và vẽ đường **Tiệm cận đứng (`TCĐ`)**, **Tiệm cận ngang (`TCN`)**, **Tiệm cận xiên (`TCX`)**.
+- **Sinh Bảng biến thiên (BBT) tự động:** Nút **BBT** trên từng hàm số xuất ngay sơ đồ bảng biến thiên chuẩn sách giáo khoa (tập xác định, dấu `y'`, mũi tên đồng biến/nghịch biến, giá trị cực trị, giới hạn `±∞`, tiệm cận và điểm uốn), hỗ trợ trượt tham số `m` trực tiếp ngay trong bảng.
+
+### Tiện ích xuất dữ liệu & Trải nghiệm học tập
+- **Tua lại quy trình dựng hình (Step-by-step Replay):** Nút phát lại từng bước dựng cho cả **3D** và **2D** (Phát / Tạm dừng / Bước trước / Bước sau) giúp tự kiểm tra logic hoặc trình chiếu hướng dẫn.
+- **Xuất ảnh nền trong suốt (PNG) & Vector (SVG):** Bổ sung công tắc **Xuất nền trong suốt (không lưới)** và định dạng **Vector `.SVG`** cho cả 3D và 2D để chèn sắc nét vào Word, PowerPoint, slide bài giảng.
+- **Chế độ Kiểm tra đáp án (Verify Mode):** Cho phép tự nhập đáp án (hỗ trợ cả biểu thức như `sqrt(3)/2`, `4*pi/3`, `35,26°`) để đối chiếu với mô hình đang vẽ, kèm công tắc **Ẩn đáp án** chống lộ kết quả trong lúc tự giải.
+
+---
+
+## Các phiên bản trước
+
 ### Cập nhật đè trực tiếp không cần gỡ ứng dụng
 - Cố định chữ ký số APK (khôi phục từ `debug.keystore.base64` trong mọi lần build tự động) và đồng bộ chính xác `versionCode` với bộ nhớ đệm Gradle để Android cho phép bấm **Cập nhật** trực tiếp giữ nguyên toàn bộ bài vẽ và cài đặt.
 - *Lưu ý chuyển đổi 1 lần duy nhất:* Nếu máy bạn đang cài bản cũ (được ký bằng khóa ngẫu nhiên trước đây), hãy gỡ bản cũ 1 lần cuối để cài bản này; từ các bản sau trở đi chỉ cần tải APK mới và bấm **Cập nhật** trực tiếp.

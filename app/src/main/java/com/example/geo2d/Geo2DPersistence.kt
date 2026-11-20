@@ -35,12 +35,16 @@ class Geo2DPersistence(context: Context) {
             val root = JSONObject()
             root.put("type", "tool_toan_2d")
             root.put("version", 1)
+            root.put("paramM", s.paramM)
+            root.put("paramMMin", s.paramMMin)
+            root.put("paramMMax", s.paramMMax)
             root.put("showAxes", s.showAxes)
             root.put("showGrid", s.showGrid)
             root.put("snapToGrid", s.snapToGrid)
             root.put("showPointCoords", s.showPointCoords)
             root.put("showMeasurements", s.showMeasurements)
             root.put("showKeyGraphPoints", s.showKeyGraphPoints)
+            root.put("showAsymptotes", s.showAsymptotes)
             root.put("showTangentOnTrace", s.showTangentOnTrace)
 
             root.put("sensitivity", JSONObject().apply {
@@ -260,12 +264,16 @@ class Geo2DPersistence(context: Context) {
                 points = points,
                 objects = objects,
                 functions = functions,
+                paramM = o.optDouble("paramM", 1.0).takeIf { it.isFinite() } ?: 1.0,
+                paramMMin = o.optDouble("paramMMin", -5.0).takeIf { it.isFinite() } ?: -5.0,
+                paramMMax = o.optDouble("paramMMax", 5.0).takeIf { it.isFinite() } ?: 5.0,
                 showAxes = o.optBoolean("showAxes", true),
                 showGrid = o.optBoolean("showGrid", true),
                 snapToGrid = o.optBoolean("snapToGrid", true),
                 showPointCoords = o.optBoolean("showPointCoords", true),
                 showMeasurements = o.optBoolean("showMeasurements", true),
                 showKeyGraphPoints = o.optBoolean("showKeyGraphPoints", true),
+                showAsymptotes = o.optBoolean("showAsymptotes", true),
                 showTangentOnTrace = o.optBoolean("showTangentOnTrace", true),
                 sensitivity = sens,
                 camera = cam

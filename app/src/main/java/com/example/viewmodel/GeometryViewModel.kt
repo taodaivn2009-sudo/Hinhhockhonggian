@@ -32,6 +32,8 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
     private val maxHistory = 40
     private var toastJob: Job? = null
     private var autoSaveJob: Job? = null
+    private var replayJob: Job? = null
+    private var fullSnapshotBeforeReplay: GeometrySnapshot? = null
     private var dragHistoryRecorded = false
 
     private data class ActiveDrag(
@@ -70,7 +72,10 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
                 exportFolderLabel = savedFolder?.second,
                 openCategories = setOf(restored.shape.category),
                 calcPointA = pts.getOrElse(0) { "S" },
-                calcPointB = pts.getOrElse(1) { pts.firstOrNull() ?: "A" }
+                calcPointB = pts.getOrElse(1) { pts.firstOrNull() ?: "A" },
+                calcPlaneP1 = pts.getOrElse(1) { "A" },
+                calcPlaneP2 = pts.getOrElse(2) { "B" },
+                calcPlaneP3 = pts.getOrElse(3) { pts.firstOrNull() ?: "C" }
             )
             showToast("Đã khôi phục bài vẽ lần trước!")
         } else {
@@ -107,6 +112,9 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         autoSave: Boolean = true,
         transform: (GeometrySnapshot) -> GeometrySnapshot
     ) {
+        if (fullSnapshotBeforeReplay != null) {
+            stopReplay(restoreFull = true)
+        }
         val current = _uiState.value.snapshot
         if (recordHistory) pushHistory(current)
         var next = transform(current)
@@ -127,7 +135,10 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
                 canUndo = undoStack.isNotEmpty(),
                 canRedo = redoStack.isNotEmpty(),
                 calcPointA = if (st.calcPointA in finalScene.pointRegistry) st.calcPointA else keys.getOrElse(0) { "S" },
-                calcPointB = if (st.calcPointB in finalScene.pointRegistry) st.calcPointB else keys.getOrElse(1) { keys.firstOrNull() ?: "A" }
+                calcPointB = if (st.calcPointB in finalScene.pointRegistry) st.calcPointB else keys.getOrElse(1) { keys.firstOrNull() ?: "A" },
+                calcPlaneP1 = if (st.calcPlaneP1 in finalScene.pointRegistry) st.calcPlaneP1 else keys.getOrElse(1) { keys.firstOrNull() ?: "A" },
+                calcPlaneP2 = if (st.calcPlaneP2 in finalScene.pointRegistry) st.calcPlaneP2 else keys.getOrElse(2) { keys.firstOrNull() ?: "B" },
+                calcPlaneP3 = if (st.calcPlaneP3 in finalScene.pointRegistry) st.calcPlaneP3 else keys.getOrElse(3) { keys.firstOrNull() ?: "C" }
             )
         }
         if (autoSave) {
@@ -323,6 +334,172 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(calcPointA = pointA, calcPointB = pointB) }
     }
 
+    fun setCalcPlanePoints(p1: String, p2: String, p3: String) {
+        _uiState.update { it.copy(calcPlaneP1 = p1, calcPlaneP2 = p2, calcPlaneP3 = p3) }
+    }
+
+    fun toggleVerifyHideAnswers() {
+        _uiState.update { it.copy(verifyHideAnswers = !it.verifyHideAnswers) }
+    }
+
+    fun toggleExportTransparentBg() {
+        _uiState.update { it.copy(exportTransparentBg = !it.exportTransparentBg) }
+    }
+
+    // ================= DYNAMIC 3-POINT CROSS SECTION =================
+    fun setDynamicSection(p1: String, p2: String, p3: String): String? {
+        if (setOf(p1, p2, p3).size < 3) return "Vui lòng chọn 3 điểm phân biệt!"
+        val current = fullSnapshotBeforeReplay ?: _uiState.value.snapshot
+        val testSnap = current.copy(dynamicSection = DynamicSection3Points(p1, p2, p3))
+        val testScene = ShapeBuilder.build(testSnap)
+        if (testScene.dynamicSectionBorder == null) {
+            return "Không tạo được thiết diện phẳng từ 3 điểm ($p1, $p2, $p3) trên khối này (3 điểm thẳng hàng hoặc khối tròn xoay)."
+        }
+        updateSnapshot(recordHistory = true) { it.copy(dynamicSection = DynamicSection3Points(p1, p2, p3)) }
+        val nVerts = testScene.dynamicSectionBorder.size
+        val areaStr = testScene.dynamicSectionArea?.let { String.format(Locale.US, "%.2f", it) } ?: "0"
+        showToast("Đã dựng thiết diện $nVerts cạnh qua ($p1$p2$p3) • S = $areaStr")
+        return null
+    }
+
+    fun clearDynamicSection() {
+        if ((fullSnapshotBeforeReplay ?: _uiState.value.snapshot).dynamicSection == null) return
+        updateSnapshot(recordHistory = true) { it.copy(dynamicSection = null) }
+        showToast("Đã xóa thiết diện động")
+    }
+
+    // ================= CONSTRUCTION REPLAY (STEP-BY-STEP) =================
+    private fun buildReplaySteps(full: GeometrySnapshot): List<Pair<String, GeometrySnapshot>> {
+        val steps = ArrayList<Pair<String, GeometrySnapshot>>()
+        var cur = full.copy(
+            customPoints = emptyList(),
+            customXYZPoints = emptyList(),
+            customLines = emptyList(),
+            customPlanes = emptyList(),
+            dynamicSection = null
+        )
+        steps.add("Bước 0: Khối gốc ${full.shape.title}" to cur)
+
+        full.customPoints.forEach { pt ->
+            cur = cur.copy(customPoints = cur.customPoints + pt)
+            steps.add("Chấm điểm ${pt.name} trên ${pt.from}${pt.to}" to cur)
+        }
+        full.customXYZPoints.forEach { pt ->
+            cur = cur.copy(customXYZPoints = cur.customXYZPoints + pt)
+            steps.add("Chấm điểm ${pt.name}(${formatMathNumber(pt.x)}; ${formatMathNumber(pt.y)}; ${formatMathNumber(pt.z)})" to cur)
+        }
+        full.customLines.forEach { ln ->
+            cur = cur.copy(customLines = cur.customLines + ln)
+            val kind = if (ln.style.isVector) "vectơ" else "đoạn"
+            steps.add("Vẽ $kind ${ln.p1}${ln.p2}" to cur)
+        }
+        full.customPlanes.forEach { pl ->
+            cur = cur.copy(customPlanes = cur.customPlanes + pl)
+            steps.add("Tô mặt phẳng (${pl.pts.joinToString("")})" to cur)
+        }
+        full.dynamicSection?.let { ds ->
+            cur = cur.copy(dynamicSection = ds)
+            steps.add("Cắt thiết diện động (${ds.p1}${ds.p2}${ds.p3})" to cur)
+        }
+        return steps
+    }
+
+    fun startReplay() {
+        val full = fullSnapshotBeforeReplay ?: _uiState.value.snapshot
+        val steps = buildReplaySteps(full)
+        if (steps.size <= 1) {
+            showToast("Hãy dựng thêm điểm, đường hoặc thiết diện để tua lại quy trình!")
+            return
+        }
+        fullSnapshotBeforeReplay = full
+        applyReplayStep(0, steps)
+        toggleReplayPlay()
+    }
+
+    private fun applyReplayStep(index: Int, steps: List<Pair<String, GeometrySnapshot>>) {
+        val clamped = index.coerceIn(0, steps.lastIndex)
+        val (label, snap) = steps[clamped]
+        val cam = _uiState.value.snapshot.camera
+        val stepSnap = snap.copy(camera = cam)
+        val built = ShapeBuilder.build(stepSnap)
+        _uiState.update { st ->
+            st.copy(
+                snapshot = stepSnap,
+                scene = built,
+                activeLeftPane = null,
+                replayStep = clamped,
+                replayTotalSteps = steps.lastIndex,
+                replayStepLabel = label
+            )
+        }
+    }
+
+    fun stepReplay(delta: Int) {
+        val full = fullSnapshotBeforeReplay ?: return
+        val cur = _uiState.value.replayStep ?: return
+        replayJob?.cancel()
+        val steps = buildReplaySteps(full)
+        _uiState.update { it.copy(replayPlaying = false) }
+        applyReplayStep(cur + delta, steps)
+    }
+
+    fun toggleReplayPlay() {
+        val full = fullSnapshotBeforeReplay ?: return
+        val currentlyPlaying = _uiState.value.replayPlaying
+        if (currentlyPlaying) {
+            replayJob?.cancel()
+            _uiState.update { it.copy(replayPlaying = false) }
+            return
+        }
+        val steps = buildReplaySteps(full)
+        if ((_uiState.value.replayStep ?: 0) >= steps.lastIndex) {
+            applyReplayStep(0, steps)
+        }
+        _uiState.update { it.copy(replayPlaying = true) }
+        replayJob?.cancel()
+        replayJob = viewModelScope.launch {
+            while (true) {
+                delay(1150)
+                val cur = _uiState.value.replayStep ?: break
+                if (cur >= steps.lastIndex) {
+                    _uiState.update { it.copy(replayPlaying = false) }
+                    break
+                }
+                applyReplayStep(cur + 1, steps)
+            }
+        }
+    }
+
+    fun stopReplay(restoreFull: Boolean = true) {
+        replayJob?.cancel()
+        val full = fullSnapshotBeforeReplay
+        fullSnapshotBeforeReplay = null
+        if (restoreFull && full != null) {
+            val cam = _uiState.value.snapshot.camera
+            val restored = full.copy(camera = cam)
+            val built = ShapeBuilder.build(restored)
+            _uiState.update { st ->
+                st.copy(
+                    snapshot = restored,
+                    scene = built,
+                    replayStep = null,
+                    replayTotalSteps = 0,
+                    replayPlaying = false,
+                    replayStepLabel = ""
+                )
+            }
+        } else {
+            _uiState.update { st ->
+                st.copy(
+                    replayStep = null,
+                    replayTotalSteps = 0,
+                    replayPlaying = false,
+                    replayStepLabel = ""
+                )
+            }
+        }
+    }
+
     // ================= SHAPE & PARAMETERS =================
     fun selectShape(shape: ShapeType) {
         updateSnapshot(recordHistory = true) { snap ->
@@ -333,7 +510,8 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
                 customPoints = emptyList(),
                 customXYZPoints = emptyList(),
                 customLines = emptyList(),
-                customPlanes = emptyList()
+                customPlanes = emptyList(),
+                dynamicSection = null
             )
         }
         _uiState.update { st ->
@@ -554,6 +732,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
                 customXYZPoints = emptyList(),
                 customLines = emptyList(),
                 customPlanes = emptyList(),
+                dynamicSection = null,
                 vertexOverrides = emptyMap()
             )
         }
@@ -1069,13 +1248,32 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun renderExportBitmap(widthPx: Int, heightPx: Int, density: Float): Bitmap {
+    fun renderExportBitmap(
+        widthPx: Int,
+        heightPx: Int,
+        density: Float,
+        transparentBackground: Boolean = _uiState.value.exportTransparentBg
+    ): Bitmap {
         return GeometryRenderer.renderToBitmap(
             widthPx = widthPx,
             heightPx = heightPx,
             density = density,
             uiState = _uiState.value,
-            exportTitle = sanitizedFileName()
+            exportTitle = sanitizedFileName(),
+            transparentBackground = transparentBackground
+        )
+    }
+
+    fun exportSvgModel(
+        widthPx: Int = 1280,
+        heightPx: Int = 960,
+        transparentBackground: Boolean = _uiState.value.exportTransparentBg
+    ): String {
+        return SvgExporter.export3DToSvg(
+            width = widthPx,
+            height = heightPx,
+            uiState = _uiState.value,
+            transparentBg = transparentBackground
         )
     }
 

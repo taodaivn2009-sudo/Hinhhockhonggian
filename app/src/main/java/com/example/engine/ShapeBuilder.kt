@@ -54,8 +54,11 @@ object ShapeBuilder {
         val faces = mutableListOf<RenderFace>()
         val edges = mutableListOf<SmartEdge>()
         val clickable = mutableListOf<SegmentRef>()
+        val polyEdgesForSection = mutableListOf<Pair<Vec3, Vec3>>()
         var altitude: AltitudeVisual? = null
         var sectionBorder: List<Vec3>? = null
+        var dynamicSectionBorder: List<Vec3>? = null
+        var dynamicSectionArea: Float? = null
         var roundHint: RoundBodyHint? = null
 
         val a = snap.a
@@ -116,6 +119,7 @@ object ShapeBuilder {
                 val normals = adjFaces.map { faceInfos[it].normal }
                 val centers = adjFaces.map { faceInfos[it].center }
                 edges.add(SmartEdge(verts[u], verts[v], normals, centers))
+                polyEdgesForSection.add(verts[u] to verts[v])
                 if (u < vertNames.size && v < vertNames.size) {
                     addSegment(vertNames[u], vertNames[v])
                 }
@@ -617,6 +621,21 @@ object ShapeBuilder {
             }
         }
 
+        // Dynamic 3-point cross-section (computes exact plane intersection polygon across all polyhedron edges)
+        snap.dynamicSection?.let { ds ->
+            val p1 = registry[ds.p1]
+            val p2 = registry[ds.p2]
+            val p3 = registry[ds.p3]
+            if (p1 != null && p2 != null && p3 != null) {
+                val res = Geo3DMathHelpers.computeDynamicCrossSection(p1, p2, p3, polyEdgesForSection)
+                if (res != null) {
+                    faces.add(RenderFace(res.polygon, res.normal, res.center, 0x8AF97316.toInt(), isSection = true))
+                    dynamicSectionBorder = res.polygon
+                    dynamicSectionArea = res.area
+                }
+            }
+        }
+
         val metrics = computeMetrics(snap, registry, polyMetrics)
 
         return BuiltScene(
@@ -629,7 +648,9 @@ object ShapeBuilder {
             customPlaneBorders = customPlaneBorders,
             clickableSegments = clickable,
             metrics = metrics,
-            roundBodyHint = roundHint
+            roundBodyHint = roundHint,
+            dynamicSectionBorder = dynamicSectionBorder,
+            dynamicSectionArea = dynamicSectionArea
         )
     }
 

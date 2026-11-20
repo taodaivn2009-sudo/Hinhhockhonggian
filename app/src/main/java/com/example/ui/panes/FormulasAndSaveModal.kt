@@ -23,14 +23,19 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.engine.GeometryUiState
+import com.example.ui.VerifyModeCard3D
 import com.example.ui.theme.*
 import com.example.viewmodel.GeometryViewModel
 import java.util.Locale
 
 @Composable
-fun FormulasPane(uiState: GeometryUiState) {
+fun FormulasPane(
+    uiState: GeometryUiState,
+    viewModel: GeometryViewModel
+) {
     val m = uiState.scene.metrics
-    fun f2(v: Float) = String.format(Locale.US, "%.2f", v)
+    val hide = uiState.verifyHideAnswers
+    fun f2(v: Float) = if (hide) "???" else String.format(Locale.US, "%.2f", v)
 
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         Row(
@@ -94,6 +99,9 @@ fun FormulasPane(uiState: GeometryUiState) {
                 Text(text = line, style = MaterialTheme.typography.bodySmall, color = SlateTextLight)
             }
         }
+
+        // Interactive Verify Mode (Student self-check)
+        VerifyModeCard3D(uiState = uiState, viewModel = viewModel)
     }
 }
 
@@ -123,6 +131,7 @@ fun SaveExportModal(
     viewModel: GeometryViewModel,
     onPickExportFolderClick: () -> Unit,
     onExportPngClick: (forcePicker: Boolean) -> Unit,
+    onExportSvgClick: (forcePicker: Boolean) -> Unit,
     onExportObjClick: (forcePicker: Boolean) -> Unit,
     onExportJsonClick: (forcePicker: Boolean) -> Unit,
     onImportJsonClick: () -> Unit
@@ -280,13 +289,64 @@ fun SaveExportModal(
                     }
                 }
 
-                // Section 2: Export External Files (3 Formats)
+                // Section 2: Export External Files (4 Formats + Transparent Option)
                 SettingBox(
                     title = "2. Xuất File Khối Hình Ra Ngoài",
                     titleColor = EmeraldAccent,
                     borderColor = EmeraldDark.copy(alpha = 0.65f),
                     containerColor = SlateSurface.copy(alpha = 0.45f)
                 ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(SlateDeepest)
+                            .border(1.dp, if (uiState.exportTransparentBg) CyanAccent.copy(alpha = 0.6f) else SlateBorder, RoundedCornerShape(9.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                "Xuất nền trong suốt (không lưới)",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (uiState.exportTransparentBg) CyanAccent else SlateTextPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                "Áp dụng cho ảnh .PNG & vector .SVG để chèn slide/Word sắc nét",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = SlateTextSecondary,
+                                fontSize = 10.sp
+                            )
+                        }
+                        Switch(
+                            checked = uiState.exportTransparentBg,
+                            onCheckedChange = { viewModel.toggleExportTransparentBg() },
+                            modifier = Modifier.testTag("export_transparent_3d_switch")
+                        )
+                    }
+
+                    ExportFormatRow(
+                        icon = Icons.Default.PhotoCamera,
+                        title = if (uiState.exportTransparentBg) "Lưu ảnh trong suốt (.PNG)" else "Lưu ảnh khối 3D (.PNG)",
+                        subtitle = if (uiState.exportTransparentBg) "Nền trong suốt không dính lưới, nét đậm rõ trên nền trắng" else "Ảnh sắc nét độ phân giải cao kèm thẻ thông số V, Stp, h",
+                        accentColor = EmeraldDark,
+                        hasPinnedFolder = hasPinnedFolder,
+                        testTag = "export_png_btn",
+                        onPrimaryClick = { onExportPngClick(false) },
+                        onPickOtherClick = { onExportPngClick(true) }
+                    )
+                    ExportFormatRow(
+                        icon = Icons.Default.Draw,
+                        title = "Lưu ảnh Vector (.SVG)",
+                        subtitle = "Đồ họa vector phóng to vô hạn không vỡ nét cho tài liệu & slide",
+                        accentColor = Color(0xFF7C3AED),
+                        hasPinnedFolder = hasPinnedFolder,
+                        testTag = "export_svg_btn",
+                        onPrimaryClick = { onExportSvgClick(false) },
+                        onPickOtherClick = { onExportSvgClick(true) }
+                    )
                     ExportFormatRow(
                         icon = Icons.Default.ViewInAr,
                         title = "Lưu mô hình 3D (.OBJ)",
@@ -296,16 +356,6 @@ fun SaveExportModal(
                         testTag = "export_obj_btn",
                         onPrimaryClick = { onExportObjClick(false) },
                         onPickOtherClick = { onExportObjClick(true) }
-                    )
-                    ExportFormatRow(
-                        icon = Icons.Default.PhotoCamera,
-                        title = "Lưu ảnh khối 3D (.PNG)",
-                        subtitle = "Ảnh sắc nét độ phân giải cao kèm thẻ thông số V, Stp, h",
-                        accentColor = EmeraldDark,
-                        hasPinnedFolder = hasPinnedFolder,
-                        testTag = "export_png_btn",
-                        onPrimaryClick = { onExportPngClick(false) },
-                        onPickOtherClick = { onExportPngClick(true) }
                     )
                     ExportFormatRow(
                         icon = Icons.Default.Description,

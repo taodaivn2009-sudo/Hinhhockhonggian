@@ -111,23 +111,28 @@ object GeometryRenderer {
         density: Float,
         uiState: GeometryUiState,
         includeExportCard: Boolean = false,
-        exportTitle: String = ""
+        exportTitle: String = "",
+        transparentBackground: Boolean = false
     ) {
         if (width <= 2f || height <= 2f) return
         val scratch = scratchLocal.get()!!
         scratch.ensureDensity(density)
-        scratch.ensureBackground(width, height)
+        if (!transparentBackground) {
+            scratch.ensureBackground(width, height)
+        }
 
         val snap = uiState.snapshot
         val scene = uiState.scene
         val camPos = snap.camera.cameraPosition()
         val proj = CameraProjection(camPos, snap.camera.target, width, height)
 
-        // 1. Deep Observatory radial background gradient (cached)
-        canvas.drawRect(0f, 0f, width, height, scratch.bgPaint)
+        // 1. Deep Observatory radial background gradient (skipped for transparent export)
+        if (!transparentBackground) {
+            canvas.drawRect(0f, 0f, width, height, scratch.bgPaint)
+        }
 
-        // 2. Ground Grid (14x14 at y = -0.01)
-        if (snap.showGrid) {
+        // 2. Ground Grid (14x14 at y = -0.01) — skipped for transparent export
+        if (snap.showGrid && !transparentBackground) {
             drawGrid(canvas, proj, density, scratch)
         }
 
@@ -204,11 +209,11 @@ object GeometryRenderer {
         // 5. Smart Hidden-Edge Dashing for Solid Edges
         val solidEdgePaint = scratch.solidEdgePaint.apply {
             strokeWidth = 1.7f * density
-            color = 0xFFF8FAFC.toInt()
+            color = if (transparentBackground) 0xFF0F172A.toInt() else 0xFFF8FAFC.toInt()
         }
         val dashedEdgePaint = scratch.dashedEdgePaint.apply {
             strokeWidth = 1.35f * density
-            color = 0xFF94A3B8.toInt()
+            color = if (transparentBackground) 0xFF475569.toInt() else 0xFF94A3B8.toInt()
             pathEffect = scratch.dash75
         }
 
@@ -246,7 +251,7 @@ object GeometryRenderer {
         // 5b. Round Body Silhouette Generators (Exact 3D perspective tangent outlines for cylinder/cone/sphere)
         scene.roundBodyHint?.let { drawRoundBodySilhouettes(canvas, proj, camPos, it, solidEdgePaint, scratch) }
 
-        // 6. Section & Custom Plane Borders
+        // 6. Section, Dynamic 3-Point Section & Custom Plane Borders
         scene.sectionBorder?.let { pts ->
             val secBorderPaint = scratch.strokePaint.apply {
                 strokeWidth = 2.0f * density
@@ -254,6 +259,15 @@ object GeometryRenderer {
                 pathEffect = null
             }
             drawClosedPolyline(canvas, proj, pts, secBorderPaint, scratch)
+        }
+
+        scene.dynamicSectionBorder?.let { pts ->
+            val dynBorderPaint = scratch.strokePaint.apply {
+                strokeWidth = 2.4f * density
+                color = 0xFFF97316.toInt()
+                pathEffect = null
+            }
+            drawClosedPolyline(canvas, proj, pts, dynBorderPaint, scratch)
         }
 
         if (scene.customPlaneBorders.isNotEmpty()) {
@@ -351,8 +365,8 @@ object GeometryRenderer {
             drawVertexLabels(canvas, proj, uiState, density, scratch)
         }
 
-        // 15. Optional Export Metrics Card (Bottom-Left for PNG Export)
-        if (includeExportCard) {
+        // 15. Optional Export Metrics Card (Bottom-Left for opaque PNG Export)
+        if (includeExportCard && !transparentBackground) {
             drawExportInfoCard(canvas, width, height, density, uiState, exportTitle, scratch)
         }
     }
@@ -854,7 +868,8 @@ object GeometryRenderer {
         heightPx: Int,
         density: Float,
         uiState: GeometryUiState,
-        exportTitle: String
+        exportTitle: String,
+        transparentBackground: Boolean = false
     ): Bitmap {
         val safeW = widthPx.coerceIn(720, 2160)
         val safeH = heightPx.coerceIn(720, 2160)
@@ -866,8 +881,9 @@ object GeometryRenderer {
             height = safeH.toFloat(),
             density = density,
             uiState = uiState,
-            includeExportCard = true,
-            exportTitle = exportTitle
+            includeExportCard = !transparentBackground,
+            exportTitle = exportTitle,
+            transparentBackground = transparentBackground
         )
         return bitmap
     }

@@ -127,6 +127,7 @@ data class GraphFunction(
 
 enum class FunctionCategory(val title: String) {
     EXP_LOG("Mũ & Loga"),
+    PARAM("Tham số m"),
     POLY("Đa thức"),
     RATIONAL_RADICAL("Phân thức & Căn"),
     TRIG("Lượng giác"),
@@ -150,6 +151,14 @@ object FunctionLibrary {
         FunctionTemplate("log2(x)", "Logarit cơ số 2", FunctionCategory.EXP_LOG),
         FunctionTemplate("log(3; x)", "Logarit cơ số 3", FunctionCategory.EXP_LOG),
         FunctionTemplate("x*e^(-x)", "Hàm mũ tắt dần", FunctionCategory.EXP_LOG),
+
+        // Hàm chứa tham số m (kéo thanh trượt quan sát cực trị, giao điểm, tiệm cận)
+        FunctionTemplate("x^3 - 3*m*x + 1", "Bậc 3 thay đổi cực trị", FunctionCategory.PARAM),
+        FunctionTemplate("x^4 - 2*m*x^2 + 1", "Trùng phương 1 / 3 cực trị", FunctionCategory.PARAM),
+        FunctionTemplate("(m*x - 1)/(x - 1)", "Nhất biến thay đổi TCN", FunctionCategory.PARAM),
+        FunctionTemplate("m*x^2 - 2x + 1", "Parabol biện luận nghiệm", FunctionCategory.PARAM),
+        FunctionTemplate("x^3 - 3x + m", "Tịnh tiến đếm giao điểm Ox", FunctionCategory.PARAM),
+        FunctionTemplate("sin(m*x)", "Biến đổi tần số sóng", FunctionCategory.PARAM),
 
         // Đa thức
         FunctionTemplate("x^2 - 2x - 1", "Parabol bậc 2", FunctionCategory.POLY),
@@ -185,6 +194,7 @@ enum class KeyPointType(val vnLabel: String) {
     Y_INTERCEPT("Giao Oy"),
     LOCAL_MAX("Cực đại"),
     LOCAL_MIN("Cực tiểu"),
+    INFLECTION("Điểm uốn"),
     INTERSECTION("Giao điểm")
 }
 
@@ -194,6 +204,36 @@ data class GraphKeyPoint(
     val type: KeyPointType,
     val colorHex: String
 )
+
+sealed class GraphAsymptote {
+    abstract val colorHex: String
+    abstract val label: String
+
+    data class Vertical(val x: Double, override val colorHex: String) : GraphAsymptote() {
+        override val label: String get() = "TCĐ: x = ${Geo2DMathHelpers.formatNum(x)}"
+    }
+
+    data class Horizontal(val y: Double, override val colorHex: String) : GraphAsymptote() {
+        override val label: String get() = "TCN: y = ${Geo2DMathHelpers.formatNum(y)}"
+    }
+
+    data class Oblique(val a: Double, val b: Double, override val colorHex: String) : GraphAsymptote() {
+        override val label: String
+            get() {
+                val aStr = when {
+                    kotlin.math.abs(a - 1.0) < 1e-3 -> "x"
+                    kotlin.math.abs(a + 1.0) < 1e-3 -> "-x"
+                    else -> "${Geo2DMathHelpers.formatNum(a)}x"
+                }
+                val bStr = when {
+                    kotlin.math.abs(b) < 1e-3 -> ""
+                    b > 0 -> " + ${Geo2DMathHelpers.formatNum(b)}"
+                    else -> " - ${Geo2DMathHelpers.formatNum(-b)}"
+                }
+                return "TCX: y = $aStr$bStr"
+            }
+    }
+}
 
 data class TraceResult(
     val functionId: String,
@@ -224,12 +264,16 @@ data class Geo2DSnapshot(
         GraphFunction("fn_1", "f₁(x)", "x^2 - 2x - 1", "#38BDF8", true),
         GraphFunction("fn_2", "f₂(x)", "sin(x) + 1", "#10B981", true)
     ),
+    val paramM: Double = 1.0,
+    val paramMMin: Double = -5.0,
+    val paramMMax: Double = 5.0,
     val showAxes: Boolean = true,
     val showGrid: Boolean = true,
     val snapToGrid: Boolean = true,
     val showPointCoords: Boolean = true,
     val showMeasurements: Boolean = true,
     val showKeyGraphPoints: Boolean = true,
+    val showAsymptotes: Boolean = true,
     val showTangentOnTrace: Boolean = true,
     val sensitivity: Geo2DSensitivity = Geo2DSensitivity(),
     val camera: Geo2DCamera = Geo2DCamera()
@@ -249,7 +293,15 @@ data class Geo2DUiState(
     val saveModalOpen: Boolean = false,
     val customFileName: String = "DoThi-Hinh2D-Oxy",
     val exportFolderUri: String? = null,
-    val exportFolderLabel: String? = null
+    val exportFolderLabel: String? = null,
+    val paramMAnimating: Boolean = false,
+    val variationTargetFnId: String? = null,
+    val replayStep: Int? = null,
+    val replayTotalSteps: Int = 0,
+    val replayPlaying: Boolean = false,
+    val replayStepLabel: String = "",
+    val verifyHideAnswers: Boolean = false,
+    val exportTransparentBg: Boolean = false
 )
 
 object Geo2DMathHelpers {

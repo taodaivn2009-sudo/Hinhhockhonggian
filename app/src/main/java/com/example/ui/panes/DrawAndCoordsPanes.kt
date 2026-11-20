@@ -57,6 +57,11 @@ fun DrawPane(
     var pl3 by remember(pointNames) { mutableStateOf(pointNames.getOrElse(2) { pointNames.firstOrNull() ?: "B" }) }
     var pl4 by remember(pointNames) { mutableStateOf("") }
 
+    // 3b. Dynamic 3-point cross-section state
+    var sec1 by remember(pointNames) { mutableStateOf(pointNames.getOrElse(0) { "S" }) }
+    var sec2 by remember(pointNames) { mutableStateOf(pointNames.getOrElse(1) { pointNames.firstOrNull() ?: "A" }) }
+    var sec3 by remember(pointNames) { mutableStateOf(pointNames.getOrElse(2) { pointNames.firstOrNull() ?: "B" }) }
+
     val colorChoices = remember {
         listOf(
             "#38bdf8" to "Xanh dương",
@@ -181,9 +186,79 @@ fun DrawPane(
             }
         }
 
-        // Section 4: Created elements list
+        // Section 3b: Dynamic 3-Point Cross-Section (auto-clips polyhedron edges)
+        SettingBox(
+            title = "4. Dựng Thiết diện động qua 3 điểm",
+            titleColor = Color(0xFFFB923C),
+            borderColor = Color(0xFFF97316).copy(alpha = 0.6f),
+            containerColor = Color(0xFFF97316).copy(alpha = 0.08f)
+        ) {
+            Text(
+                text = "Chọn 3 điểm bất kỳ (kể cả điểm chấm thêm trên cạnh), hệ thống tự tính giao tuyến và tô thiết diện cắt khối.",
+                style = MaterialTheme.typography.bodySmall,
+                color = SlateTextSecondary,
+                fontSize = 10.5.sp
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.fillMaxWidth()) {
+                CompactDropdown("Điểm 1", sec1, pointOptions, { sec1 = it }, Modifier.weight(1f))
+                CompactDropdown("Điểm 2", sec2, pointOptions, { sec2 = it }, Modifier.weight(1f))
+                CompactDropdown("Điểm 3", sec3, pointOptions, { sec3 = it }, Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = {
+                        val err = viewModel.setDynamicSection(sec1, sec2, sec3)
+                        if (err != null) viewModel.showToast(err)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
+                    shape = RoundedCornerShape(7.dp),
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                    modifier = Modifier.weight(1f).testTag("cut_dynamic_section_btn")
+                ) {
+                    Text("Cắt thiết diện động", style = MaterialTheme.typography.labelMedium, color = Color.White)
+                }
+                if (uiState.snapshot.dynamicSection != null) {
+                    OutlinedButton(
+                        onClick = { viewModel.clearDynamicSection() },
+                        shape = RoundedCornerShape(7.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                        modifier = Modifier.testTag("clear_dynamic_section_btn")
+                    ) {
+                        Text("Xóa", style = MaterialTheme.typography.labelSmall, color = RoseLight)
+                    }
+                }
+            }
+            uiState.scene.dynamicSectionBorder?.let { border ->
+                val areaStr = if (uiState.verifyHideAnswers) "???" else String.format(Locale.US, "%.2f", uiState.scene.dynamicSectionArea ?: 0f)
+                val ds = uiState.snapshot.dynamicSection
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(SlateDeepest)
+                        .border(1.dp, Color(0xFFF97316).copy(alpha = 0.55f), RoundedCornerShape(7.dp))
+                        .padding(horizontal = 9.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Thiết diện (${ds?.p1}${ds?.p2}${ds?.p3}) • ${border.size} cạnh",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFFFDBA74)
+                    )
+                    Text(
+                        "S = $areaStr",
+                        style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily),
+                        color = AmberAccent,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        // Section 5: Created elements list
         val snap = uiState.snapshot
-        val totalItems = snap.customPoints.size + snap.customXYZPoints.size + snap.customLines.size + snap.customPlanes.size
+        val totalItems = snap.customPoints.size + snap.customXYZPoints.size + snap.customLines.size + snap.customPlanes.size + (if (snap.dynamicSection != null) 1 else 0)
         SettingBox {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -206,7 +281,7 @@ fun DrawPane(
 
             if (totalItems == 0) {
                 Text(
-                    text = "Chưa có đường, vectơ hoặc điểm kẻ thêm",
+                    text = "Chưa có đường, vectơ, thiết diện hoặc điểm kẻ thêm",
                     style = MaterialTheme.typography.bodySmall,
                     color = SlateTextSecondary,
                     textAlign = TextAlign.Center,
@@ -214,6 +289,13 @@ fun DrawPane(
                 )
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    snap.dynamicSection?.let { ds ->
+                        CustomElementRow(
+                            dotColor = Color(0xFFF97316),
+                            text = "Thiết diện động (${ds.p1}${ds.p2}${ds.p3})",
+                            onDelete = { viewModel.clearDynamicSection() }
+                        )
+                    }
                     snap.customPoints.forEach { p ->
                         CustomElementRow(
                             dotColor = AmberAccent,
@@ -349,7 +431,7 @@ fun CoordsPane(
                     CalcResultRow("Tọa độ ${uiState.calcPointA}:", "(${formatMathNumber(cA.x)}; ${formatMathNumber(cA.y)}; ${formatMathNumber(cA.z)})", CyanAccent)
                     CalcResultRow("Tọa độ ${uiState.calcPointB}:", "(${formatMathNumber(cB.x)}; ${formatMathNumber(cB.y)}; ${formatMathNumber(cB.z)})", CyanAccent)
                     CalcResultRow("Vectơ ${uiState.calcPointA}${uiState.calcPointB}→:", "(${formatMathNumber(vx)}; ${formatMathNumber(vy)}; ${formatMathNumber(vz)})", AmberAccent)
-                    CalcResultRow("Độ dài |${uiState.calcPointA}${uiState.calcPointB}→|:", String.format(Locale.US, "%.2f", len), EmeraldLight)
+                    CalcResultRow("Độ dài |${uiState.calcPointA}${uiState.calcPointB}→|:", if (uiState.verifyHideAnswers) "???" else String.format(Locale.US, "%.2f", len), EmeraldLight)
                     CalcResultRow("Trung điểm I:", "(${formatMathNumber(mx)}; ${formatMathNumber(my)}; ${formatMathNumber(mz)})", PurpleAccent)
                 }
             }
@@ -370,8 +452,59 @@ fun CoordsPane(
             }
         }
 
-        // 3. Coordinates Table
-        SettingBox(title = "3. Bảng tọa độ các điểm", titleColor = EmeraldLight) {
+        // 2b. Oxyz Distance & Angle between Line AB and Plane (P1 P2 P3)
+        SettingBox(
+            title = "3. Khoảng cách & Góc với Mặt phẳng (P)",
+            titleColor = PurpleAccent,
+            borderColor = PurpleAccent.copy(alpha = 0.45f)
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.fillMaxWidth()) {
+                CompactDropdown("P1", uiState.calcPlaneP1, pointOptions, { viewModel.setCalcPlanePoints(it, uiState.calcPlaneP2, uiState.calcPlaneP3) }, Modifier.weight(1f))
+                CompactDropdown("P2", uiState.calcPlaneP2, pointOptions, { viewModel.setCalcPlanePoints(uiState.calcPlaneP1, it, uiState.calcPlaneP3) }, Modifier.weight(1f))
+                CompactDropdown("P3", uiState.calcPlaneP3, pointOptions, { viewModel.setCalcPlanePoints(uiState.calcPlaneP1, uiState.calcPlaneP2, it) }, Modifier.weight(1f))
+            }
+
+            val vA = reg[uiState.calcPointA]
+            val vB = reg[uiState.calcPointB]
+            val vp1 = reg[uiState.calcPlaneP1]
+            val vp2 = reg[uiState.calcPlaneP2]
+            val vp3 = reg[uiState.calcPlaneP3]
+            val planeName = "(${uiState.calcPlaneP1}${uiState.calcPlaneP2}${uiState.calcPlaneP3})"
+            val analysis = if (vA != null && vB != null && vp1 != null && vp2 != null && vp3 != null) {
+                Geo3DMathHelpers.analyzeLineAndPlane(vA, vB, vp1, vp2, vp3, originWorld)
+            } else null
+
+            if (analysis == null) {
+                Text(
+                    "Chọn 3 điểm không thẳng hàng để xác định mặt phẳng (P).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AmberAccent
+                )
+            } else {
+                val hide = uiState.verifyHideAnswers
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(SlateDeepest)
+                        .border(1.dp, SlateSurface, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 9.dp, vertical = 7.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    CalcResultRow("PT $planeName:", analysis.planeEquation, IndigoSoft)
+                    CalcResultRow("d(${uiState.calcPointA}, $planeName):", if (hide) "???" else String.format(Locale.US, "%.2f", analysis.distA), CyanAccent)
+                    CalcResultRow("d(${uiState.calcPointB}, $planeName):", if (hide) "???" else String.format(Locale.US, "%.2f", analysis.distB), CyanAccent)
+                    CalcResultRow(
+                        "Góc (${uiState.calcPointA}${uiState.calcPointB}, $planeName):",
+                        if (hide) "???°" else Geo3DMathHelpers.formatDeg(analysis.angleDegrees),
+                        AmberAccent
+                    )
+                }
+            }
+        }
+
+        // 4. Coordinates Table
+        SettingBox(title = "4. Bảng tọa độ các điểm", titleColor = EmeraldLight) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -416,8 +549,8 @@ fun CoordsPane(
             }
         }
 
-        // 4. Add point by (x; y; z)
-        SettingBox(title = "4. Chấm điểm theo tọa độ (x; y; z)", titleColor = AmberAccent) {
+        // 5. Add point by (x; y; z)
+        SettingBox(title = "5. Chấm điểm theo tọa độ (x; y; z)", titleColor = AmberAccent) {
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.fillMaxWidth()) {
                 CompactTextField("Tên", xyzName, { if (it.length <= 3) xyzName = it }, Modifier.weight(1f))
                 CompactTextField("x", xyzX, { xyzX = it }, Modifier.weight(1f), isNumeric = true)

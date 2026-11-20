@@ -243,4 +243,124 @@ class ExampleRobolectricTest {
         assertEquals(null, circle.edgePointId)
         assertEquals(2.5f, circle.fixedRadius!!, 1e-4f)
     }
+
+    @Test
+    fun `3d dynamic cross section and oxyz line plane angle and distance are accurate`() {
+        // 1. Dynamic cross-section through midpoints of edges on a 4x4x4 cube (area = 4*4 = 16 for horizontal mid-plane)
+        val snapCube = GeometrySnapshot(
+            shape = ShapeType.CUBE,
+            a = 4f,
+            customPoints = listOf(
+                CustomEdgePoint("p1", "M", "A", "A'", 0.5f),
+                CustomEdgePoint("p2", "N", "B", "B'", 0.5f),
+                CustomEdgePoint("p3", "P", "C", "C'", 0.5f)
+            ),
+            dynamicSection = DynamicSection3Points("M", "N", "P")
+        )
+        val builtCube = ShapeBuilder.build(snapCube)
+        assertTrue("Dynamic section polygon should exist", (builtCube.dynamicSectionBorder?.size ?: 0) == 4)
+        assertEquals(16.0f, builtCube.dynamicSectionArea ?: 0f, 0.05f)
+
+        // 2. Oxyz Line-Plane Angle & Point-Plane Distance on S.ABCD with SA perpendicular to base (ABCD)
+        val snapPyr = GeometrySnapshot(shape = ShapeType.PYRAMID4_SA, a = 4f, h = 6f, originPoint = "A")
+        val builtPyr = ShapeBuilder.build(snapPyr)
+        val reg = builtPyr.pointRegistry
+        val origin = ShapeBuilder.getOriginWorld(reg, "A")
+
+        val saPerp = Geo3DMathHelpers.analyzeLineAndPlane(
+            lineAWorld = reg["S"]!!,
+            lineBWorld = reg["A"]!!,
+            p1World = reg["A"]!!,
+            p2World = reg["B"]!!,
+            p3World = reg["C"]!!,
+            originWorld = origin
+        )
+        assertTrue(saPerp != null)
+        assertEquals(90.0f, saPerp!!.angleDegrees, 0.1f)
+        assertEquals(6.0f, saPerp.distA, 0.05f)
+        assertEquals(0.0f, saPerp.distB, 0.05f)
+
+        // 3. Space diagonal of cube makes arcsin(1/sqrt(3)) ≈ 35.264° with base
+        val cReg = builtCube.pointRegistry
+        val diagAnalysis = Geo3DMathHelpers.analyzeLineAndPlane(
+            lineAWorld = cReg["A"]!!,
+            lineBWorld = cReg["C'"]!!,
+            p1World = cReg["A"]!!,
+            p2World = cReg["B"]!!,
+            p3World = cReg["C"]!!,
+            originWorld = ShapeBuilder.getOriginWorld(cReg, "A")
+        )
+        assertTrue(diagAnalysis != null)
+        assertEquals(35.264f, diagAnalysis!!.angleDegrees, 0.15f)
+    }
+
+    @Test
+    fun `2d parameter m inflection points asymptotes and variation table work accurately`() {
+        // 1. Parameter m evaluation & symbolic derivative
+        val parsedM = MathExprParser.parse("x^3 - 3*m*x + 1") as MathExprParser.ParseResult.Ok
+        assertTrue(parsedM.expr.containsVarM())
+        assertEquals(1.0 - 6.0 + 8.0, parsedM.expr.eval(2.0, m = 1.0), 1e-6)
+        assertEquals(8.0 - 12.0 + 1.0, parsedM.expr.eval(2.0, m = 2.0), 1e-6)
+
+        val derivM = MathExprParser.derive("x^3 - 3*m*x + 1")!!
+        // f'(x) = 3x^2 - 3m => at x=2, m=2 => 12 - 6 = 6
+        assertEquals(6.0, derivM.first.eval(2.0, m = 2.0), 1e-6)
+
+        // 2. Inflection point on y = x^3 - 3x is at (0, 0)
+        val cubic = (MathExprParser.parse("x^3 - 3x") as MathExprParser.ParseResult.Ok).expr
+        val keyPts = MathExprParser.analyzeFunction(cubic, -5.0, 5.0, -10.0, 10.0, "#38BDF8")
+        val inflection = keyPts.firstOrNull { it.type == KeyPointType.INFLECTION }
+        assertTrue("Cubic should detect inflection point", inflection != null)
+        assertEquals(0.0, inflection!!.x, 0.05)
+        assertEquals(0.0, inflection.y, 0.05)
+
+        // 3. Asymptotes on (2x - 1)/(x - 1): vertical x=1, horizontal y=2
+        val rational = (MathExprParser.parse("(2x - 1)/(x - 1)") as MathExprParser.ParseResult.Ok).expr
+        val asym1 = MathExprParser.findAsymptotes(rational, -10.0, 10.0, -10.0, 10.0, "#FBBF24")
+        assertTrue(asym1.filterIsInstance<GraphAsymptote.Vertical>().any { kotlin.math.abs(it.x - 1.0) < 0.08 })
+        assertTrue(asym1.filterIsInstance<GraphAsymptote.Horizontal>().any { kotlin.math.abs(it.y - 2.0) < 0.08 })
+
+        // 4. Oblique asymptote on (x^2 + 1)/x: vertical x=0, oblique y = x
+        val obliqueFn = (MathExprParser.parse("(x^2 + 1)/x") as MathExprParser.ParseResult.Ok).expr
+        val asym2 = MathExprParser.findAsymptotes(obliqueFn, -10.0, 10.0, -10.0, 10.0, "#FBBF24")
+        assertTrue(asym2.filterIsInstance<GraphAsymptote.Vertical>().any { kotlin.math.abs(it.x) < 0.08 })
+        assertTrue(asym2.filterIsInstance<GraphAsymptote.Oblique>().any { kotlin.math.abs(it.a - 1.0) < 0.08 && kotlin.math.abs(it.b) < 0.08 })
+
+        // 5. Variation Table analysis for cubic and rational functions
+        val bbtCubic = VariationTableEngine.analyze("x^3 - 3x", m = 0.0)
+        assertTrue(bbtCubic != null)
+        assertTrue(bbtCubic!!.extremaLines.size >= 2)
+        assertEquals(3, bbtCubic.intervals.size) // (-inf,-1) +, (-1,1) -, (1,+inf) +
+
+        val bbtRat = VariationTableEngine.analyze("(2x - 1)/(x - 1)", m = 0.0)
+        assertTrue(bbtRat != null)
+        assertTrue(bbtRat!!.nodes.any { it.kind == VariationTableEngine.NodeKind.DISCONTINUITY })
+        assertTrue(bbtRat.asymptoteLines.size >= 2)
+    }
+
+    @Test
+    fun `svg exporter and verify answer evaluator work accurately`() {
+        // 1. 3D & 2D Vector SVG export
+        val snap3D = GeometrySnapshot(shape = ShapeType.PYRAMID4_SA, a = 4f, h = 5f)
+        val ui3D = GeometryUiState(snapshot = snap3D, scene = ShapeBuilder.build(snap3D))
+        val svg3D = SvgExporter.export3DToSvg(1080, 1080, ui3D, transparentBg = true)
+        assertTrue(svg3D.contains("<svg") && svg3D.contains("</svg>"))
+        assertTrue(!svg3D.contains("url(#bg3d)"))
+
+        val ui2D = Geo2DUiState(
+            snapshot = Geo2DSnapshot(
+                functions = listOf(GraphFunction("f1", "f1(x)", "x^2 - 2", "#38BDF8", true))
+            )
+        )
+        val svg2D = SvgExporter.export2DToSvg(1080, 1080, ui2D, transparentBg = true)
+        assertTrue(svg2D.contains("<svg") && svg2D.contains("<path"))
+
+        // 2. Verify Answer Evaluator accepts formulas, Vietnamese comma decimals, and degree signs
+        val vSqrt = com.example.ui.VerifyAnswerEvaluator.evaluate("sqrt(3)/2")!!
+        assertTrue(com.example.ui.VerifyAnswerEvaluator.isCorrect(kotlin.math.sqrt(3.0) / 2.0, vSqrt))
+        val vPi = com.example.ui.VerifyAnswerEvaluator.evaluate("4*pi/3")!!
+        assertTrue(com.example.ui.VerifyAnswerEvaluator.isCorrect(4.0 * PI / 3.0, vPi))
+        val vComma = com.example.ui.VerifyAnswerEvaluator.evaluate("35,26°")!!
+        assertTrue(com.example.ui.VerifyAnswerEvaluator.isCorrect(35.264, vComma))
+    }
 }

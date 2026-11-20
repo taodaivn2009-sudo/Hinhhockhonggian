@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.ui.VerifyModeCard2D
 import com.example.ui.panes.SettingBox
 import com.example.ui.theme.*
 import kotlin.math.PI
@@ -46,7 +47,7 @@ fun Geo2DFunctionsPane(
     }
 
     val quickSymbols = listOf(
-        "x", "^2", "^3", "^", "e^", "2^x", "ln(", "log(", "log2(", "log(3; ",
+        "x", "m", "^2", "^3", "^", "e^", "2^x", "ln(", "log(", "log2(", "log(3; ",
         "sqrt(", "sin(", "cos(", "tan(", "abs(", "pi", "(", ")"
     )
     val categoryTemplates = remember(selectedCategory) {
@@ -69,7 +70,7 @@ fun Geo2DFunctionsPane(
                 OutlinedTextField(
                     value = draftExpr,
                     onValueChange = { draftExpr = it },
-                    placeholder = { Text("VD: e^x, log(2; x), x^3 - 3x...", color = SlateTextSecondary, fontSize = 12.sp) },
+                    placeholder = { Text("VD: x^3 - 3*m*x + 1, (2x-1)/(x-1), e^x...", color = SlateTextSecondary, fontSize = 11.5.sp) },
                     prefix = { Text("y = ", color = CyanAccent, fontWeight = FontWeight.Bold) },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(
@@ -165,7 +166,7 @@ fun Geo2DFunctionsPane(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Mũ & Loga • Đa thức • Phân thức • Lượng giác • Đặc biệt",
+                        text = "Tham số m • Mũ & Loga • Đa thức • Phân thức • Lượng giác • Đặc biệt",
                         style = MaterialTheme.typography.bodySmall,
                         color = SlateTextSecondary,
                         fontSize = 10.5.sp,
@@ -342,10 +343,10 @@ fun Geo2DFunctionsPane(
                             }
                         }
 
-                        // Row 2: Independent Graph f(x) Toggle + Derivative f'(x) Button
+                        // Row 2: Independent Graph f(x) Toggle + Derivative f'(x) Button + Variation Table (BBT)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(
@@ -359,7 +360,7 @@ fun Geo2DFunctionsPane(
                                         RoundedCornerShape(8.dp)
                                     )
                                     .clickable { viewModel.toggleFunctionVisibility(fn.id) }
-                                    .padding(horizontal = 9.dp, vertical = 7.dp)
+                                    .padding(horizontal = 6.dp, vertical = 7.dp)
                                     .testTag("geo2d_toggle_fn_${fn.id}"),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.Center
@@ -368,11 +369,11 @@ fun Geo2DFunctionsPane(
                                     imageVector = if (fn.visible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
                                     contentDescription = "Bật/tắt đồ thị ${fn.label}",
                                     tint = if (fn.visible) fnColor else SlateTextSecondary,
-                                    modifier = Modifier.size(15.dp)
+                                    modifier = Modifier.size(14.dp)
                                 )
-                                Spacer(Modifier.width(5.dp))
+                                Spacer(Modifier.width(4.dp))
                                 Text(
-                                    text = if (fn.visible) "Đang bật đồ thị" else "Đang tắt đồ thị",
+                                    text = if (fn.visible) "Đồ thị" else "Đang ẩn",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (fn.visible) SlateTextPrimary else SlateTextSecondary,
                                     fontWeight = if (fn.visible) FontWeight.SemiBold else FontWeight.Normal,
@@ -392,7 +393,7 @@ fun Geo2DFunctionsPane(
                                         RoundedCornerShape(8.dp)
                                     )
                                     .clickable { viewModel.toggleFunctionDerivative(fn.id) }
-                                    .padding(horizontal = 9.dp, vertical = 7.dp)
+                                    .padding(horizontal = 6.dp, vertical = 7.dp)
                                     .testTag("geo2d_toggle_deriv_${fn.id}"),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.Center
@@ -401,16 +402,49 @@ fun Geo2DFunctionsPane(
                                     imageVector = Icons.Default.Timeline,
                                     contentDescription = "Bật/tắt đạo hàm ${fn.label}",
                                     tint = if (fn.showDerivative) AmberAccent else SlateTextSecondary,
-                                    modifier = Modifier.size(15.dp)
+                                    modifier = Modifier.size(14.dp)
                                 )
-                                Spacer(Modifier.width(5.dp))
+                                Spacer(Modifier.width(4.dp))
                                 Text(
-                                    text = if (fn.showDerivative) "Đạo hàm f'(x)" else "Đạo hàm f'(x)",
+                                    text = "f'(x)",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (fn.showDerivative) AmberAccent else SlateTextLight,
                                     fontWeight = if (fn.showDerivative) FontWeight.Bold else FontWeight.Medium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            val bbtEnabled = parsed is MathExprParser.ParseResult.Ok
+                            Row(
+                                modifier = Modifier
+                                    .weight(0.85f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (bbtEnabled) CyanAccent.copy(alpha = 0.16f) else SlateSurface.copy(alpha = 0.5f))
+                                    .border(
+                                        1.dp,
+                                        if (bbtEnabled) CyanAccent.copy(alpha = 0.7f) else SlateBorder,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable(enabled = bbtEnabled) { viewModel.openVariationTable(fn.id) }
+                                    .padding(horizontal = 6.dp, vertical = 7.dp)
+                                    .testTag("geo2d_bbt_btn_${fn.id}"),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.TableChart,
+                                    contentDescription = "Bảng biến thiên ${fn.label}",
+                                    tint = if (bbtEnabled) CyanAccent else SlateTextSecondary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = "BBT",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (bbtEnabled) CyanAccent else SlateTextSecondary,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
                                 )
                             }
                         }
@@ -620,7 +654,12 @@ fun Geo2DObjectsPane(
         if (snap.points.none { it.id == mP3Id }) mP3Id = snap.points.getOrNull(2)?.id ?: ""
     }
 
+    val hideAnswers = uiState.verifyHideAnswers
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // 0. Student Answer Verification Mode (Verify Mode)
+        VerifyModeCard2D(uiState = uiState, viewModel = viewModel)
+
         // 1. Quick Interactive Measurement Calculator (Distance, Midpoint, Vector, Line Eq, Angle)
         if (snap.points.size >= 2) {
             SettingBox(
@@ -652,10 +691,10 @@ fun Geo2DObjectsPane(
                             .padding(horizontal = 10.dp, vertical = 7.dp),
                         verticalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
-                        MeasureStatLine("Độ dài ${p1.name}${p2.name}", Geo2DMathHelpers.formatNum(d), CyanAccent)
-                        MeasureStatLine("Trung điểm I", "(${Geo2DMathHelpers.formatNum(mid.x)}; ${Geo2DMathHelpers.formatNum(mid.y)})", IndigoSoft)
-                        MeasureStatLine("Vectơ ${p1.name}${p2.name}→", "(${Geo2DMathHelpers.formatNum(dx)}; ${Geo2DMathHelpers.formatNum(dy)})", RoseLight)
-                        MeasureStatLine("Đường thẳng", eq, EmeraldAccent)
+                        MeasureStatLine("Độ dài ${p1.name}${p2.name}", if (hideAnswers) "???" else Geo2DMathHelpers.formatNum(d), CyanAccent)
+                        MeasureStatLine("Trung điểm I", if (hideAnswers) "(?; ?)" else "(${Geo2DMathHelpers.formatNum(mid.x)}; ${Geo2DMathHelpers.formatNum(mid.y)})", IndigoSoft)
+                        MeasureStatLine("Vectơ ${p1.name}${p2.name}→", if (hideAnswers) "(?; ?)" else "(${Geo2DMathHelpers.formatNum(dx)}; ${Geo2DMathHelpers.formatNum(dy)})", RoseLight)
+                        MeasureStatLine("Đường thẳng", if (hideAnswers) "Đang ẩn đáp án" else eq, EmeraldAccent)
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
@@ -699,7 +738,7 @@ fun Geo2DObjectsPane(
                                     color = SlateTextSecondary
                                 )
                                 Text(
-                                    text = "${Geo2DMathHelpers.formatNum(deg)}°  (${Geo2DMathHelpers.formatNum(rad)} rad)",
+                                    text = if (hideAnswers) "???°  (Đang ẩn đáp án)" else "${Geo2DMathHelpers.formatNum(deg)}°  (${Geo2DMathHelpers.formatNum(rad)} rad)",
                                     style = MaterialTheme.typography.labelLarge.copy(fontFamily = MonoFontFamily),
                                     color = AmberAccent,
                                     fontWeight = FontWeight.Bold
@@ -807,7 +846,12 @@ fun Geo2DObjectsPane(
                             )
                         }
                     }
-                    ObjectRowItem(title = title, detail = detail, accent = accent, onDelete = { viewModel.deleteObject(obj.id) })
+                    ObjectRowItem(
+                        title = title,
+                        detail = if (hideAnswers) "Đang ẩn đáp án (Chế độ Kiểm tra)" else detail,
+                        accent = accent,
+                        onDelete = { viewModel.deleteObject(obj.id) }
+                    )
                 }
             }
         }
@@ -945,7 +989,8 @@ fun Geo2DSettingsPane(
             Geo2DSwitchRow("Hút lưới khi chấm/kéo điểm", s.snapToGrid) { viewModel.toggleSnap() }
             Geo2DSwitchRow("Hiển thị tọa độ cạnh tên điểm", s.showPointCoords) { viewModel.togglePointCoords() }
             Geo2DSwitchRow("Hiển thị độ dài, diện tích & PT", s.showMeasurements) { viewModel.toggleMeasurements() }
-            Geo2DSwitchRow("Đánh dấu nghiệm, cực trị, giao điểm", s.showKeyGraphPoints) { viewModel.toggleKeyGraphPoints() }
+            Geo2DSwitchRow("Đánh dấu nghiệm, cực trị, điểm uốn, giao điểm", s.showKeyGraphPoints) { viewModel.toggleKeyGraphPoints() }
+            Geo2DSwitchRow("Tự động vẽ tiệm cận (TCĐ / TCN / TCX)", s.showAsymptotes) { viewModel.toggleAsymptotes() }
             Geo2DSwitchRow("Vẽ tiếp tuyến khi dò đồ thị", s.showTangentOnTrace) { viewModel.toggleTangentOnTrace() }
         }
 
@@ -1010,6 +1055,7 @@ fun Geo2DSaveExportModal(
     viewModel: Geo2DViewModel,
     onPickExportFolderClick: () -> Unit,
     onExportPngClick: (forcePicker: Boolean) -> Unit,
+    onExportSvgClick: (forcePicker: Boolean) -> Unit,
     onExportJsonClick: (forcePicker: Boolean) -> Unit,
     onImportJsonClick: () -> Unit
 ) {
@@ -1108,6 +1154,38 @@ fun Geo2DSaveExportModal(
                 }
 
                 SettingBox(title = "2. Xuất & Mở File Ngoài", titleColor = EmeraldAccent) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(SlateDeepest)
+                            .border(1.dp, if (uiState.exportTransparentBg) CyanAccent.copy(alpha = 0.6f) else SlateBorder, RoundedCornerShape(10.dp))
+                            .clickable { viewModel.toggleExportTransparentBg() }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                            .testTag("export_transparent_2d_switch"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                "Xuất nền trong suốt (không lưới)",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (uiState.exportTransparentBg) CyanAccent else SlateTextPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                "Chèn trực tiếp vào Word, Slide, PowerPoint không bị dính nền tối",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = SlateTextSecondary,
+                                fontSize = 10.sp
+                            )
+                        }
+                        Switch(
+                            checked = uiState.exportTransparentBg,
+                            onCheckedChange = { viewModel.toggleExportTransparentBg() }
+                        )
+                    }
+
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
                         Button(
                             onClick = { onExportPngClick(false) },
@@ -1117,7 +1195,10 @@ fun Geo2DSaveExportModal(
                         ) {
                             Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("Lưu Ảnh .PNG", style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                if (uiState.exportTransparentBg) "Lưu Ảnh .PNG (Trong suốt)" else "Lưu Ảnh .PNG",
+                                style = MaterialTheme.typography.labelLarge
+                            )
                         }
                         if (hasPinnedFolder) {
                             IconButton(
@@ -1129,6 +1210,34 @@ fun Geo2DSaveExportModal(
                                     .border(1.dp, SlateBorder, RoundedCornerShape(10.dp))
                             ) {
                                 Icon(Icons.Default.DriveFileMove, contentDescription = "Chọn vị trí khác cho PNG", tint = SlateTextLight)
+                            }
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(
+                            onClick = { onExportSvgClick(false) },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("export_svg_2d_btn")
+                        ) {
+                            Icon(Icons.Default.Draw, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Lưu Vector .SVG (Không vỡ nét)", style = MaterialTheme.typography.labelLarge)
+                        }
+                        if (hasPinnedFolder) {
+                            IconButton(
+                                onClick = { onExportSvgClick(true) },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(SlateSurface)
+                                    .border(1.dp, SlateBorder, RoundedCornerShape(10.dp))
+                            ) {
+                                Icon(Icons.Default.DriveFileMove, contentDescription = "Chọn vị trí khác cho SVG", tint = SlateTextLight)
                             }
                         }
                     }

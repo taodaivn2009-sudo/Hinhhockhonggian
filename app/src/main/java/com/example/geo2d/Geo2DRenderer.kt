@@ -76,7 +76,7 @@ object Geo2DRenderer {
         val scratchPath = Path()
         val scratchRect = RectF()
 
-        // Viewport-padded cache for key function points (roots, extrema, y-intercepts, intersections)
+        // Viewport-padded cache for key function points (roots, extrema, inflection, y-intercepts, intersections) & asymptotes
         var kpFuncSig: String = ""
         var kpXMin = Double.NaN
         var kpXMax = Double.NaN
@@ -84,6 +84,7 @@ object Geo2DRenderer {
         var kpYMax = Double.NaN
         var kpXSpan = Double.NaN
         var cachedKeyPoints: List<GraphKeyPoint> = emptyList()
+        var cachedAsymptotes: List<GraphAsymptote> = emptyList()
 
         fun ensureDensity(density: Float) {
             if (cachedDensity != density) {
@@ -158,34 +159,40 @@ object Geo2DRenderer {
         density: Float,
         uiState: Geo2DUiState,
         includeExportCard: Boolean = false,
-        exportTitle: String = ""
+        exportTitle: String = "",
+        transparentBackground: Boolean = false
     ) {
         if (width <= 2f || height <= 2f) return
         val scratch = scratchLocal.get()!!
         scratch.ensureDensity(density)
-        scratch.ensureBackground(width, height)
+        if (!transparentBackground) {
+            scratch.ensureBackground(width, height)
+        }
 
         val snap = uiState.snapshot
         val cam = snap.camera
+        val paramM = snap.paramM
 
-        // 1. Deep Observatory Background (cached shader)
-        canvas.drawRect(0f, 0f, width, height, scratch.bgPaint)
+        // 1. Deep Observatory Background (skipped when transparent)
+        if (!transparentBackground) {
+            canvas.drawRect(0f, 0f, width, height, scratch.bgPaint)
+        }
 
         val (xMin, yMin) = screenToWorldDouble(0f, height, cam, width, height)
         val (xMax, yMax) = screenToWorldDouble(width, 0f, cam, width, height)
         val majorStep = niceGridStep(cam.pixelsPerUnit, density)
 
-        // 2. Adaptive Coordinate Grid
-        if (snap.showGrid) {
+        // 2. Adaptive Coordinate Grid (skipped when transparent)
+        if (snap.showGrid && !transparentBackground) {
             drawGrid(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, majorStep, scratch)
         }
 
         // 3. Oxy Coordinate Axes & Tick Labels
         if (snap.showAxes) {
-            drawAxes(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, majorStep, scratch)
+            drawAxes(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, majorStep, transparentBackground, scratch)
         }
 
-        // 4. Compile (LRU-cached) & Draw Arbitrary Mathematical Function Graphs y = f(x) and optional Derivative y = f'(x)
+        // 4. Compile (LRU-cached) & Draw Arbitrary Mathematical Function Graphs y = f(x, m) and optional Derivative y = f'(x, m)
         val compiledFunctions = ArrayList<Triple<GraphFunction, MathExprParser.Expr, MathExprParser.Expr?>>(snap.functions.size)
         val xSpan = max(1e-9, xMax - xMin)
         val ySpan = max(1e-9, yMax - yMin)
@@ -205,7 +212,7 @@ object Geo2DRenderer {
                         height = height,
                         density = density,
                         cam = cam,
-                        evaluator = { x -> parsed.expr.eval(x) },
+                        evaluator = { x -> parsed.expr.eval(x, paramM) },
                         colorHex = fn.colorHex,
                         worldHeight = ySpan,
                         isDashedDerivative = false,
@@ -220,7 +227,7 @@ object Geo2DRenderer {
                         height = height,
                         density = density,
                         cam = cam,
-                        evaluator = { x -> symDeriv?.eval(x) ?: parsed.expr.derivative(x, numStep) },
+                        evaluator = { x -> symDeriv?.eval(x, paramM) ?: parsed.expr.derivative(x, numStep, paramM) },
                         colorHex = fn.colorHex,
                         worldHeight = ySpan,
                         isDashedDerivative = true,
@@ -230,10 +237,27 @@ object Geo2DRenderer {
             }
         }
 
-        // 5. Key Function Points (Roots, Y-Intercept, Extrema, Intersections) with viewport-padded caching
-        if (snap.showKeyGraphPoints && compiledFunctions.isNotEmpty()) {
-            val keyPoints = resolveKeyPointsCached(compiledFunctions, xMin, xMax, yMin, yMax, xSpan, ySpan, scratch)
-            drawKeyGraphPoints(canvas, width, height, density, cam, keyPoints, scratch)
+        // 5. Key Function Points & Asymptotes with viewport-padded caching
+        if ((snap.showKeyGraphPoints || snap.showAsymptotes) && compiledFunctions.isNotEmpty()) {
+            val (keyPoints, asymptotes) = resolveGraphAnalysisCached(
+                compiledFunctions = compiledFunctions,
+                paramM = paramM,
+                computeKeyPoints = snap.showKeyGraphPoints,
+                computeAsymptotes = snap.showAsymptotes,
+                xMin = xMin,
+                xMax = xMax,
+                yMin = yMin,
+                yMax = yMax,
+                xSpan = xSpan,
+                ySpan = ySpan,
+                scratch = scratch
+            )
+            if (snap.showAsymptotes && asymptotes.isNotEmpty()) {
+                drawAsymptotes(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, asymptotes, scratch)
+            }
+            if (snap.showKeyGraphPoints && keyPoints.isNotEmpty()) {
+                drawKeyGraphPoints(canvas, width, height, density, cam, keyPoints, scratch)
+            }
         }
 
         // 6. 2D Geometric Objects (Polygons -> Circles -> Lines/Rays -> Segments/Vectors -> Angles)
@@ -265,7 +289,7 @@ object Geo2DRenderer {
         // 6d. Segments & Vectors
         for (obj in snap.objects) {
             when (obj) {
-                is Geo2DObject.Segment -> drawSegment(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, scratch)
+                is Geo2DObject.Segment -> drawSegment(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, transparentBackground, scratch)
                 is Geo2DObject.VectorObj -> drawVector(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, scratch)
                 else -> Unit
             }
@@ -300,14 +324,17 @@ object Geo2DRenderer {
         // 9. Named 2D Points & Coordinate Labels
         drawPoints(canvas, width, height, density, cam, uiState, scratch)
 
-        // 10. Optional Export Summary Card
-        if (includeExportCard) {
+        // 10. Optional Export Summary Card (skipped for transparent export)
+        if (includeExportCard && !transparentBackground) {
             drawExportInfoCard(canvas, width, height, density, uiState, exportTitle, scratch)
         }
     }
 
-    private fun resolveKeyPointsCached(
+    private fun resolveGraphAnalysisCached(
         compiledFunctions: List<Triple<GraphFunction, MathExprParser.Expr, MathExprParser.Expr?>>,
+        paramM: Double,
+        computeKeyPoints: Boolean,
+        computeAsymptotes: Boolean,
         xMin: Double,
         xMax: Double,
         yMin: Double,
@@ -315,8 +342,10 @@ object Geo2DRenderer {
         xSpan: Double,
         ySpan: Double,
         scratch: RenderScratch
-    ): List<GraphKeyPoint> {
+    ): Pair<List<GraphKeyPoint>, List<GraphAsymptote>> {
         val sig = buildString {
+            append("m=").append(String.format(java.util.Locale.US, "%.4f", paramM))
+            append("|kp=").append(computeKeyPoints).append("|as=").append(computeAsymptotes).append('|')
             for ((fn, _, _) in compiledFunctions) {
                 append(fn.expression).append('|').append(fn.colorHex).append(';')
             }
@@ -328,7 +357,7 @@ object Geo2DRenderer {
             yMin >= scratch.kpYMin && yMax <= scratch.kpYMax &&
             zoomRatio in 0.8..1.25
 
-        if (cacheHit) return scratch.cachedKeyPoints
+        if (cacheHit) return scratch.cachedKeyPoints to scratch.cachedAsymptotes
 
         val padX = xSpan * 0.20
         val padY = ySpan * 0.20
@@ -338,20 +367,29 @@ object Geo2DRenderer {
         val qYMax = yMax + padY
 
         val keyPoints = ArrayList<GraphKeyPoint>()
-        for ((fn, expr, symDeriv) in compiledFunctions) {
-            keyPoints.addAll(MathExprParser.analyzeFunction(expr, qXMin, qXMax, qYMin, qYMax, fn.colorHex, symDeriv))
-        }
-        if (compiledFunctions.size >= 2) {
-            for (i in compiledFunctions.indices) {
-                for (j in i + 1 until compiledFunctions.size) {
-                    keyPoints.addAll(
-                        MathExprParser.findIntersections(
-                            compiledFunctions[i].second,
-                            compiledFunctions[j].second,
-                            qXMin, qXMax, qYMin, qYMax
+        val asymptotes = ArrayList<GraphAsymptote>()
+
+        if (computeKeyPoints) {
+            for ((fn, expr, symDeriv) in compiledFunctions) {
+                keyPoints.addAll(MathExprParser.analyzeFunction(expr, qXMin, qXMax, qYMin, qYMax, fn.colorHex, symDeriv, paramM))
+            }
+            if (compiledFunctions.size >= 2) {
+                for (i in compiledFunctions.indices) {
+                    for (j in i + 1 until compiledFunctions.size) {
+                        keyPoints.addAll(
+                            MathExprParser.findIntersections(
+                                compiledFunctions[i].second,
+                                compiledFunctions[j].second,
+                                qXMin, qXMax, qYMin, qYMax, paramM
+                            )
                         )
-                    )
+                    }
                 }
+            }
+        }
+        if (computeAsymptotes) {
+            for ((fn, expr, _) in compiledFunctions) {
+                asymptotes.addAll(MathExprParser.findAsymptotes(expr, qXMin, qXMax, qYMin, qYMax, fn.colorHex, paramM))
             }
         }
 
@@ -362,7 +400,69 @@ object Geo2DRenderer {
         scratch.kpYMax = qYMax
         scratch.kpXSpan = xSpan
         scratch.cachedKeyPoints = keyPoints
-        return keyPoints
+        scratch.cachedAsymptotes = asymptotes
+        return keyPoints to asymptotes
+    }
+
+    private fun drawAsymptotes(
+        canvas: Canvas,
+        width: Float,
+        height: Float,
+        density: Float,
+        cam: Geo2DCamera,
+        xMin: Double,
+        xMax: Double,
+        yMin: Double,
+        yMax: Double,
+        asymptotes: List<GraphAsymptote>,
+        scratch: RenderScratch
+    ) {
+        val halfW = width * 0.5
+        val halfH = height * 0.5
+        val linePaint = scratch.dashedStrokePaint.apply {
+            strokeWidth = 1.5f * density
+            pathEffect = scratch.dash65
+        }
+        var labelRow = 0
+        for (asymptote in asymptotes) {
+            when (asymptote) {
+                is GraphAsymptote.Vertical -> {
+                    val sx = worldToScreenX(asymptote.x, cam, halfW)
+                    if (sx in -10f..(width + 10f)) {
+                        linePaint.color = 0xCCF43F5E.toInt()
+                        canvas.drawLine(sx, 0f, sx, height, linePaint)
+                        val badgeY = (36f + (labelRow % 4) * 20f) * density
+                        drawSmallBadge(canvas, sx.coerceIn(54f * density, width - 54f * density), badgeY, asymptote.label, 0xFFFDA4AF.toInt(), density, scratch)
+                        labelRow++
+                    }
+                }
+                is GraphAsymptote.Horizontal -> {
+                    val sy = worldToScreenY(asymptote.y, cam, halfH)
+                    if (sy in -10f..(height + 10f)) {
+                        linePaint.color = 0xCCF59E0B.toInt()
+                        canvas.drawLine(0f, sy, width, sy, linePaint)
+                        val badgeX = width - 64f * density
+                        drawSmallBadge(canvas, badgeX, sy.coerceIn(28f * density, height - 28f * density) - 11f * density, asymptote.label, 0xFFFCD34D.toInt(), density, scratch)
+                        labelRow++
+                    }
+                }
+                is GraphAsymptote.Oblique -> {
+                    val y1 = asymptote.a * xMin + asymptote.b
+                    val y2 = asymptote.a * xMax + asymptote.b
+                    val s1 = worldToScreen(xMin, y1, cam, width, height)
+                    val s2 = worldToScreen(xMax, y2, cam, width, height)
+                    linePaint.color = 0xCCC084FC.toInt()
+                    canvas.drawLine(s1.x, s1.y, s2.x, s2.y, linePaint)
+                    val mx = (xMin + xMax) * 0.5 + (xMax - xMin) * 0.18
+                    val my = asymptote.a * mx + asymptote.b
+                    if (my in yMin..yMax) {
+                        val ms = worldToScreen(mx, my, cam, width, height)
+                        drawSmallBadge(canvas, ms.x, ms.y - 12f * density, asymptote.label, 0xFFD8B4FE.toInt(), density, scratch)
+                    }
+                    labelRow++
+                }
+            }
+        }
     }
 
     private fun drawGrid(
@@ -434,6 +534,7 @@ object Geo2DRenderer {
         yMin: Double,
         yMax: Double,
         majorStep: Double,
+        transparentBackground: Boolean,
         scratch: RenderScratch
     ) {
         val halfW = width * 0.5
@@ -441,12 +542,14 @@ object Geo2DRenderer {
         val originX = worldToScreenX(0.0, cam, halfW)
         val originY = worldToScreenY(0.0, cam, halfH)
 
+        val axisCol = if (transparentBackground) 0xFF1E293B.toInt() else 0xFF94A3B8.toInt()
+        val arrowCol = if (transparentBackground) 0xFF0F172A.toInt() else 0xFFCBD5E1.toInt()
         val axisPaint = scratch.axisPaint.apply {
-            color = 0xFF94A3B8.toInt()
+            color = axisCol
             strokeWidth = 2.0f * density
         }
         val tickPaint = scratch.tickPaint.apply {
-            color = 0xFF94A3B8.toInt()
+            color = axisCol
             textSize = 10.5f * density
         }
         val lblPaint = scratch.axisLabelPaint.apply {
@@ -458,8 +561,8 @@ object Geo2DRenderer {
         val xVisible = originY in -2f..height + 2f
         if (xVisible) {
             canvas.drawLine(0f, originY, width - 6f * density, originY, axisPaint)
-            drawArrowHead(canvas, width - 20f * density, originY, width - 3f * density, originY, 0xFFCBD5E1.toInt(), 9f * density, scratch)
-            lblPaint.color = 0xFFF87171.toInt()
+            drawArrowHead(canvas, width - 20f * density, originY, width - 3f * density, originY, arrowCol, 9f * density, scratch)
+            lblPaint.color = if (transparentBackground) 0xFFDC2626.toInt() else 0xFFF87171.toInt()
             canvas.drawText("x", width - 18f * density, originY - 10f * density, lblPaint)
         }
 
@@ -468,8 +571,8 @@ object Geo2DRenderer {
         val yVisible = originX in -2f..width + 2f
         if (yVisible) {
             canvas.drawLine(originX, height, originX, 6f * density, axisPaint)
-            drawArrowHead(canvas, originX, 20f * density, originX, 3f * density, 0xFFCBD5E1.toInt(), 9f * density, scratch)
-            lblPaint.color = 0xFF4ADE80.toInt()
+            drawArrowHead(canvas, originX, 20f * density, originX, 3f * density, arrowCol, 9f * density, scratch)
+            lblPaint.color = if (transparentBackground) 0xFF16A34A.toInt() else 0xFF4ADE80.toInt()
             canvas.drawText("y", originX + 10f * density, 20f * density, lblPaint)
         }
 
@@ -613,18 +716,52 @@ object Geo2DRenderer {
         val bgPaint = scratch.keyPtBgPaint
         val rect = scratch.scratchRect
 
-        for (kp in keyPoints) {
+        fun priority(t: KeyPointType): Int = when (t) {
+            KeyPointType.INTERSECTION -> 5
+            KeyPointType.LOCAL_MAX, KeyPointType.LOCAL_MIN -> 4
+            KeyPointType.INFLECTION -> 3
+            KeyPointType.ROOT -> 2
+            KeyPointType.Y_INTERCEPT -> 1
+        }
+        val drawnPts = ArrayList<Pair<Float, Float>>(keyPoints.size)
+        val minSep = 14f * density
+
+        for (kp in keyPoints.sortedByDescending { priority(it.type) }) {
             val px = worldToScreenX(kp.x, cam, halfW)
             val py = worldToScreenY(kp.y, cam, halfH)
             if (px !in 12f..(width - 12f) || py !in 12f..(height - 12f)) continue
+            if (drawnPts.any { hypot(it.first - px, it.second - py) < minSep }) continue
+            drawnPts.add(px to py)
             val c = parseColor(kp.colorHex, 0xFFFBBF24.toInt())
-            val r = if (kp.type == KeyPointType.INTERSECTION) 5.2f * density else 4.2f * density
-            fillPaint.color = if (kp.type == KeyPointType.INTERSECTION) 0xFFFBBF24.toInt() else 0xFF090D16.toInt()
-            strokePaint.color = c
-            canvas.drawCircle(px, py, r, fillPaint)
-            canvas.drawCircle(px, py, r, strokePaint)
 
-            val label = "(${Geo2DMathHelpers.formatNum(kp.x)}; ${Geo2DMathHelpers.formatNum(kp.y)})"
+            if (kp.type == KeyPointType.INFLECTION) {
+                val r = 5.0f * density
+                val path = scratch.scratchPath
+                path.rewind()
+                path.moveTo(px, py - r)
+                path.lineTo(px + r, py)
+                path.lineTo(px, py + r)
+                path.lineTo(px - r, py)
+                path.close()
+                fillPaint.color = 0xFFC084FC.toInt()
+                strokePaint.color = Color.WHITE
+                canvas.drawPath(path, fillPaint)
+                canvas.drawPath(path, strokePaint)
+            } else {
+                val r = if (kp.type == KeyPointType.INTERSECTION) 5.2f * density else 4.2f * density
+                fillPaint.color = if (kp.type == KeyPointType.INTERSECTION) 0xFFFBBF24.toInt() else 0xFF090D16.toInt()
+                strokePaint.color = c
+                canvas.drawCircle(px, py, r, fillPaint)
+                canvas.drawCircle(px, py, r, strokePaint)
+            }
+
+            val prefix = when (kp.type) {
+                KeyPointType.LOCAL_MAX -> "CĐ "
+                KeyPointType.LOCAL_MIN -> "CT "
+                KeyPointType.INFLECTION -> "U "
+                else -> ""
+            }
+            val label = "$prefix(${Geo2DMathHelpers.formatNum(kp.x)}; ${Geo2DMathHelpers.formatNum(kp.y)})"
             val tw = textPaint.measureText(label)
             rect.set(px + 6f * density, py - 16f * density, px + 14f * density + tw, py - 2f * density)
             canvas.drawRoundRect(rect, 4f * density, 4f * density, bgPaint)
@@ -886,13 +1023,15 @@ object Geo2DRenderer {
         seg: Geo2DObject.Segment,
         ptMap: Map<String, Geo2DPoint>,
         showMeasurements: Boolean,
+        transparentBackground: Boolean,
         scratch: RenderScratch
     ) {
         val p1 = ptMap[seg.p1Id] ?: return
         val p2 = ptMap[seg.p2Id] ?: return
         val s1 = worldToScreen(p1.x, p1.y, cam, width, height)
         val s2 = worldToScreen(p2.x, p2.y, cam, width, height)
-        val baseColor = parseColor(seg.colorHex, 0xFFF8FAFC.toInt())
+        val rawColor = parseColor(seg.colorHex, 0xFFF8FAFC.toInt())
+        val baseColor = if (transparentBackground && rawColor == 0xFFF8FAFC.toInt()) 0xFF0F172A.toInt() else rawColor
         val paint = if (seg.dashed) scratch.dashedStrokePaint else scratch.strokePaint
         paint.strokeWidth = 2.2f * density
         paint.strokeCap = Paint.Cap.ROUND
@@ -1195,13 +1334,23 @@ object Geo2DRenderer {
         heightPx: Int,
         density: Float,
         uiState: Geo2DUiState,
-        exportTitle: String
+        exportTitle: String,
+        transparentBackground: Boolean = false
     ): Bitmap {
         val safeW = widthPx.coerceIn(720, 2160)
         val safeH = heightPx.coerceIn(720, 2160)
         val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        renderScene(canvas, safeW.toFloat(), safeH.toFloat(), density, uiState, true, exportTitle)
+        renderScene(
+            canvas = canvas,
+            width = safeW.toFloat(),
+            height = safeH.toFloat(),
+            density = density,
+            uiState = uiState,
+            includeExportCard = !transparentBackground,
+            exportTitle = exportTitle,
+            transparentBackground = transparentBackground
+        )
         return bitmap
     }
 

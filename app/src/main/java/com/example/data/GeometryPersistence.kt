@@ -169,6 +169,14 @@ class GeometryPersistence(context: Context) {
             }
             root.put("customPlanes", plArr)
 
+            s.dynamicSection?.let { ds ->
+                root.put("dynamicSection", JSONObject().apply {
+                    put("p1", ds.p1)
+                    put("p2", ds.p2)
+                    put("p3", ds.p3)
+                })
+            }
+
             return root.toString(2)
         }
 
@@ -283,6 +291,12 @@ class GeometryPersistence(context: Context) {
                 customXYZPoints = xyzPts,
                 customLines = lines,
                 customPlanes = planes,
+                dynamicSection = o.optJSONObject("dynamicSection")?.let { ds ->
+                    val p1 = ds.optString("p1", "")
+                    val p2 = ds.optString("p2", "")
+                    val p3 = ds.optString("p3", "")
+                    if (p1.isNotEmpty() && p2.isNotEmpty() && p3.isNotEmpty()) DynamicSection3Points(p1, p2, p3) else null
+                },
                 camera = cam
             )
         }

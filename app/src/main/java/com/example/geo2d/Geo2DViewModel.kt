@@ -30,6 +30,9 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
     private val maxHistory = 40
     private var toastJob: Job? = null
     private var autoSaveJob: Job? = null
+    private var paramMAnimJob: Job? = null
+    private var replayJob: Job? = null
+    private var fullSnapshotBeforeReplay: Geo2DSnapshot? = null
     private var dragHistoryRecorded = false
     private var idSeq = 100
 
@@ -104,11 +107,14 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         autoSave: Boolean = true,
         transform: (Geo2DSnapshot) -> Geo2DSnapshot
     ) {
+        if (fullSnapshotBeforeReplay != null) {
+            stopReplay(restoreFull = true)
+        }
         val current = _uiState.value.snapshot
         if (recordHistory) pushHistory(current)
         val next = transform(current)
         _uiState.update { st ->
-            val updatedTrace = if (st.traceX != null && next.functions !== current.functions) {
+            val updatedTrace = if (st.traceX != null && (next.functions !== current.functions || next.paramM != current.paramM)) {
                 evaluateTrace(next, st.traceX)
             } else {
                 st.traceResults
@@ -247,6 +253,195 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleMeasurements() = updateSnapshot { it.copy(showMeasurements = !it.showMeasurements) }
     fun toggleKeyGraphPoints() = updateSnapshot { it.copy(showKeyGraphPoints = !it.showKeyGraphPoints) }
     fun toggleTangentOnTrace() = updateSnapshot { it.copy(showTangentOnTrace = !it.showTangentOnTrace) }
+    fun toggleAsymptotes() = updateSnapshot { it.copy(showAsymptotes = !it.showAsymptotes) }
+
+    fun toggleVerifyHideAnswers() {
+        _uiState.update { it.copy(verifyHideAnswers = !it.verifyHideAnswers) }
+    }
+
+    fun toggleExportTransparentBg() {
+        _uiState.update { it.copy(exportTransparentBg = !it.exportTransparentBg) }
+    }
+
+    // ================= PARAMETER m & VARIATION TABLE =================
+    fun updateParamM(value: Double) {
+        val rounded = round(value * 100.0) / 100.0
+        updateSnapshot(recordHistory = false, autoSave = false) { s ->
+            s.copy(paramM = rounded.coerceIn(s.paramMMin, s.paramMMax))
+        }
+        scheduleDebouncedAutoSave(_uiState.value.snapshot)
+    }
+
+    fun resetParamM() {
+        paramMAnimJob?.cancel()
+        _uiState.update { it.copy(paramMAnimating = false) }
+        updateSnapshot(recordHistory = false, autoSave = true) { it.copy(paramM = 1.0) }
+    }
+
+    fun toggleParamMAnimate() {
+        val playing = _uiState.value.paramMAnimating
+        if (playing) {
+            paramMAnimJob?.cancel()
+            _uiState.update { it.copy(paramMAnimating = false) }
+            persistence.saveAutoSession(_uiState.value.snapshot)
+            return
+        }
+        _uiState.update { it.copy(paramMAnimating = true) }
+        paramMAnimJob?.cancel()
+        paramMAnimJob = viewModelScope.launch {
+            var dir = 1.0
+            while (true) {
+                delay(40)
+                val snap = _uiState.value.snapshot
+                val span = (snap.paramMMax - snap.paramMMin).coerceAtLeast(1.0)
+                val step = span * 0.012
+                var nextM = snap.paramM + dir * step
+                if (nextM >= snap.paramMMax) {
+                    nextM = snap.paramMMax
+                    dir = -1.0
+                } else if (nextM <= snap.paramMMin) {
+                    nextM = snap.paramMMin
+                    dir = 1.0
+                }
+                val rounded = round(nextM * 100.0) / 100.0
+                _uiState.update { st ->
+                    val ns = st.snapshot.copy(paramM = rounded)
+                    st.copy(
+                        snapshot = ns,
+                        traceResults = if (st.traceX != null) evaluateTrace(ns, st.traceX) else st.traceResults
+                    )
+                }
+            }
+        }
+    }
+
+    fun openVariationTable(fnId: String) {
+        _uiState.update { it.copy(variationTargetFnId = fnId) }
+    }
+
+    fun closeVariationTable() {
+        _uiState.update { it.copy(variationTargetFnId = null) }
+    }
+
+    // ================= CONSTRUCTION REPLAY (2D STEP-BY-STEP) =================
+    private fun buildReplaySteps(full: Geo2DSnapshot): List<Pair<String, Geo2DSnapshot>> {
+        val steps = ArrayList<Pair<String, Geo2DSnapshot>>()
+        val ptMap = full.points.associateBy { it.id }
+        var cur = full.copy(points = emptyList(), objects = emptyList(), functions = emptyList())
+        steps.add("Bước 0: Mặt phẳng tọa độ Oxy" to cur)
+
+        full.points.forEach { pt ->
+            cur = cur.copy(points = cur.points + pt)
+            steps.add("Đặt điểm ${pt.name}(${Geo2DMathHelpers.formatNum(pt.x)}; ${Geo2DMathHelpers.formatNum(pt.y)})" to cur)
+        }
+        full.objects.forEach { obj ->
+            cur = cur.copy(objects = cur.objects + obj)
+            val label = when (obj) {
+                is Geo2DObject.Segment -> "Vẽ đoạn ${ptMap[obj.p1Id]?.name ?: ""}${ptMap[obj.p2Id]?.name ?: ""}"
+                is Geo2DObject.Line -> "Vẽ đường thẳng ${ptMap[obj.p1Id]?.name ?: ""}${ptMap[obj.p2Id]?.name ?: ""}"
+                is Geo2DObject.Ray -> "Vẽ tia ${ptMap[obj.startId]?.name ?: ""}${ptMap[obj.throughId]?.name ?: ""}"
+                is Geo2DObject.VectorObj -> "Vẽ vectơ ${ptMap[obj.fromId]?.name ?: ""}${ptMap[obj.toId]?.name ?: ""}"
+                is Geo2DObject.Circle -> "Vẽ đường tròn tâm ${ptMap[obj.centerId]?.name ?: ""}"
+                is Geo2DObject.Polygon -> "Vẽ đa giác ${obj.pointIds.mapNotNull { ptMap[it]?.name }.joinToString("")}"
+                is Geo2DObject.AngleMeasure -> "Đo góc ∠${ptMap[obj.pAId]?.name ?: ""}${ptMap[obj.vertexId]?.name ?: ""}${ptMap[obj.pCId]?.name ?: ""}"
+            }
+            steps.add(label to cur)
+        }
+        full.functions.forEach { fn ->
+            cur = cur.copy(functions = cur.functions + fn)
+            steps.add("Vẽ đồ thị ${fn.label} = ${fn.expression}" to cur)
+        }
+        return steps
+    }
+
+    fun startReplay() {
+        val full = fullSnapshotBeforeReplay ?: _uiState.value.snapshot
+        val steps = buildReplaySteps(full)
+        if (steps.size <= 1) {
+            showToast("Hãy vẽ thêm điểm, hình hoặc đồ thị để tua lại từng bước!")
+            return
+        }
+        fullSnapshotBeforeReplay = full
+        applyReplayStep(0, steps)
+        toggleReplayPlay()
+    }
+
+    private fun applyReplayStep(index: Int, steps: List<Pair<String, Geo2DSnapshot>>) {
+        val clamped = index.coerceIn(0, steps.lastIndex)
+        val (label, snap) = steps[clamped]
+        val cam = _uiState.value.snapshot.camera
+        _uiState.update { st ->
+            st.copy(
+                snapshot = snap.copy(camera = cam),
+                activeTab = null,
+                replayStep = clamped,
+                replayTotalSteps = steps.lastIndex,
+                replayStepLabel = label
+            )
+        }
+    }
+
+    fun stepReplay(delta: Int) {
+        val full = fullSnapshotBeforeReplay ?: return
+        val cur = _uiState.value.replayStep ?: return
+        replayJob?.cancel()
+        val steps = buildReplaySteps(full)
+        _uiState.update { it.copy(replayPlaying = false) }
+        applyReplayStep(cur + delta, steps)
+    }
+
+    fun toggleReplayPlay() {
+        val full = fullSnapshotBeforeReplay ?: return
+        if (_uiState.value.replayPlaying) {
+            replayJob?.cancel()
+            _uiState.update { it.copy(replayPlaying = false) }
+            return
+        }
+        val steps = buildReplaySteps(full)
+        if ((_uiState.value.replayStep ?: 0) >= steps.lastIndex) {
+            applyReplayStep(0, steps)
+        }
+        _uiState.update { it.copy(replayPlaying = true) }
+        replayJob?.cancel()
+        replayJob = viewModelScope.launch {
+            while (true) {
+                delay(1050)
+                val cur = _uiState.value.replayStep ?: break
+                if (cur >= steps.lastIndex) {
+                    _uiState.update { it.copy(replayPlaying = false) }
+                    break
+                }
+                applyReplayStep(cur + 1, steps)
+            }
+        }
+    }
+
+    fun stopReplay(restoreFull: Boolean = true) {
+        replayJob?.cancel()
+        val full = fullSnapshotBeforeReplay
+        fullSnapshotBeforeReplay = null
+        if (restoreFull && full != null) {
+            val cam = _uiState.value.snapshot.camera
+            _uiState.update { st ->
+                st.copy(
+                    snapshot = full.copy(camera = cam),
+                    replayStep = null,
+                    replayTotalSteps = 0,
+                    replayPlaying = false,
+                    replayStepLabel = ""
+                )
+            }
+        } else {
+            _uiState.update { st ->
+                st.copy(
+                    replayStep = null,
+                    replayTotalSteps = 0,
+                    replayPlaying = false,
+                    replayStepLabel = ""
+                )
+            }
+        }
+    }
 
     fun updateSensitivity(
         pan: Float = _uiState.value.snapshot.sensitivity.pan,
@@ -502,13 +697,14 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun evaluateTrace(snap: Geo2DSnapshot, x: Double): List<TraceResult> {
         val step = kotlin.math.max(1e-7, (1.0 / snap.camera.pixelsPerUnit) * 1e-3)
+        val m = snap.paramM
         return snap.functions.mapNotNull { fn ->
             if ((!fn.visible && !fn.showDerivative) || fn.expression.isBlank()) return@mapNotNull null
             val parsed = MathExprParser.parse(fn.expression)
             if (parsed is MathExprParser.ParseResult.Ok) {
-                val y = parsed.expr.eval(x)
+                val y = parsed.expr.eval(x, m)
                 val symDeriv = MathExprParser.derive(fn.expression)?.first
-                val slope = symDeriv?.eval(x) ?: parsed.expr.derivative(x, step)
+                val slope = symDeriv?.eval(x, m) ?: parsed.expr.derivative(x, step, m)
                 TraceResult(fn.id, fn.label, fn.expression, fn.colorHex, x, y, slope)
             } else null
         }
@@ -835,8 +1031,33 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun renderExportBitmap(widthPx: Int, heightPx: Int, density: Float): Bitmap {
-        return Geo2DRenderer.renderToBitmap(widthPx, heightPx, density, _uiState.value, sanitizedFileName())
+    fun renderExportBitmap(
+        widthPx: Int,
+        heightPx: Int,
+        density: Float,
+        transparentBackground: Boolean = _uiState.value.exportTransparentBg
+    ): Bitmap {
+        return Geo2DRenderer.renderToBitmap(
+            widthPx = widthPx,
+            heightPx = heightPx,
+            density = density,
+            uiState = _uiState.value,
+            exportTitle = sanitizedFileName(),
+            transparentBackground = transparentBackground
+        )
+    }
+
+    fun exportSvgModel(
+        widthPx: Int = 1280,
+        heightPx: Int = 960,
+        transparentBackground: Boolean = _uiState.value.exportTransparentBg
+    ): String {
+        return com.example.engine.SvgExporter.export2DToSvg(
+            width = widthPx,
+            height = heightPx,
+            uiState = _uiState.value,
+            transparentBg = transparentBackground
+        )
     }
 
     private fun round2(v: Float): Float = round(v * 100f) / 100f
