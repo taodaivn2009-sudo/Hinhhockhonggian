@@ -110,6 +110,7 @@ fun GeometryCanvasView(
                                         zoomFactor = zoom,
                                         panX = pan.x,
                                         panY = pan.y,
+                                        viewportWidth = canvasSize.width.toFloat().coerceAtLeast(1f),
                                         viewportHeight = canvasSize.height.toFloat().coerceAtLeast(1f)
                                     )
                                 }

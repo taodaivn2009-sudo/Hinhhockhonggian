@@ -250,8 +250,8 @@ object MathExprParser {
             }
             is VarX -> "x"
             is UnaryNeg -> {
-                val innerStr = inner.toPrettyString(3)
-                "-${innerStr}"
+                val core = "-${inner.toPrettyString(3)}"
+                if (parentPrec >= 2) "($core)" else core
             }
             is Func -> {
                 if (name == "log" && base != null) {
@@ -306,7 +306,28 @@ object MathExprParser {
         "exp", "floor", "ceil", "round", "sign", "sgn"
     )
 
+    private data class CachedDerivative(val value: Pair<Expr, String>?)
+
+    private val parseCacheLock = Any()
+    private val parseCache = object : LinkedHashMap<String, ParseResult>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ParseResult>?): Boolean = size > 64
+    }
+    private val deriveCache = object : LinkedHashMap<String, CachedDerivative>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedDerivative>?): Boolean = size > 64
+    }
+
     fun parse(rawInput: String): ParseResult {
+        synchronized(parseCacheLock) {
+            parseCache[rawInput]?.let { return it }
+        }
+        val result = parseUncached(rawInput)
+        synchronized(parseCacheLock) {
+            parseCache[rawInput] = result
+        }
+        return result
+    }
+
+    private fun parseUncached(rawInput: String): ParseResult {
         val cleaned = preprocess(rawInput)
         if (cleaned.isBlank()) return ParseResult.Error("Vui lòng nhập biểu thức hàm số (VD: x^2 - 2x)")
 
@@ -331,9 +352,15 @@ object MathExprParser {
      * Compiles and returns a simplified symbolic derivative + readable formula for a raw function string.
      */
     fun derive(rawInput: String): Pair<Expr, String>? {
-        val parsed = parse(rawInput) as? ParseResult.Ok ?: return null
-        val d = parsed.expr.symbolicDerivative()?.simplify() ?: return null
-        return d to d.toPrettyString()
+        synchronized(parseCacheLock) {
+            deriveCache[rawInput]?.let { return it.value }
+        }
+        val parsed = parse(rawInput) as? ParseResult.Ok
+        val computed = parsed?.expr?.symbolicDerivative()?.simplify()?.let { d -> d to d.toPrettyString() }
+        synchronized(parseCacheLock) {
+            deriveCache[rawInput] = CachedDerivative(computed)
+        }
+        return computed
     }
 
     private fun preprocess(raw: String): String {
@@ -356,8 +383,9 @@ object MathExprParser {
             .replace("{", "(")
             .replace("}", ")")
 
-        // Support shorthand log_a(x) -> log(a; x)
-        s = Regex("log_([0-9.]+|e|pi)\\(").replace(s) { m -> "log(${m.groupValues[1]}; " }
+        // Support shorthand log_(expr)(x) -> log(expr; x) and log_a(x) -> log(a; x)
+        s = Regex("log_\\(([^()]+)\\)\\(").replace(s) { m -> "log(${m.groupValues[1]}; " }
+        s = Regex("log_([0-9.,]+|e|pi)\\(").replace(s) { m -> "log(${m.groupValues[1]}; " }
 
         // Convert |expr| into abs(expr)
         if (s.contains('|')) {
@@ -382,8 +410,28 @@ object MathExprParser {
         return s.trim()
     }
 
+    /**
+     * Checks if the parenthesized block starting at [openParenIdx] contains a top-level ';'.
+     */
+    private fun parenBlockHasSemicolon(s: String, openParenIdx: Int): Boolean {
+        var depth = 0
+        for (j in openParenIdx until s.length) {
+            when (s[j]) {
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth == 0) return false
+                }
+                ';' -> if (depth == 1) return true
+            }
+        }
+        return false
+    }
+
     private fun tokenize(s: String): List<Token>? {
         val out = mutableListOf<Token>()
+        // Tracks for each open '(' whether commas at this level should act as log(a, x) argument separators
+        val commaIsArgSepStack = ArrayDeque<Boolean>()
         var i = 0
         while (i < s.length) {
             val c = s[i]
@@ -393,28 +441,30 @@ object MathExprParser {
                     out.add(Token.ArgSep); i++
                 }
                 c == ',' -> {
-                    // Treat comma as argument separator inside log(a, x) or decimal separator otherwise
-                    val prevIsDigit = i > 0 && s[i - 1].isDigit()
-                    val nextIsDigit = i + 1 < s.length && s[i + 1].isDigit()
-                    val insideLog = out.any { it is Token.Ident && it.name == "log" }
-                    if (insideLog && !nextIsDigit) {
-                        out.add(Token.ArgSep); i++
-                    } else if (prevIsDigit && nextIsDigit && !insideLog) {
-                        // Replace decimal comma with dot by scanning back? Already handled if we parse digits with ','
-                        return null
-                    } else {
-                        out.add(Token.ArgSep); i++
-                    }
+                    out.add(Token.ArgSep); i++
                 }
                 c.isDigit() || c == '.' -> {
                     val start = i
                     var dotSeen = false
-                    while (i < s.length && (s[i].isDigit() || (s[i] == '.' && !dotSeen))) {
-                        if (s[i] == '.') dotSeen = true
-                        i++
+                    val commaIsArgSep = commaIsArgSepStack.lastOrNull() == true
+                    val numBuf = StringBuilder()
+                    while (i < s.length) {
+                        val ch = s[i]
+                        when {
+                            ch.isDigit() -> {
+                                numBuf.append(ch); i++
+                            }
+                            ch == '.' && !dotSeen -> {
+                                dotSeen = true; numBuf.append('.'); i++
+                            }
+                            ch == ',' && !dotSeen && !commaIsArgSep && i > start && i + 1 < s.length && s[i + 1].isDigit() -> {
+                                // Vietnamese decimal comma (e.g. 0,5x^2 or log(0,5; x))
+                                dotSeen = true; numBuf.append('.'); i++
+                            }
+                            else -> break
+                        }
                     }
-                    val numStr = s.substring(start, i)
-                    val value = numStr.toDoubleOrNull() ?: return null
+                    val value = numBuf.toString().toDoubleOrNull() ?: return null
                     out.add(Token.Num(value))
                 }
                 c.isLetter() -> {
@@ -458,9 +508,12 @@ object MathExprParser {
                     }
                 }
                 c == '(' -> {
+                    val isLogWithoutSemi = (out.lastOrNull() as? Token.Ident)?.name == "log" && !parenBlockHasSemicolon(s, i)
+                    commaIsArgSepStack.addLast(isLogWithoutSemi)
                     out.add(Token.LParen); i++
                 }
                 c == ')' -> {
+                    if (commaIsArgSepStack.isNotEmpty()) commaIsArgSepStack.removeLast()
                     out.add(Token.RParen); i++
                 }
                 c in setOf('+', '-', '*', '/', '^') -> {
@@ -609,13 +662,14 @@ object MathExprParser {
         xMax: Double,
         yMin: Double,
         yMax: Double,
-        funcColorHex: String
+        funcColorHex: String,
+        precomputedDeriv: Expr? = null
     ): List<GraphKeyPoint> {
         val points = mutableListOf<GraphKeyPoint>()
         val ySpan = max(1e-6, yMax - yMin)
         val xSpan = max(1e-6, xMax - xMin)
         val dStep = xSpan * 1e-5
-        val symDeriv = expr.symbolicDerivative()?.simplify()
+        val symDeriv = precomputedDeriv ?: expr.symbolicDerivative()?.simplify()
 
         fun evalDeriv(x: Double): Double = symDeriv?.eval(x) ?: expr.derivative(x, dStep)
 

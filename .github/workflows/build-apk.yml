@@ -103,47 +103,59 @@ jobs:
         with:
           gradle-version: "9.3.1"
 
-      - name: Create temporary debug keystore
+      - name: Restore persistent debug keystore
+        id: keystore
         shell: bash
+        env:
+          SECRET_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
           set -euo pipefail
           KEYSTORE_PATH="./debug.keystore"
-          if [ -f "${KEYSTORE_PATH}" ]; then
-            echo "Debug keystore already exists at ${KEYSTORE_PATH}; skipping generation."
-          else
-            KEYTOOL_BIN="${JAVA_HOME}/bin/keytool"
-            if [ ! -x "${KEYTOOL_BIN}" ]; then
-              echo "::error::keytool was not found at ${KEYTOOL_BIN}."
-              exit 1
-            fi
+          KEYSTORE_B64_FILE="./debug.keystore.base64"
+          KEYTOOL_BIN="${JAVA_HOME}/bin/keytool"
 
-            "${KEYTOOL_BIN}" -genkeypair -v \
-              -keystore "${KEYSTORE_PATH}" \
-              -storetype PKCS12 \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -dname "CN=Android Debug,O=Android,C=US" \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 >/dev/null 2>&1 || {
-                echo "::error::Failed to create temporary debug keystore at ${KEYSTORE_PATH}."
-                exit 1
-              }
+          if [ ! -x "${KEYTOOL_BIN}" ]; then
+            echo "::error::keytool was not found at ${KEYTOOL_BIN}."
+            exit 1
+          fi
+
+          if [ -f "${KEYSTORE_PATH}" ] && [ -s "${KEYSTORE_PATH}" ]; then
+            echo "Using existing persistent keystore at ${KEYSTORE_PATH}."
+          elif [ -f "${KEYSTORE_B64_FILE}" ] && [ -s "${KEYSTORE_B64_FILE}" ]; then
+            echo "Restoring persistent signing keystore from ${KEYSTORE_B64_FILE}..."
+            tr -d '\r\n ' < "${KEYSTORE_B64_FILE}" | base64 -d > "${KEYSTORE_PATH}"
+          elif [ -n "${SECRET_KEYSTORE_B64}" ]; then
+            echo "Restoring persistent signing keystore from DEBUG_KEYSTORE_BASE64 secret..."
+            printf '%s' "${SECRET_KEYSTORE_B64}" | tr -d '\r\n ' | base64 -d > "${KEYSTORE_PATH}"
+          else
+            echo "::error::Persistent keystore (${KEYSTORE_B64_FILE}) not found! Generating a new random keystore would break in-place APK updates."
+            exit 1
           fi
 
           if [ ! -f "${KEYSTORE_PATH}" ] || [ ! -s "${KEYSTORE_PATH}" ]; then
-            echo "::error::Temporary debug keystore is missing or empty at ${KEYSTORE_PATH}."
+            echo "::error::Restored keystore is missing or empty at ${KEYSTORE_PATH}."
             exit 1
           fi
-          echo "Temporary debug keystore is ready."
+
+          CERT_INFO="$("${KEYTOOL_BIN}" -list -v -keystore "${KEYSTORE_PATH}" -storepass android -alias androiddebugkey 2>&1)" || {
+            echo "::error::Invalid keystore or missing alias 'androiddebugkey' at ${KEYSTORE_PATH}."
+            echo "${CERT_INFO}"
+            exit 1
+          }
+          SHA256_FP="$(printf '%s\n' "${CERT_INFO}" | sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | head -n 1)"
+          echo "Persistent signing keystore verified (SHA256: ${SHA256_FP:-unknown})."
+          echo "sha256=${SHA256_FP:-unknown}" >> "${GITHUB_OUTPUT}"
 
       - name: Build debug APK
         shell: bash
         env:
           APP_VERSION_CODE: ${{ steps.app_version.outputs.version_num }}
           APP_VERSION_NAME: ${{ steps.app_version.outputs.version_tag }}
-        run: gradle :app:assembleDebug --stacktrace --no-daemon
+        run: >
+          gradle :app:assembleDebug
+          -PappVersionCode="${APP_VERSION_CODE}"
+          -PappVersionName="${APP_VERSION_NAME}"
+          --stacktrace --no-daemon
 
       - name: Verify debug APK
         shell: bash
@@ -229,6 +241,7 @@ jobs:
           VERSION_NUM: ${{ steps.app_version.outputs.version_num }}
           VERSION_TAG: ${{ steps.app_version.outputs.version_tag }}
           RELEASE_TITLE: ${{ steps.app_version.outputs.release_title }}
+          SIGNING_SHA256: ${{ steps.keystore.outputs.sha256 }}
         run: |
           set -euo pipefail
 
@@ -280,6 +293,7 @@ jobs:
           RELEASE_NOTES+="### Thông tin bản dựng"$'\n'
           RELEASE_NOTES+="- **Phiên bản ứng dụng:** \`${VERSION_TAG}\` (versionCode: \`${VERSION_NUM}\`)"$'\n'
           RELEASE_NOTES+="- **File APK:** \`${ASSET_NAME}\`"$'\n'
+          RELEASE_NOTES+="- **Chữ ký cố định (cập nhật đè không cần gỡ app):** \`${SIGNING_SHA256}\`"$'\n'
           RELEASE_NOTES+="- **Workflow Run:** #${GITHUB_RUN_NUMBER}"$'\n'
           RELEASE_NOTES+="- **Commit SHA:** \`${GITHUB_SHA}\`"$'\n'
 

@@ -29,6 +29,8 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
     private val redoStack = ArrayDeque<Geo2DSnapshot>()
     private val maxHistory = 40
     private var toastJob: Job? = null
+    private var autoSaveJob: Job? = null
+    private var dragHistoryRecorded = false
     private var idSeq = 100
 
     private val palette = listOf(
@@ -89,6 +91,14 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         redoStack.clear()
     }
 
+    private fun scheduleDebouncedAutoSave(snapshot: Geo2DSnapshot) {
+        autoSaveJob?.cancel()
+        autoSaveJob = viewModelScope.launch {
+            delay(350)
+            persistence.saveAutoSession(snapshot)
+        }
+    }
+
     private fun updateSnapshot(
         recordHistory: Boolean = false,
         autoSave: Boolean = true,
@@ -98,13 +108,22 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         if (recordHistory) pushHistory(current)
         val next = transform(current)
         _uiState.update { st ->
+            val updatedTrace = if (st.traceX != null && next.functions !== current.functions) {
+                evaluateTrace(next, st.traceX)
+            } else {
+                st.traceResults
+            }
             st.copy(
                 snapshot = next,
+                traceResults = updatedTrace,
                 canUndo = undoStack.isNotEmpty(),
                 canRedo = redoStack.isNotEmpty()
             )
         }
-        if (autoSave) persistence.saveAutoSession(next)
+        if (autoSave) {
+            autoSaveJob?.cancel()
+            persistence.saveAutoSession(next)
+        }
     }
 
     fun undo() {
@@ -202,6 +221,10 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun commitCameraGesture() {
+        scheduleDebouncedAutoSave(_uiState.value.snapshot)
+    }
+
     fun stepZoom(zoomIn: Boolean) {
         val sens = _uiState.value.snapshot.sensitivity.zoom.toDouble()
         val factor = if (zoomIn) (1.0 + 0.45 * sens) else (1.0 / (1.0 + 0.45 * sens))
@@ -230,7 +253,7 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         zoom: Float = _uiState.value.snapshot.sensitivity.zoom,
         touchRadius: Float = _uiState.value.snapshot.sensitivity.touchRadius
     ) {
-        updateSnapshot(recordHistory = false, autoSave = true) { s ->
+        updateSnapshot(recordHistory = false, autoSave = false) { s ->
             s.copy(
                 sensitivity = Geo2DSensitivity(
                     pan = pan.coerceIn(0.4f, 2.2f),
@@ -239,6 +262,7 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
                 )
             )
         }
+        scheduleDebouncedAutoSave(_uiState.value.snapshot)
     }
 
     // ================= CANVAS GESTURES & INTERACTIVE DRAWING =================
@@ -427,8 +451,8 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         if (st.activeTool == Geo2DTool.PAN_SELECT) {
             val hit = findPointAtScreen(sx, sy, width, height, density)
             if (hit != null) {
-                pushHistory()
-                _uiState.update { it.copy(draggingPointId = hit.id, canUndo = undoStack.isNotEmpty(), canRedo = false) }
+                dragHistoryRecorded = false
+                _uiState.update { it.copy(draggingPointId = hit.id) }
                 return true
             }
         }
@@ -444,6 +468,12 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         val dragId = st.draggingPointId ?: return
         val rawWorld = Geo2DRenderer.screenToWorld(sx, sy, st.snapshot.camera, width, height)
         val snapped = snapCoord(rawWorld, density)
+        val existing = st.snapshot.points.firstOrNull { it.id == dragId } ?: return
+        if (existing.x == snapped.x && existing.y == snapped.y) return
+        if (!dragHistoryRecorded) {
+            pushHistory(st.snapshot)
+            dragHistoryRecorded = true
+        }
         updateSnapshot(recordHistory = false, autoSave = false) { s ->
             s.copy(
                 points = s.points.map { p ->
@@ -455,8 +485,10 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onDragEnd() {
         if (_uiState.value.draggingPointId != null) {
+            val didMove = dragHistoryRecorded
+            dragHistoryRecorded = false
             _uiState.update { it.copy(draggingPointId = null) }
-            persistence.saveAutoSession(_uiState.value.snapshot)
+            if (didMove) persistence.saveAutoSession(_uiState.value.snapshot)
         }
     }
 
@@ -475,7 +507,7 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
             val parsed = MathExprParser.parse(fn.expression)
             if (parsed is MathExprParser.ParseResult.Ok) {
                 val y = parsed.expr.eval(x)
-                val symDeriv = parsed.expr.symbolicDerivative()?.simplify()
+                val symDeriv = MathExprParser.derive(fn.expression)?.first
                 val slope = symDeriv?.eval(x) ?: parsed.expr.derivative(x, step)
                 TraceResult(fn.id, fn.label, fn.expression, fn.colorHex, x, y, slope)
             } else null
@@ -483,6 +515,13 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ================= FUNCTIONS MANAGEMENT (ARBITRARY f(x)) =================
+    private fun nextFunctionNumber(existing: List<GraphFunction>): Int {
+        val usedLabels = existing.map { it.label }.toSet()
+        var n = 1
+        while ("f$n(x)" in usedLabels) n++
+        return n
+    }
+
     fun addFunction(expression: String, colorHex: String? = null) {
         val trimmed = expression.trim()
         if (trimmed.isEmpty()) {
@@ -495,7 +534,7 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val existing = _uiState.value.snapshot.functions
-        val nextNum = existing.size + 1
+        val nextNum = nextFunctionNumber(existing)
         val color = colorHex ?: palette[(nextNum - 1) % palette.size]
         val fn = GraphFunction(
             id = nextId("fn"),
@@ -509,11 +548,12 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateFunctionExpression(id: String, newExpr: String) {
-        updateSnapshot(recordHistory = false) { s ->
+        updateSnapshot(recordHistory = false, autoSave = false) { s ->
             s.copy(
                 functions = s.functions.map { if (it.id == id) it.copy(expression = newExpr) else it }
             )
         }
+        scheduleDebouncedAutoSave(_uiState.value.snapshot)
     }
 
     fun toggleFunctionVisibility(id: String) {

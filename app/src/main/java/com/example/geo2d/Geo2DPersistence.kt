@@ -152,39 +152,73 @@ class Geo2DPersistence(context: Context) {
             val objects = mutableListOf<Geo2DObject>()
             o.optJSONArray("objects")?.let { arr ->
                 for (i in 0 until arr.length()) {
-                    val item = arr.getJSONObject(i)
+                    val item = arr.optJSONObject(i) ?: continue
                     val id = item.optString("id", "obj_$i")
                     val color = item.optString("color", "#F8FAFC")
                     when (item.optString("kind")) {
-                        "segment" -> objects.add(
-                            Geo2DObject.Segment(id, item.getString("p1Id"), item.getString("p2Id"), item.optBoolean("dashed", false), color)
-                        )
-                        "line" -> objects.add(
-                            Geo2DObject.Line(id, item.getString("p1Id"), item.getString("p2Id"), item.optBoolean("dashed", false), color)
-                        )
-                        "ray" -> objects.add(
-                            Geo2DObject.Ray(id, item.getString("startId"), item.getString("throughId"), color)
-                        )
-                        "vector" -> objects.add(
-                            Geo2DObject.VectorObj(id, item.getString("fromId"), item.getString("toId"), color)
-                        )
-                        "circle" -> objects.add(
-                            Geo2DObject.Circle(
-                                id = id,
-                                centerId = item.getString("centerId"),
-                                edgePointId = if (item.has("edgePointId")) item.optString("edgePointId") else null,
-                                fixedRadius = if (item.has("fixedRadius")) item.optDouble("fixedRadius", 2.0).toFloat() else null,
-                                colorHex = color
-                            )
-                        )
+                        "segment" -> {
+                            val p1 = item.optString("p1Id")
+                            val p2 = item.optString("p2Id")
+                            if (p1.isNotEmpty() && p2.isNotEmpty()) {
+                                objects.add(Geo2DObject.Segment(id, p1, p2, item.optBoolean("dashed", false), color))
+                            }
+                        }
+                        "line" -> {
+                            val p1 = item.optString("p1Id")
+                            val p2 = item.optString("p2Id")
+                            if (p1.isNotEmpty() && p2.isNotEmpty()) {
+                                objects.add(Geo2DObject.Line(id, p1, p2, item.optBoolean("dashed", false), color))
+                            }
+                        }
+                        "ray" -> {
+                            val sId = item.optString("startId")
+                            val tId = item.optString("throughId")
+                            if (sId.isNotEmpty() && tId.isNotEmpty()) {
+                                objects.add(Geo2DObject.Ray(id, sId, tId, color))
+                            }
+                        }
+                        "vector" -> {
+                            val fId = item.optString("fromId")
+                            val tId = item.optString("toId")
+                            if (fId.isNotEmpty() && tId.isNotEmpty()) {
+                                objects.add(Geo2DObject.VectorObj(id, fId, tId, color))
+                            }
+                        }
+                        "circle" -> {
+                            val centerId = item.optString("centerId")
+                            if (centerId.isNotEmpty()) {
+                                val edgePointId = if (!item.isNull("edgePointId")) {
+                                    item.optString("edgePointId").takeIf { it.isNotEmpty() }
+                                } else null
+                                val fixedRadius = if (!item.isNull("fixedRadius")) {
+                                    item.optDouble("fixedRadius", Double.NaN).takeIf { it.isFinite() && it > 0.0 }?.toFloat()
+                                } else null
+                                objects.add(
+                                    Geo2DObject.Circle(
+                                        id = id,
+                                        centerId = centerId,
+                                        edgePointId = edgePointId,
+                                        fixedRadius = fixedRadius,
+                                        colorHex = color
+                                    )
+                                )
+                            }
+                        }
                         "polygon" -> {
                             val idsArr = item.optJSONArray("pointIds") ?: JSONArray()
-                            val ids = (0 until idsArr.length()).map { idsArr.getString(it) }
+                            val ids = (0 until idsArr.length()).mapNotNull { idx ->
+                                idsArr.optString(idx).takeIf { it.isNotEmpty() }
+                            }
                             if (ids.size >= 3) objects.add(Geo2DObject.Polygon(id, ids, color))
                         }
-                        "angle" -> objects.add(
-                            Geo2DObject.AngleMeasure(id, item.getString("pAId"), item.getString("vertexId"), item.getString("pCId"), color)
-                        )
+                        "angle" -> {
+                            val pA = item.optString("pAId")
+                            val pV = item.optString("vertexId")
+                            val pC = item.optString("pCId")
+                            if (pA.isNotEmpty() && pV.isNotEmpty() && pC.isNotEmpty()) {
+                                objects.add(Geo2DObject.AngleMeasure(id, pA, pV, pC, color))
+                            }
+                        }
                     }
                 }
             }

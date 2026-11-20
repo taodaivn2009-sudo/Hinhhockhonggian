@@ -337,6 +337,7 @@ private fun Geo2DCanvasViewport(
                     val h = sizePx.height.toFloat().coerceAtLeast(1f)
                     var moved = false
                     var multiTouch = false
+                    var cameraMoved = false
                     var draggingEntity = viewModel.onDragStart(downPos.x, downPos.y, w, h, density)
 
                     while (true) {
@@ -355,9 +356,11 @@ private fun Geo2DCanvasViewport(
                             val centroid = event.calculateCentroid(useCurrent = true)
                             if (abs(zoom - 1f) > 0.002f && centroid != Offset.Unspecified) {
                                 viewModel.zoomCamera(zoom, centroid.x, centroid.y, w, h)
+                                cameraMoved = true
                             }
                             if (pan != Offset.Zero) {
                                 viewModel.panCamera(pan.x, pan.y)
+                                cameraMoved = true
                             }
                             event.changes.forEach { if (it.positionChanged()) it.consume() }
                         } else {
@@ -371,6 +374,7 @@ private fun Geo2DCanvasViewport(
                                 if (change.positionChanged()) change.consume()
                             } else if (!multiTouch && delta != Offset.Zero && latestState.activeTool == Geo2DTool.PAN_SELECT) {
                                 viewModel.panCamera(delta.x, delta.y)
+                                cameraMoved = true
                                 if (change.positionChanged()) change.consume()
                             }
                         }
@@ -378,6 +382,9 @@ private fun Geo2DCanvasViewport(
 
                     if (draggingEntity) {
                         viewModel.onDragEnd()
+                    }
+                    if (cameraMoved) {
+                        viewModel.commitCameraGesture()
                     }
                     if (!moved && !multiTouch) {
                         viewModel.onCanvasTap(downPos.x, downPos.y, w, h, density)

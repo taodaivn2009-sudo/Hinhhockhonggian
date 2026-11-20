@@ -206,4 +206,41 @@ class ExampleRobolectricTest {
         val built = ShapeBuilder.build(shiftedPyramid)
         assertEquals(6.0f, built.metrics.realH, 0.02f)
     }
+
+    @Test
+    fun `parser handles vietnamese decimal commas log shorthand precedence and safe json nulls`() {
+        // 1. Vietnamese decimal comma syntax
+        val decPoly = MathExprParser.parse("0,5x^2 + 1,5x - 2,25") as MathExprParser.ParseResult.Ok
+        assertEquals(0.5 * 4.0 + 1.5 * 2.0 - 2.25, decPoly.expr.eval(2.0), 1e-6)
+
+        // 2. Arbitrary-base log with decimal comma, comma separator, and log_(expr)(x)
+        val logDec = MathExprParser.parse("log(0,5; x)") as MathExprParser.ParseResult.Ok
+        assertEquals(-3.0, logDec.expr.eval(8.0), 1e-6)
+
+        val logCommaSep = MathExprParser.parse("log(2, 8)") as MathExprParser.ParseResult.Ok
+        assertEquals(3.0, logCommaSep.expr.eval(0.0), 1e-6)
+
+        val logFracBase = MathExprParser.parse("log_(1/2)(x)") as MathExprParser.ParseResult.Ok
+        assertEquals(-2.0, logFracBase.expr.eval(4.0), 1e-6)
+
+        // 3. UnaryNeg precedence inside power pretty-printing: (-x)^2 must keep parentheses
+        val negSquare = MathExprParser.Expr.Binary('^', MathExprParser.Expr.UnaryNeg(MathExprParser.Expr.VarX), MathExprParser.Expr.Num(2.0))
+        assertEquals("(-x)^2", negSquare.toPrettyString())
+
+        // 4. Geo2DPersistence safely handles explicit JSON null fields without turning them into "null"
+        val jsonWithNulls = """
+            {
+              "points": [{"id":"p1","name":"A","x":0,"y":0}],
+              "objects": [
+                {"id":"c1","kind":"circle","centerId":"p1","edgePointId":null,"fixedRadius":2.5},
+                {"id":"bad","kind":"segment","p1Id":"","p2Id":"p1"}
+              ]
+            }
+        """.trimIndent()
+        val parsedSnap = Geo2DPersistence.jsonToSnapshot(jsonWithNulls)
+        assertEquals(1, parsedSnap.objects.size)
+        val circle = parsedSnap.objects.first() as Geo2DObject.Circle
+        assertEquals(null, circle.edgePointId)
+        assertEquals(2.5f, circle.fixedRadius!!, 1e-4f)
+    }
 }

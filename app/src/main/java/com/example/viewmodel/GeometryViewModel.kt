@@ -31,6 +31,8 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
     private val redoStack = ArrayDeque<GeometrySnapshot>()
     private val maxHistory = 40
     private var toastJob: Job? = null
+    private var autoSaveJob: Job? = null
+    private var dragHistoryRecorded = false
 
     private data class ActiveDrag(
         val name: String,
@@ -92,6 +94,14 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         redoStack.clear()
     }
 
+    private fun scheduleDebouncedAutoSave(snapshot: GeometrySnapshot) {
+        autoSaveJob?.cancel()
+        autoSaveJob = viewModelScope.launch {
+            delay(300)
+            persistence.saveAutoSession(snapshot)
+        }
+    }
+
     private fun updateSnapshot(
         recordHistory: Boolean = false,
         autoSave: Boolean = true,
@@ -101,11 +111,13 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         if (recordHistory) pushHistory(current)
         var next = transform(current)
         val built = ShapeBuilder.build(next)
-        if (!built.pointRegistry.containsKey(next.originPoint)) {
+        val finalScene = if (!built.pointRegistry.containsKey(next.originPoint)) {
             val fallback = built.pointRegistry.keys.firstOrNull() ?: "O"
             next = next.copy(originPoint = fallback)
+            ShapeBuilder.build(next)
+        } else {
+            built
         }
-        val finalScene = ShapeBuilder.build(next)
         val keys = finalScene.pointRegistry.keys.toList()
 
         _uiState.update { st ->
@@ -118,7 +130,23 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
                 calcPointB = if (st.calcPointB in finalScene.pointRegistry) st.calcPointB else keys.getOrElse(1) { keys.firstOrNull() ?: "A" }
             )
         }
-        if (autoSave) persistence.saveAutoSession(next)
+        if (autoSave) {
+            autoSaveJob?.cancel()
+            persistence.saveAutoSession(next)
+        }
+    }
+
+    /** Updates display/camera/sensitivity flags without rebuilding the 3D geometry mesh. */
+    private fun updateViewSnapshot(
+        autoSave: Boolean = true,
+        transform: (GeometrySnapshot) -> GeometrySnapshot
+    ) {
+        val next = transform(_uiState.value.snapshot)
+        _uiState.update { it.copy(snapshot = next) }
+        if (autoSave) {
+            autoSaveJob?.cancel()
+            persistence.saveAutoSession(next)
+        }
     }
 
     fun undo() {
@@ -197,17 +225,16 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         drag: Float? = null,
         touchRadius: Float? = null
     ) {
-        updateSnapshot(autoSave = false) { snap ->
-            val cur = snap.sensitivity
-            snap.copy(
-                sensitivity = cur.copy(
-                    rotation = (rotation ?: cur.rotation).coerceIn(0.2f, 2.5f),
-                    zoom = (zoom ?: cur.zoom).coerceIn(0.3f, 2.5f),
-                    drag = (drag ?: cur.drag).coerceIn(0.2f, 2.0f),
-                    touchRadius = (touchRadius ?: cur.touchRadius).coerceIn(0.6f, 1.8f)
-                )
-            )
-        }
+        val cur = _uiState.value.snapshot.sensitivity
+        val nextSens = cur.copy(
+            rotation = (rotation ?: cur.rotation).coerceIn(0.2f, 2.5f),
+            zoom = (zoom ?: cur.zoom).coerceIn(0.3f, 2.5f),
+            drag = (drag ?: cur.drag).coerceIn(0.2f, 2.0f),
+            touchRadius = (touchRadius ?: cur.touchRadius).coerceIn(0.6f, 1.8f)
+        )
+        val nextSnap = _uiState.value.snapshot.copy(sensitivity = nextSens)
+        _uiState.update { it.copy(snapshot = nextSnap) }
+        scheduleDebouncedAutoSave(nextSnap)
     }
 
     fun applySensitivityPreset(preset: String) {
@@ -216,7 +243,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
             "fast" -> SensitivityConfig(rotation = 1.7f, zoom = 1.5f, drag = 1.35f, touchRadius = 1.1f)
             else -> SensitivityConfig(rotation = 1.0f, zoom = 1.0f, drag = 1.0f, touchRadius = 1.0f)
         }
-        updateSnapshot { it.copy(sensitivity = next) }
+        updateViewSnapshot { it.copy(sensitivity = next) }
         val label = when (preset) {
             "precise" -> "Chính xác (Chậm & êm)"
             "fast" -> "Nhanh & linh hoạt"
@@ -268,18 +295,18 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun toggleKeepRelations() {
-        updateSnapshot { it.copy(keepRelations = !it.keepRelations) }
+        updateViewSnapshot { it.copy(keepRelations = !it.keepRelations) }
     }
 
     fun toggleSnapEnabled() {
-        updateSnapshot { it.copy(snapEnabled = !it.snapEnabled) }
+        updateViewSnapshot { it.copy(snapEnabled = !it.snapEnabled) }
         if (!_uiState.value.snapshot.snapEnabled) {
             _uiState.update { it.copy(snapVisual = SnapVisualState()) }
         }
     }
 
     fun toggleAxes() {
-        updateSnapshot { it.copy(showAxes = !it.showAxes) }
+        updateViewSnapshot { it.copy(showAxes = !it.showAxes) }
     }
 
     fun changeOrigin(pointName: String) {
@@ -289,7 +316,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setShowCoordsOnLabels(show: Boolean) {
-        updateSnapshot { it.copy(showCoordsOnLabels = show) }
+        updateViewSnapshot { it.copy(showCoordsOnLabels = show) }
     }
 
     fun setCalcPoints(pointA: String, pointB: String) {
@@ -360,10 +387,10 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         persistence.saveAutoSession(_uiState.value.snapshot)
     }
 
-    fun toggleGrid(v: Boolean) = updateSnapshot { it.copy(showGrid = v) }
-    fun toggleDashed(v: Boolean) = updateSnapshot { it.copy(dashed = v) }
-    fun toggleLabels(v: Boolean) = updateSnapshot { it.copy(labels = v) }
-    fun toggleAltitude(v: Boolean) = updateSnapshot { it.copy(altitude = v) }
+    fun toggleGrid(v: Boolean) = updateViewSnapshot { it.copy(showGrid = v) }
+    fun toggleDashed(v: Boolean) = updateViewSnapshot { it.copy(dashed = v) }
+    fun toggleLabels(v: Boolean) = updateViewSnapshot { it.copy(labels = v) }
+    fun toggleAltitude(v: Boolean) = updateViewSnapshot { it.copy(altitude = v) }
     fun toggleFaces(v: Boolean) = updateSnapshot { it.copy(faces = v) }
     fun toggleSection(v: Boolean) = updateSnapshot { it.copy(showSection = v) }
     fun toggleAutoRotate(v: Boolean) { _uiState.update { it.copy(autoRotate = v) } }
@@ -375,25 +402,39 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
     }
 
     // ================= CAMERA CONTROLS =================
+    private fun wrapTheta(theta: Float): Float {
+        val twoPi = (2.0 * PI).toFloat()
+        var t = theta % twoPi
+        if (t > PI.toFloat()) t -= twoPi
+        if (t < -PI.toFloat()) t += twoPi
+        return t
+    }
+
     fun orbitCamera(deltaX: Float, deltaY: Float) {
         _uiState.update { st ->
             val cam = st.snapshot.camera
             val sens = st.snapshot.sensitivity.rotation
             val nextCam = cam.copy(
-                theta = cam.theta - deltaX * 0.0085f * sens,
+                theta = wrapTheta(cam.theta - deltaX * 0.0085f * sens),
                 phi = (cam.phi - deltaY * 0.0085f * sens).coerceIn(0.12f, PI.toFloat() - 0.12f)
             )
             st.copy(snapshot = st.snapshot.copy(camera = nextCam))
         }
     }
 
-    fun zoomAndPanCamera(zoomFactor: Float, panX: Float, panY: Float, viewportHeight: Float) {
+    fun zoomAndPanCamera(
+        zoomFactor: Float,
+        panX: Float,
+        panY: Float,
+        viewportWidth: Float,
+        viewportHeight: Float
+    ) {
         _uiState.update { st ->
             val cam = st.snapshot.camera
             val zoomSens = st.snapshot.sensitivity.zoom
             val scaledZoom = (1f + (zoomFactor - 1f) * zoomSens).coerceIn(0.55f, 1.85f)
             val nextRadius = (cam.radius / scaledZoom).coerceIn(3.5f, 28f)
-            val proj = CameraProjection(cam.cameraPosition(), cam.target, viewportHeight, viewportHeight)
+            val proj = CameraProjection(cam.cameraPosition(), cam.target, viewportWidth, viewportHeight)
             val panScale = nextRadius * 0.0014f * zoomSens
             val nextTarget = cam.target - proj.right * (panX * panScale) + proj.up * (panY * panScale)
             val nextCam = cam.copy(radius = nextRadius, target = nextTarget)
@@ -402,11 +443,12 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun stepZoom(zoomIn: Boolean) {
-        updateSnapshot { snap ->
-            val factor = if (zoomIn) (1f + 0.18f * snap.sensitivity.zoom) else 1f / (1f + 0.18f * snap.sensitivity.zoom)
-            val nextRadius = (snap.camera.radius / factor).coerceIn(3.5f, 28f)
-            snap.copy(camera = snap.camera.copy(radius = nextRadius))
-        }
+        val snap = _uiState.value.snapshot
+        val factor = if (zoomIn) (1f + 0.18f * snap.sensitivity.zoom) else 1f / (1f + 0.18f * snap.sensitivity.zoom)
+        val nextRadius = (snap.camera.radius / factor).coerceIn(3.5f, 28f)
+        val nextSnap = snap.copy(camera = snap.camera.copy(radius = nextRadius))
+        _uiState.update { it.copy(snapshot = nextSnap) }
+        scheduleDebouncedAutoSave(nextSnap)
     }
 
     fun tickAutoRotate(deltaSec: Float) {
@@ -414,16 +456,16 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { st ->
             val cam = st.snapshot.camera
             val rotSens = st.snapshot.sensitivity.rotation
-            st.copy(snapshot = st.snapshot.copy(camera = cam.copy(theta = cam.theta + deltaSec * 0.55f * rotSens)))
+            st.copy(snapshot = st.snapshot.copy(camera = cam.copy(theta = wrapTheta(cam.theta + deltaSec * 0.55f * rotSens))))
         }
     }
 
     fun commitCameraGesture() {
-        persistence.saveAutoSession(_uiState.value.snapshot)
+        scheduleDebouncedAutoSave(_uiState.value.snapshot)
     }
 
     fun resetCamera() {
-        updateSnapshot { it.copy(camera = CameraOrbitState.DEFAULT) }
+        updateViewSnapshot { it.copy(camera = CameraOrbitState.DEFAULT) }
     }
 
     // ================= CUSTOM ELEMENTS (DRAW & COORDS) =================
@@ -704,7 +746,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         val targetName = findNearestVertex2D(sx, sy, proj, hitThreshold) ?: return false
         val startPos = st.scene.pointRegistry[targetName] ?: return false
 
-        pushHistory()
+        dragHistoryRecorded = false
         val type = when {
             st.snapshot.customPoints.any { it.name == targetName } -> DragPointType.EDGE
             st.snapshot.customXYZPoints.any { it.name == targetName } -> DragPointType.XYZ
@@ -758,6 +800,11 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
             val hit = projectOntoSegment(effX, effY, rail, proj, snap.snapEnabled) ?: return
             var relMsg = ""
             var linked = emptySet<String>()
+
+            if (!dragHistoryRecorded) {
+                pushHistory(snap)
+                dragHistoryRecorded = true
+            }
 
             when (drag.type) {
                 DragPointType.EDGE -> {
@@ -850,6 +897,11 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         var relMsg = ""
         var linked = emptySet<String>()
 
+        if (!dragHistoryRecorded) {
+            pushHistory(snap)
+            dragHistoryRecorded = true
+        }
+
         if (drag.type == DragPointType.XYZ) {
             val mFinal = ShapeBuilder.worldToMath(finalPos, origin)
             updateSnapshot(autoSave = false) { s ->
@@ -886,7 +938,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         val st = _uiState.value
         if (st.interactionMode == InteractionMode.ADD_POINT) {
             val proj = makeProjection(width, height)
-            val hit = findNearestEdgeHit2D(sx, sy, proj, 48f * density)
+            val hit = findNearestEdgeHit2D(sx, sy, proj, 48f * density * st.snapshot.sensitivity.touchRadius)
             if (hit != null) {
                 val nextName = ShapeBuilder.nextAutoPointName(st.scene.pointRegistry)
                 addCustomEdgePoint(nextName, hit.from, hit.to, hit.ratio)
@@ -895,6 +947,8 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
             return
         }
         if (activeDrag != null) {
+            val didMove = dragHistoryRecorded
+            dragHistoryRecorded = false
             activeDrag = null
             _uiState.update {
                 it.copy(
@@ -905,7 +959,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
                     tooltip = null
                 )
             }
-            persistence.saveAutoSession(_uiState.value.snapshot)
+            if (didMove) persistence.saveAutoSession(_uiState.value.snapshot)
         }
     }
 

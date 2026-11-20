@@ -16,8 +16,16 @@ android {
     applicationId = "com.aistudio.hinhhoc3d.vkmqzp"
     minSdk = 24
     targetSdk = 36
-    versionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull()?.coerceAtLeast(1) ?: 1
-    versionName = System.getenv("APP_VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "v1"
+    val resolvedVersionCode = providers.gradleProperty("appVersionCode")
+      .orElse(providers.environmentVariable("APP_VERSION_CODE"))
+      .map { it.toIntOrNull()?.coerceAtLeast(1) ?: 1 }
+      .getOrElse(1)
+    val resolvedVersionName = providers.gradleProperty("appVersionName")
+      .orElse(providers.environmentVariable("APP_VERSION_NAME"))
+      .map { it.ifBlank { "v1" } }
+      .getOrElse("v1")
+    versionCode = resolvedVersionCode
+    versionName = resolvedVersionName
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

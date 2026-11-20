@@ -9,6 +9,114 @@ import kotlin.math.*
  */
 object Geo2DRenderer {
 
+    private class RenderScratch {
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        var cachedBgW = -1f
+        var cachedBgH = -1f
+
+        var cachedDensity = -1f
+        var dash75: DashPathEffect? = null
+        var dash96: DashPathEffect? = null
+        var dash65: DashPathEffect? = null
+        var dash54: DashPathEffect? = null
+
+        val serifBoldItalic: Typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)
+        val defaultBold: Typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+
+        val minorGridPaint = Paint()
+        val majorGridPaint = Paint()
+        val axisPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val axisLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = serifBoldItalic }
+        val tickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.MONOSPACE }
+
+        val curveGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        val curveStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        val curvePath = Path()
+
+        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+        val dashedStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+
+        val keyPtTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.MONOSPACE
+            color = 0xFFE2E8F0.toInt()
+        }
+        val keyPtBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC0F172A.toInt() }
+
+        val pointRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = Color.WHITE
+        }
+        val pointTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = defaultBold
+            textAlign = Paint.Align.CENTER
+            color = Color.WHITE
+        }
+        val pointBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        val pointBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+
+        val badgeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.MONOSPACE
+            textAlign = Paint.Align.CENTER
+        }
+        val badgeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xD9090D16.toInt() }
+        val badgeBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = 0xFF334155.toInt()
+        }
+
+        val scratchPath = Path()
+        val scratchRect = RectF()
+
+        // Viewport-padded cache for key function points (roots, extrema, y-intercepts, intersections)
+        var kpFuncSig: String = ""
+        var kpXMin = Double.NaN
+        var kpXMax = Double.NaN
+        var kpYMin = Double.NaN
+        var kpYMax = Double.NaN
+        var kpXSpan = Double.NaN
+        var cachedKeyPoints: List<GraphKeyPoint> = emptyList()
+
+        fun ensureDensity(density: Float) {
+            if (cachedDensity != density) {
+                cachedDensity = density
+                dash75 = DashPathEffect(floatArrayOf(7f * density, 5f * density), 0f)
+                dash96 = DashPathEffect(floatArrayOf(9f * density, 6f * density), 0f)
+                dash65 = DashPathEffect(floatArrayOf(6f * density, 5f * density), 0f)
+                dash54 = DashPathEffect(floatArrayOf(5f * density, 4f * density), 0f)
+            }
+        }
+
+        fun ensureBackground(width: Float, height: Float) {
+            if (cachedBgW != width || cachedBgH != height) {
+                cachedBgW = width
+                cachedBgH = height
+                bgPaint.shader = RadialGradient(
+                    width * 0.5f, height * 0.5f, max(width, height) * 0.75f,
+                    intArrayOf(0xFF162033.toInt(), 0xFF090D16.toInt()),
+                    floatArrayOf(0f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+            }
+        }
+    }
+
+    private val scratchLocal = ThreadLocal.withInitial { RenderScratch() }
+
+    private fun worldToScreenX(wx: Double, cam: Geo2DCamera, halfW: Double): Float =
+        (halfW + (wx - cam.centerX) * cam.pixelsPerUnit).toFloat()
+
+    private fun worldToScreenY(wy: Double, cam: Geo2DCamera, halfH: Double): Float =
+        (halfH - (wy - cam.centerY) * cam.pixelsPerUnit).toFloat()
+
     fun worldToScreen(wx: Double, wy: Double, cam: Geo2DCamera, width: Float, height: Float): Vec2 {
         val sx = (width * 0.5 + (wx - cam.centerX) * cam.pixelsPerUnit).toFloat()
         val sy = (height * 0.5 - (wy - cam.centerY) * cam.pixelsPerUnit).toFloat()
@@ -53,19 +161,15 @@ object Geo2DRenderer {
         exportTitle: String = ""
     ) {
         if (width <= 2f || height <= 2f) return
+        val scratch = scratchLocal.get()!!
+        scratch.ensureDensity(density)
+        scratch.ensureBackground(width, height)
+
         val snap = uiState.snapshot
         val cam = snap.camera
 
-        // 1. Deep Observatory Background
-        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = RadialGradient(
-                width * 0.5f, height * 0.5f, max(width, height) * 0.75f,
-                intArrayOf(0xFF162033.toInt(), 0xFF090D16.toInt()),
-                floatArrayOf(0f, 1f),
-                Shader.TileMode.CLAMP
-            )
-        }
-        canvas.drawRect(0f, 0f, width, height, bgPaint)
+        // 1. Deep Observatory Background (cached shader)
+        canvas.drawRect(0f, 0f, width, height, scratch.bgPaint)
 
         val (xMin, yMin) = screenToWorldDouble(0f, height, cam, width, height)
         val (xMax, yMax) = screenToWorldDouble(width, 0f, cam, width, height)
@@ -73,24 +177,28 @@ object Geo2DRenderer {
 
         // 2. Adaptive Coordinate Grid
         if (snap.showGrid) {
-            drawGrid(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, majorStep)
+            drawGrid(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, majorStep, scratch)
         }
 
         // 3. Oxy Coordinate Axes & Tick Labels
         if (snap.showAxes) {
-            drawAxes(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, majorStep)
+            drawAxes(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, majorStep, scratch)
         }
 
-        // 4. Compile & Draw Arbitrary Mathematical Function Graphs y = f(x) and optional Derivative y = f'(x)
-        val compiledFunctions = mutableListOf<Pair<GraphFunction, MathExprParser.Expr>>()
+        // 4. Compile (LRU-cached) & Draw Arbitrary Mathematical Function Graphs y = f(x) and optional Derivative y = f'(x)
+        val compiledFunctions = ArrayList<Triple<GraphFunction, MathExprParser.Expr, MathExprParser.Expr?>>(snap.functions.size)
         val xSpan = max(1e-9, xMax - xMin)
         val ySpan = max(1e-9, yMax - yMin)
         snap.functions.forEach { fn ->
             if ((!fn.visible && !fn.showDerivative) || fn.expression.isBlank()) return@forEach
             val parsed = MathExprParser.parse(fn.expression)
             if (parsed is MathExprParser.ParseResult.Ok) {
+                val symDeriv = if (fn.showDerivative || snap.showKeyGraphPoints) {
+                    MathExprParser.derive(fn.expression)?.first
+                } else null
+
                 if (fn.visible) {
-                    compiledFunctions.add(fn to parsed.expr)
+                    compiledFunctions.add(Triple(fn, parsed.expr, symDeriv))
                     drawFunctionCurve(
                         canvas = canvas,
                         width = width,
@@ -100,11 +208,11 @@ object Geo2DRenderer {
                         evaluator = { x -> parsed.expr.eval(x) },
                         colorHex = fn.colorHex,
                         worldHeight = ySpan,
-                        isDashedDerivative = false
+                        isDashedDerivative = false,
+                        scratch = scratch
                     )
                 }
                 if (fn.showDerivative) {
-                    val symDeriv = parsed.expr.symbolicDerivative()?.simplify()
                     val numStep = xSpan * 1e-5
                     drawFunctionCurve(
                         canvas = canvas,
@@ -115,81 +223,72 @@ object Geo2DRenderer {
                         evaluator = { x -> symDeriv?.eval(x) ?: parsed.expr.derivative(x, numStep) },
                         colorHex = fn.colorHex,
                         worldHeight = ySpan,
-                        isDashedDerivative = true
+                        isDashedDerivative = true,
+                        scratch = scratch
                     )
                 }
             }
         }
 
-        // 5. Key Function Points (Roots, Y-Intercept, Extrema, Intersections)
+        // 5. Key Function Points (Roots, Y-Intercept, Extrema, Intersections) with viewport-padded caching
         if (snap.showKeyGraphPoints && compiledFunctions.isNotEmpty()) {
-            val keyPoints = mutableListOf<GraphKeyPoint>()
-            compiledFunctions.forEach { (fn, expr) ->
-                keyPoints.addAll(MathExprParser.analyzeFunction(expr, xMin, xMax, yMin, yMax, fn.colorHex))
-            }
-            if (compiledFunctions.size >= 2) {
-                for (i in 0 until compiledFunctions.size) {
-                    for (j in i + 1 until compiledFunctions.size) {
-                        keyPoints.addAll(
-                            MathExprParser.findIntersections(
-                                compiledFunctions[i].second,
-                                compiledFunctions[j].second,
-                                xMin, xMax, yMin, yMax
-                            )
-                        )
-                    }
-                }
-            }
-            drawKeyGraphPoints(canvas, width, height, density, cam, keyPoints)
+            val keyPoints = resolveKeyPointsCached(compiledFunctions, xMin, xMax, yMin, yMax, xSpan, ySpan, scratch)
+            drawKeyGraphPoints(canvas, width, height, density, cam, keyPoints, scratch)
         }
 
         // 6. 2D Geometric Objects (Polygons -> Circles -> Lines/Rays -> Segments/Vectors -> Angles)
         val ptMap = snap.points.associateBy { it.id }
 
         // 6a. Polygons (filled first)
-        snap.objects.filterIsInstance<Geo2DObject.Polygon>().forEach { poly ->
-            drawPolygon(canvas, width, height, density, cam, poly, ptMap, snap.showMeasurements)
+        for (obj in snap.objects) {
+            if (obj is Geo2DObject.Polygon) {
+                drawPolygon(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, scratch)
+            }
         }
 
         // 6b. Circles
-        snap.objects.filterIsInstance<Geo2DObject.Circle>().forEach { circle ->
-            drawCircle(canvas, width, height, density, cam, circle, ptMap, snap.showMeasurements)
+        for (obj in snap.objects) {
+            if (obj is Geo2DObject.Circle) {
+                drawCircle(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, scratch)
+            }
         }
 
         // 6c. Infinite Lines & Rays
-        snap.objects.filterIsInstance<Geo2DObject.Line>().forEach { line ->
-            drawInfiniteLine(canvas, width, height, density, cam, line, ptMap, snap.showMeasurements)
-        }
-        snap.objects.filterIsInstance<Geo2DObject.Ray>().forEach { ray ->
-            drawRay(canvas, width, height, density, cam, ray, ptMap)
+        for (obj in snap.objects) {
+            when (obj) {
+                is Geo2DObject.Line -> drawInfiniteLine(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, scratch)
+                is Geo2DObject.Ray -> drawRay(canvas, width, height, density, cam, obj, ptMap, scratch)
+                else -> Unit
+            }
         }
 
         // 6d. Segments & Vectors
-        snap.objects.filterIsInstance<Geo2DObject.Segment>().forEach { seg ->
-            drawSegment(canvas, width, height, density, cam, seg, ptMap, snap.showMeasurements)
-        }
-        snap.objects.filterIsInstance<Geo2DObject.VectorObj>().forEach { vec ->
-            drawVector(canvas, width, height, density, cam, vec, ptMap, snap.showMeasurements)
+        for (obj in snap.objects) {
+            when (obj) {
+                is Geo2DObject.Segment -> drawSegment(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, scratch)
+                is Geo2DObject.VectorObj -> drawVector(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, scratch)
+                else -> Unit
+            }
         }
 
         // 6e. Angle Measurements
-        snap.objects.filterIsInstance<Geo2DObject.AngleMeasure>().forEach { ang ->
-            drawAngleMeasure(canvas, width, height, density, cam, ang, ptMap, snap.showMeasurements)
+        for (obj in snap.objects) {
+            if (obj is Geo2DObject.AngleMeasure) {
+                drawAngleMeasure(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, scratch)
+            }
         }
 
         // 7. Interactive Trace Crosshair & Tangent Line
         uiState.traceX?.let { tx ->
-            drawTraceOverlay(canvas, width, height, density, cam, tx, uiState.traceResults, snap.showTangentOnTrace)
+            drawTraceOverlay(canvas, width, height, density, cam, tx, uiState.traceResults, snap.showTangentOnTrace, scratch)
         }
 
         // 8. Pending Polygon Preview Lines
         if (uiState.activeTool == Geo2DTool.POLYGON && uiState.pendingPointIds.size >= 2) {
-            val previewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.STROKE
-                strokeWidth = 2f * density
-                color = 0xFF818CF8.toInt()
-                pathEffect = DashPathEffect(floatArrayOf(7f * density, 5f * density), 0f)
-            }
+            val previewPaint = scratch.dashedStrokePaint
+            previewPaint.strokeWidth = 2f * density
+            previewPaint.color = 0xFF818CF8.toInt()
+            previewPaint.pathEffect = scratch.dash75
             val pendingPts = uiState.pendingPointIds.mapNotNull { ptMap[it] }
             for (i in 0 until pendingPts.size - 1) {
                 val a = worldToScreen(pendingPts[i].x, pendingPts[i].y, cam, width, height)
@@ -199,12 +298,71 @@ object Geo2DRenderer {
         }
 
         // 9. Named 2D Points & Coordinate Labels
-        drawPoints(canvas, width, height, density, cam, uiState)
+        drawPoints(canvas, width, height, density, cam, uiState, scratch)
 
         // 10. Optional Export Summary Card
         if (includeExportCard) {
-            drawExportInfoCard(canvas, width, height, density, uiState, exportTitle)
+            drawExportInfoCard(canvas, width, height, density, uiState, exportTitle, scratch)
         }
+    }
+
+    private fun resolveKeyPointsCached(
+        compiledFunctions: List<Triple<GraphFunction, MathExprParser.Expr, MathExprParser.Expr?>>,
+        xMin: Double,
+        xMax: Double,
+        yMin: Double,
+        yMax: Double,
+        xSpan: Double,
+        ySpan: Double,
+        scratch: RenderScratch
+    ): List<GraphKeyPoint> {
+        val sig = buildString {
+            for ((fn, _, _) in compiledFunctions) {
+                append(fn.expression).append('|').append(fn.colorHex).append(';')
+            }
+        }
+        val zoomRatio = if (scratch.kpXSpan.isFinite() && scratch.kpXSpan > 0.0) xSpan / scratch.kpXSpan else 0.0
+        val cacheHit = sig == scratch.kpFuncSig &&
+            scratch.kpXMin.isFinite() &&
+            xMin >= scratch.kpXMin && xMax <= scratch.kpXMax &&
+            yMin >= scratch.kpYMin && yMax <= scratch.kpYMax &&
+            zoomRatio in 0.8..1.25
+
+        if (cacheHit) return scratch.cachedKeyPoints
+
+        val padX = xSpan * 0.20
+        val padY = ySpan * 0.20
+        val qXMin = xMin - padX
+        val qXMax = xMax + padX
+        val qYMin = yMin - padY
+        val qYMax = yMax + padY
+
+        val keyPoints = ArrayList<GraphKeyPoint>()
+        for ((fn, expr, symDeriv) in compiledFunctions) {
+            keyPoints.addAll(MathExprParser.analyzeFunction(expr, qXMin, qXMax, qYMin, qYMax, fn.colorHex, symDeriv))
+        }
+        if (compiledFunctions.size >= 2) {
+            for (i in compiledFunctions.indices) {
+                for (j in i + 1 until compiledFunctions.size) {
+                    keyPoints.addAll(
+                        MathExprParser.findIntersections(
+                            compiledFunctions[i].second,
+                            compiledFunctions[j].second,
+                            qXMin, qXMax, qYMin, qYMax
+                        )
+                    )
+                }
+            }
+        }
+
+        scratch.kpFuncSig = sig
+        scratch.kpXMin = qXMin
+        scratch.kpXMax = qXMax
+        scratch.kpYMin = qYMin
+        scratch.kpYMax = qYMax
+        scratch.kpXSpan = xSpan
+        scratch.cachedKeyPoints = keyPoints
+        return keyPoints
     }
 
     private fun drawGrid(
@@ -217,14 +375,17 @@ object Geo2DRenderer {
         xMax: Double,
         yMin: Double,
         yMax: Double,
-        majorStep: Double
+        majorStep: Double,
+        scratch: RenderScratch
     ) {
         val minorStep = majorStep / 4.0
-        val minorPaint = Paint().apply {
+        val halfW = width * 0.5
+        val halfH = height * 0.5
+        val minorPaint = scratch.minorGridPaint.apply {
             color = 0xFF152034.toInt()
             strokeWidth = 1f * density
         }
-        val majorPaint = Paint().apply {
+        val majorPaint = scratch.majorGridPaint.apply {
             color = 0xFF23324C.toInt()
             strokeWidth = 1.25f * density
         }
@@ -233,14 +394,14 @@ object Geo2DRenderer {
         var mx = floor(xMin / minorStep) * minorStep
         var guard = 0
         while (mx <= xMax && guard++ < 400) {
-            val sx = worldToScreen(mx, 0.0, cam, width, height).x
+            val sx = worldToScreenX(mx, cam, halfW)
             canvas.drawLine(sx, 0f, sx, height, minorPaint)
             mx += minorStep
         }
         var my = floor(yMin / minorStep) * minorStep
         guard = 0
         while (my <= yMax && guard++ < 400) {
-            val sy = worldToScreen(0.0, my, cam, width, height).y
+            val sy = worldToScreenY(my, cam, halfH)
             canvas.drawLine(0f, sy, width, sy, minorPaint)
             my += minorStep
         }
@@ -249,14 +410,14 @@ object Geo2DRenderer {
         var gx = floor(xMin / majorStep) * majorStep
         guard = 0
         while (gx <= xMax && guard++ < 150) {
-            val sx = worldToScreen(gx, 0.0, cam, width, height).x
+            val sx = worldToScreenX(gx, cam, halfW)
             canvas.drawLine(sx, 0f, sx, height, majorPaint)
             gx += majorStep
         }
         var gy = floor(yMin / majorStep) * majorStep
         guard = 0
         while (gy <= yMax && guard++ < 150) {
-            val sy = worldToScreen(0.0, gy, cam, width, height).y
+            val sy = worldToScreenY(gy, cam, halfH)
             canvas.drawLine(0f, sy, width, sy, majorPaint)
             gy += majorStep
         }
@@ -272,55 +433,50 @@ object Geo2DRenderer {
         xMax: Double,
         yMin: Double,
         yMax: Double,
-        majorStep: Double
+        majorStep: Double,
+        scratch: RenderScratch
     ) {
-        val origin = worldToScreen(0.0, 0.0, cam, width, height)
-        val axisXPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        val halfW = width * 0.5
+        val halfH = height * 0.5
+        val originX = worldToScreenX(0.0, cam, halfW)
+        val originY = worldToScreenY(0.0, cam, halfH)
+
+        val axisPaint = scratch.axisPaint.apply {
             color = 0xFF94A3B8.toInt()
             strokeWidth = 2.0f * density
         }
-        val axisYPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFF94A3B8.toInt()
-            strokeWidth = 2.0f * density
-        }
-        val tickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        val tickPaint = scratch.tickPaint.apply {
             color = 0xFF94A3B8.toInt()
             textSize = 10.5f * density
-            typeface = Typeface.MONOSPACE
+        }
+        val lblPaint = scratch.axisLabelPaint.apply {
+            textSize = 13.5f * density
         }
 
         // X Axis
-        val clampedY = origin.y.coerceIn(22f * density, height - 22f * density)
-        val xVisible = origin.y in -2f..height + 2f
+        val clampedY = originY.coerceIn(22f * density, height - 22f * density)
+        val xVisible = originY in -2f..height + 2f
         if (xVisible) {
-            canvas.drawLine(0f, origin.y, width - 6f * density, origin.y, axisXPaint)
-            drawArrowHead(canvas, width - 20f * density, origin.y, width - 3f * density, origin.y, 0xFFCBD5E1.toInt(), 9f * density)
-            val lblPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = 0xFFF87171.toInt()
-                textSize = 13.5f * density
-                typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)
-            }
-            canvas.drawText("x", width - 18f * density, origin.y - 10f * density, lblPaint)
+            canvas.drawLine(0f, originY, width - 6f * density, originY, axisPaint)
+            drawArrowHead(canvas, width - 20f * density, originY, width - 3f * density, originY, 0xFFCBD5E1.toInt(), 9f * density, scratch)
+            lblPaint.color = 0xFFF87171.toInt()
+            canvas.drawText("x", width - 18f * density, originY - 10f * density, lblPaint)
         }
 
         // Y Axis
-        val clampedX = origin.x.coerceIn(32f * density, width - 26f * density)
-        val yVisible = origin.x in -2f..width + 2f
+        val clampedX = originX.coerceIn(32f * density, width - 26f * density)
+        val yVisible = originX in -2f..width + 2f
         if (yVisible) {
-            canvas.drawLine(origin.x, height, origin.x, 6f * density, axisYPaint)
-            drawArrowHead(canvas, origin.x, 20f * density, origin.x, 3f * density, 0xFFCBD5E1.toInt(), 9f * density)
-            val lblPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = 0xFF4ADE80.toInt()
-                textSize = 13.5f * density
-                typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)
-            }
-            canvas.drawText("y", origin.x + 10f * density, 20f * density, lblPaint)
+            canvas.drawLine(originX, height, originX, 6f * density, axisPaint)
+            drawArrowHead(canvas, originX, 20f * density, originX, 3f * density, 0xFFCBD5E1.toInt(), 9f * density, scratch)
+            lblPaint.color = 0xFF4ADE80.toInt()
+            canvas.drawText("y", originX + 10f * density, 20f * density, lblPaint)
         }
 
         // Origin "O"
         if (xVisible && yVisible) {
             tickPaint.textAlign = Paint.Align.RIGHT
-            canvas.drawText("O", origin.x - 6f * density, origin.y + 14f * density, tickPaint)
+            canvas.drawText("O", originX - 6f * density, originY + 14f * density, tickPaint)
         }
 
         // X tick numbers (with scientific/compact infinite-zoom formatting)
@@ -329,9 +485,9 @@ object Geo2DRenderer {
         var guard = 0
         while (gx <= xMax && guard++ < 120) {
             if (abs(gx) > majorStep * 0.1) {
-                val sx = worldToScreen(gx, 0.0, cam, width, height).x
+                val sx = worldToScreenX(gx, cam, halfW)
                 if (sx in (24f * density)..(width - 26f * density)) {
-                    if (xVisible) canvas.drawLine(sx, origin.y - 3.5f * density, sx, origin.y + 3.5f * density, axisXPaint)
+                    if (xVisible) canvas.drawLine(sx, originY - 3.5f * density, sx, originY + 3.5f * density, axisPaint)
                     canvas.drawText(Geo2DMathHelpers.formatAxisTick(gx), sx, clampedY + 14f * density, tickPaint)
                 }
             }
@@ -344,9 +500,9 @@ object Geo2DRenderer {
         guard = 0
         while (gy <= yMax && guard++ < 120) {
             if (abs(gy) > majorStep * 0.1) {
-                val sy = worldToScreen(0.0, gy, cam, width, height).y
+                val sy = worldToScreenY(gy, cam, halfH)
                 if (sy in (24f * density)..(height - 20f * density)) {
-                    if (yVisible) canvas.drawLine(origin.x - 3.5f * density, sy, origin.x + 3.5f * density, sy, axisYPaint)
+                    if (yVisible) canvas.drawLine(originX - 3.5f * density, sy, originX + 3.5f * density, sy, axisPaint)
                     canvas.drawText(Geo2DMathHelpers.formatAxisTick(gy), clampedX - 7f * density, sy + 4f * density, tickPaint)
                 }
             }
@@ -363,10 +519,10 @@ object Geo2DRenderer {
         evaluator: (Double) -> Double,
         colorHex: String,
         worldHeight: Double,
-        isDashedDerivative: Boolean
+        isDashedDerivative: Boolean,
+        scratch: RenderScratch
     ) {
         val rawColor = parseColor(colorHex, 0xFF38BDF8.toInt())
-        // Lighten/warm slightly for dashed derivative so both f(x) and f'(x) pop cleanly together
         val baseColor = if (isDashedDerivative) {
             Color.rgb(
                 ((Color.red(rawColor) + 251) / 2).coerceIn(0, 255),
@@ -375,49 +531,48 @@ object Geo2DRenderer {
             )
         } else rawColor
 
-        val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = (if (isDashedDerivative) 5f else 6.5f) * density
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
-            color = Color.argb(if (isDashedDerivative) 34 else 42, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
-        }
-        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = (if (isDashedDerivative) 2.2f else 2.5f) * density
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
-            color = baseColor
-            if (isDashedDerivative) {
-                pathEffect = DashPathEffect(floatArrayOf(9f * density, 6f * density), 0f)
-            }
-        }
+        val glowPaint = scratch.curveGlowPaint
+        glowPaint.strokeWidth = (if (isDashedDerivative) 5f else 6.5f) * density
+        glowPaint.color = Color.argb(if (isDashedDerivative) 34 else 42, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
 
-        val path = Path()
+        val strokePaint = scratch.curveStrokePaint
+        strokePaint.strokeWidth = (if (isDashedDerivative) 2.2f else 2.5f) * density
+        strokePaint.color = baseColor
+        strokePaint.pathEffect = if (isDashedDerivative) scratch.dash96 else null
+
+        val path = scratch.curvePath
+        path.rewind()
         val stepPx = max(1.5f, 1.5f * density)
         val maxJumpWorld = max(1e-4, worldHeight * 1.15)
+        val halfW = width * 0.5
+        val halfH = height * 0.5
+        val invPpu = 1.0 / cam.pixelsPerUnit
+        val minSy = -height * 2f
+        val maxSy = height * 3f
+        val maxJumpSy = height * 1.2f
+
         var sx = 0f
         var penDown = false
         var prevWy = Double.NaN
         var prevSy = 0f
 
         while (sx <= width + stepPx) {
-            val (wx, _) = screenToWorldDouble(sx, 0f, cam, width, height)
+            val wx = cam.centerX + (sx - halfW) * invPpu
             val wy = evaluator(wx)
             if (wy.isFinite()) {
-                val sy = worldToScreen(wx, wy, cam, width, height).y
+                val sy = (halfH - (wy - cam.centerY) * cam.pixelsPerUnit).toFloat()
                 val isAsymptoteJump = penDown && prevWy.isFinite() &&
-                    (abs(wy - prevWy) > maxJumpWorld || (abs(sy - prevSy) > height * 1.2f && (wy * prevWy < 0.0)))
+                    (abs(wy - prevWy) > maxJumpWorld || (abs(sy - prevSy) > maxJumpSy && (wy * prevWy < 0.0)))
 
                 if (!penDown || isAsymptoteJump) {
-                    if (sy in (-height * 2f)..(height * 3f)) {
+                    if (sy in minSy..maxSy) {
                         path.moveTo(sx, sy)
                         penDown = true
                     } else {
                         penDown = false
                     }
                 } else {
-                    if (sy in (-height * 2f)..(height * 3f)) {
+                    if (sy in minSy..maxSy) {
                         path.lineTo(sx, sy)
                     } else {
                         penDown = false
@@ -442,33 +597,36 @@ object Geo2DRenderer {
         height: Float,
         density: Float,
         cam: Geo2DCamera,
-        keyPoints: List<GraphKeyPoint>
+        keyPoints: List<GraphKeyPoint>,
+        scratch: RenderScratch
     ) {
-        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
+        val halfW = width * 0.5
+        val halfH = height * 0.5
+        val fillPaint = scratch.fillPaint
+        val strokePaint = scratch.strokePaint.apply {
             strokeWidth = 1.6f * density
+            pathEffect = null
         }
-        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        val textPaint = scratch.keyPtTextPaint.apply {
             textSize = 9.5f * density
-            typeface = Typeface.MONOSPACE
-            color = 0xFFE2E8F0.toInt()
         }
-        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC0F172A.toInt() }
+        val bgPaint = scratch.keyPtBgPaint
+        val rect = scratch.scratchRect
 
-        keyPoints.forEach { kp ->
-            val p = worldToScreen(kp.x, kp.y, cam, width, height)
-            if (p.x !in 12f..(width - 12f) || p.y !in 12f..(height - 12f)) return@forEach
+        for (kp in keyPoints) {
+            val px = worldToScreenX(kp.x, cam, halfW)
+            val py = worldToScreenY(kp.y, cam, halfH)
+            if (px !in 12f..(width - 12f) || py !in 12f..(height - 12f)) continue
             val c = parseColor(kp.colorHex, 0xFFFBBF24.toInt())
             val r = if (kp.type == KeyPointType.INTERSECTION) 5.2f * density else 4.2f * density
             fillPaint.color = if (kp.type == KeyPointType.INTERSECTION) 0xFFFBBF24.toInt() else 0xFF090D16.toInt()
             strokePaint.color = c
-            canvas.drawCircle(p.x, p.y, r, fillPaint)
-            canvas.drawCircle(p.x, p.y, r, strokePaint)
+            canvas.drawCircle(px, py, r, fillPaint)
+            canvas.drawCircle(px, py, r, strokePaint)
 
             val label = "(${Geo2DMathHelpers.formatNum(kp.x)}; ${Geo2DMathHelpers.formatNum(kp.y)})"
             val tw = textPaint.measureText(label)
-            val rect = RectF(p.x + 6f * density, p.y - 16f * density, p.x + 14f * density + tw, p.y - 2f * density)
+            rect.set(px + 6f * density, py - 16f * density, px + 14f * density + tw, py - 2f * density)
             canvas.drawRoundRect(rect, 4f * density, 4f * density, bgPaint)
             canvas.drawText(label, rect.left + 4f * density, rect.bottom - 3.5f * density, textPaint)
         }
@@ -482,23 +640,24 @@ object Geo2DRenderer {
         cam: Geo2DCamera,
         traceX: Double,
         results: List<TraceResult>,
-        showTangent: Boolean
+        showTangent: Boolean,
+        scratch: RenderScratch
     ) {
-        val sx = worldToScreen(traceX, 0.0, cam, width, height).x
-        val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 1.4f * density
-            color = 0xAA94A3B8.toInt()
-            pathEffect = DashPathEffect(floatArrayOf(6f * density, 5f * density), 0f)
-        }
+        val sx = worldToScreenX(traceX, cam, width * 0.5)
+        val guidePaint = scratch.dashedStrokePaint
+        guidePaint.strokeWidth = 1.4f * density
+        guidePaint.color = 0xAA94A3B8.toInt()
+        guidePaint.pathEffect = scratch.dash65
         canvas.drawLine(sx, 0f, sx, height, guidePaint)
 
-        results.forEach { res ->
-            if (!res.y.isFinite()) return@forEach
+        val fillPaint = scratch.fillPaint
+        val ringPaint = scratch.pointRingPaint.apply { strokeWidth = 1.8f * density }
+
+        for (res in results) {
+            if (!res.y.isFinite()) continue
             val pt = worldToScreen(res.x, res.y, cam, width, height)
             val curveColor = parseColor(res.colorHex, 0xFF38BDF8.toInt())
 
-            // Tangent line at traced point
             if (showTangent && res.slope.isFinite()) {
                 val spanWorld = (100.0 * density) / cam.pixelsPerUnit
                 val x1 = res.x - spanWorld
@@ -507,28 +666,17 @@ object Geo2DRenderer {
                 val y2 = res.y + res.slope * (x2 - res.x)
                 val p1 = worldToScreen(x1, y1, cam, width, height)
                 val p2 = worldToScreen(x2, y2, cam, width, height)
-                val tanPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    style = Paint.Style.STROKE
-                    strokeWidth = 1.6f * density
-                    color = Color.argb(190, 251, 191, 36)
-                    pathEffect = DashPathEffect(floatArrayOf(5f * density, 4f * density), 0f)
-                }
-                canvas.drawLine(p1.x, p1.y, p2.x, p2.y, tanPaint)
+                guidePaint.strokeWidth = 1.6f * density
+                guidePaint.color = Color.argb(190, 251, 191, 36)
+                guidePaint.pathEffect = scratch.dash54
+                canvas.drawLine(p1.x, p1.y, p2.x, p2.y, guidePaint)
             }
 
-            // Glowing traced dot
-            val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.argb(80, Color.red(curveColor), Color.green(curveColor), Color.blue(curveColor))
-            }
-            val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = curveColor }
-            val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.STROKE
-                strokeWidth = 1.8f * density
-                color = Color.WHITE
-            }
-            canvas.drawCircle(pt.x, pt.y, 11f * density, glow)
-            canvas.drawCircle(pt.x, pt.y, 5.5f * density, dot)
-            canvas.drawCircle(pt.x, pt.y, 5.5f * density, ring)
+            fillPaint.color = Color.argb(80, Color.red(curveColor), Color.green(curveColor), Color.blue(curveColor))
+            canvas.drawCircle(pt.x, pt.y, 11f * density, fillPaint)
+            fillPaint.color = curveColor
+            canvas.drawCircle(pt.x, pt.y, 5.5f * density, fillPaint)
+            canvas.drawCircle(pt.x, pt.y, 5.5f * density, ringPaint)
         }
     }
 
@@ -540,38 +688,43 @@ object Geo2DRenderer {
         cam: Geo2DCamera,
         poly: Geo2DObject.Polygon,
         ptMap: Map<String, Geo2DPoint>,
-        showMeasurements: Boolean
+        showMeasurements: Boolean,
+        scratch: RenderScratch
     ) {
         val pts = poly.pointIds.mapNotNull { ptMap[it] }
         if (pts.size < 3) return
         val sPts = pts.map { worldToScreen(it.x, it.y, cam, width, height) }
         val baseColor = parseColor(poly.colorHex, 0xFF6366F1.toInt())
 
-        val path = Path().apply {
-            moveTo(sPts[0].x, sPts[0].y)
-            for (i in 1 until sPts.size) lineTo(sPts[i].x, sPts[i].y)
-            close()
-        }
-        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-            color = Color.argb(56, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
-        }
-        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 2.1f * density
-            strokeJoin = Paint.Join.ROUND
-            color = baseColor
-        }
+        val path = scratch.scratchPath
+        path.rewind()
+        path.moveTo(sPts[0].x, sPts[0].y)
+        for (i in 1 until sPts.size) path.lineTo(sPts[i].x, sPts[i].y)
+        path.close()
+
+        val fillPaint = scratch.fillPaint
+        fillPaint.color = Color.argb(56, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
+        val borderPaint = scratch.strokePaint
+        borderPaint.strokeWidth = 2.1f * density
+        borderPaint.strokeJoin = Paint.Join.ROUND
+        borderPaint.color = baseColor
+        borderPaint.pathEffect = null
+
         canvas.drawPath(path, fillPaint)
         canvas.drawPath(path, borderPaint)
 
         if (showMeasurements) {
             val worldPts = pts.map { Vec2(it.x, it.y) }
             val area = Geo2DMathHelpers.polygonArea(worldPts)
-            val cx = sPts.map { it.x }.average().toFloat()
-            val cy = sPts.map { it.y }.average().toFloat()
+            var sumX = 0f
+            var sumY = 0f
+            for (sp in sPts) {
+                sumX += sp.x
+                sumY += sp.y
+            }
+            val cx = sumX / sPts.size
+            val cy = sumY / sPts.size
 
-            // Side length badges along each edge (when edge is long enough on screen to avoid overlap)
             for (i in sPts.indices) {
                 val p1 = sPts[i]
                 val p2 = sPts[(i + 1) % sPts.size]
@@ -580,20 +733,22 @@ object Geo2DRenderer {
                     val worldLen = Geo2DMathHelpers.distance(worldPts[i], worldPts[(i + 1) % worldPts.size])
                     val mx = (p1.x + p2.x) * 0.5f
                     val my = (p1.y + p2.y) * 0.5f
-                    // Offset slightly outward from polygon centroid
                     val ox = mx - cx
                     val oy = my - cy
                     val oLen = hypot(ox, oy).coerceAtLeast(1f)
                     val bx = mx + (ox / oLen) * 12f * density
                     val by = my + (oy / oLen) * 12f * density
-                    drawSmallBadge(canvas, bx, by, Geo2DMathHelpers.formatNum(worldLen), 0xFFCBD5E1.toInt(), density)
+                    drawSmallBadge(canvas, bx, by, Geo2DMathHelpers.formatNum(worldLen), 0xFFCBD5E1.toInt(), density, scratch)
                 }
             }
 
-            // Area badge at polygon centroid (only if polygon spans enough screen space)
-            val maxSpan = sPts.maxOf { hypot(it.x - cx, it.y - cy) }
+            var maxSpan = 0f
+            for (sp in sPts) {
+                val d = hypot(sp.x - cx, sp.y - cy)
+                if (d > maxSpan) maxSpan = d
+            }
             if (maxSpan >= 28f * density) {
-                drawSmallBadge(canvas, cx, cy, "S = ${Geo2DMathHelpers.formatNum(area)}", 0xFFA5B4FC.toInt(), density)
+                drawSmallBadge(canvas, cx, cy, "S = ${Geo2DMathHelpers.formatNum(area)}", 0xFFA5B4FC.toInt(), density, scratch)
             }
         }
     }
@@ -606,7 +761,8 @@ object Geo2DRenderer {
         cam: Geo2DCamera,
         circle: Geo2DObject.Circle,
         ptMap: Map<String, Geo2DPoint>,
-        showMeasurements: Boolean
+        showMeasurements: Boolean,
+        scratch: RenderScratch
     ) {
         val cPt = ptMap[circle.centerId] ?: return
         val ePt = circle.edgePointId?.let { ptMap[it] }
@@ -621,15 +777,13 @@ object Geo2DRenderer {
         val screenR = (worldR * cam.pixelsPerUnit).toFloat()
         val baseColor = parseColor(circle.colorHex, 0xFF10B981.toInt())
 
-        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-            color = Color.argb(32, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
-        }
-        val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 2.2f * density
-            color = baseColor
-        }
+        val fill = scratch.fillPaint
+        fill.color = Color.argb(32, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
+        val stroke = scratch.strokePaint
+        stroke.strokeWidth = 2.2f * density
+        stroke.color = baseColor
+        stroke.pathEffect = null
+
         canvas.drawCircle(sc.x, sc.y, screenR, fill)
         canvas.drawCircle(sc.x, sc.y, screenR, stroke)
 
@@ -639,12 +793,10 @@ object Geo2DRenderer {
             } else {
                 Vec2(sc.x + screenR, sc.y)
             }
-            val rPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.STROKE
-                strokeWidth = 1.4f * density
-                color = baseColor
-                pathEffect = DashPathEffect(floatArrayOf(5f * density, 4f * density), 0f)
-            }
+            val rPaint = scratch.dashedStrokePaint
+            rPaint.strokeWidth = 1.4f * density
+            rPaint.color = baseColor
+            rPaint.pathEffect = scratch.dash54
             canvas.drawLine(sc.x, sc.y, radiusEnd.x, radiusEnd.y, rPaint)
             if (screenR >= 44f * density) {
                 drawSmallBadge(
@@ -653,7 +805,8 @@ object Geo2DRenderer {
                     (sc.y + radiusEnd.y) * 0.5f - 10f * density,
                     "R = ${Geo2DMathHelpers.formatNum(worldR)}",
                     baseColor,
-                    density
+                    density,
+                    scratch
                 )
             }
         }
@@ -667,7 +820,8 @@ object Geo2DRenderer {
         cam: Geo2DCamera,
         line: Geo2DObject.Line,
         ptMap: Map<String, Geo2DPoint>,
-        showMeasurements: Boolean
+        showMeasurements: Boolean,
+        scratch: RenderScratch
     ) {
         val p1 = ptMap[line.p1Id] ?: return
         val p2 = ptMap[line.p2Id] ?: return
@@ -682,17 +836,15 @@ object Geo2DRenderer {
         val ext = max(width, height) * 2f
 
         val baseColor = parseColor(line.colorHex, 0xFF38BDF8.toInt())
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 2.0f * density
-            color = baseColor
-            if (line.dashed) pathEffect = DashPathEffect(floatArrayOf(7f * density, 5f * density), 0f)
-        }
+        val paint = if (line.dashed) scratch.dashedStrokePaint else scratch.strokePaint
+        paint.strokeWidth = 2.0f * density
+        paint.color = baseColor
+        paint.pathEffect = if (line.dashed) scratch.dash75 else null
         canvas.drawLine(s1.x - ux * ext, s1.y - uy * ext, s1.x + ux * ext, s1.y + uy * ext, paint)
 
         if (showMeasurements) {
             val eq = Geo2DMathHelpers.lineEquationString(Vec2(p1.x, p1.y), Vec2(p2.x, p2.y))
-            drawSmallBadge(canvas, (s1.x + s2.x) * 0.5f, (s1.y + s2.y) * 0.5f - 12f * density, eq, baseColor, density)
+            drawSmallBadge(canvas, (s1.x + s2.x) * 0.5f, (s1.y + s2.y) * 0.5f - 12f * density, eq, baseColor, density, scratch)
         }
     }
 
@@ -703,7 +855,8 @@ object Geo2DRenderer {
         density: Float,
         cam: Geo2DCamera,
         ray: Geo2DObject.Ray,
-        ptMap: Map<String, Geo2DPoint>
+        ptMap: Map<String, Geo2DPoint>,
+        scratch: RenderScratch
     ) {
         val p1 = ptMap[ray.startId] ?: return
         val p2 = ptMap[ray.throughId] ?: return
@@ -717,11 +870,10 @@ object Geo2DRenderer {
         val uy = dy / len
         val ext = max(width, height) * 2f
 
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 2.0f * density
-            color = parseColor(ray.colorHex, 0xFFA78BFA.toInt())
-        }
+        val paint = scratch.strokePaint
+        paint.strokeWidth = 2.0f * density
+        paint.color = parseColor(ray.colorHex, 0xFFA78BFA.toInt())
+        paint.pathEffect = null
         canvas.drawLine(s1.x, s1.y, s1.x + ux * ext, s1.y + uy * ext, paint)
     }
 
@@ -733,20 +885,19 @@ object Geo2DRenderer {
         cam: Geo2DCamera,
         seg: Geo2DObject.Segment,
         ptMap: Map<String, Geo2DPoint>,
-        showMeasurements: Boolean
+        showMeasurements: Boolean,
+        scratch: RenderScratch
     ) {
         val p1 = ptMap[seg.p1Id] ?: return
         val p2 = ptMap[seg.p2Id] ?: return
         val s1 = worldToScreen(p1.x, p1.y, cam, width, height)
         val s2 = worldToScreen(p2.x, p2.y, cam, width, height)
         val baseColor = parseColor(seg.colorHex, 0xFFF8FAFC.toInt())
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 2.2f * density
-            strokeCap = Paint.Cap.ROUND
-            color = baseColor
-            if (seg.dashed) pathEffect = DashPathEffect(floatArrayOf(7f * density, 5f * density), 0f)
-        }
+        val paint = if (seg.dashed) scratch.dashedStrokePaint else scratch.strokePaint
+        paint.strokeWidth = 2.2f * density
+        paint.strokeCap = Paint.Cap.ROUND
+        paint.color = baseColor
+        paint.pathEffect = if (seg.dashed) scratch.dash75 else null
         canvas.drawLine(s1.x, s1.y, s2.x, s2.y, paint)
 
         if (showMeasurements && hypot(s2.x - s1.x, s2.y - s1.y) >= 40f * density) {
@@ -757,7 +908,8 @@ object Geo2DRenderer {
                 (s1.y + s2.y) * 0.5f - 10f * density,
                 Geo2DMathHelpers.formatNum(d),
                 0xFFCBD5E1.toInt(),
-                density
+                density,
+                scratch
             )
         }
     }
@@ -770,21 +922,21 @@ object Geo2DRenderer {
         cam: Geo2DCamera,
         vec: Geo2DObject.VectorObj,
         ptMap: Map<String, Geo2DPoint>,
-        showMeasurements: Boolean
+        showMeasurements: Boolean,
+        scratch: RenderScratch
     ) {
         val p1 = ptMap[vec.fromId] ?: return
         val p2 = ptMap[vec.toId] ?: return
         val s1 = worldToScreen(p1.x, p1.y, cam, width, height)
         val s2 = worldToScreen(p2.x, p2.y, cam, width, height)
         val baseColor = parseColor(vec.colorHex, 0xFFF43F5E.toInt())
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 2.5f * density
-            strokeCap = Paint.Cap.ROUND
-            color = baseColor
-        }
+        val paint = scratch.strokePaint
+        paint.strokeWidth = 2.5f * density
+        paint.strokeCap = Paint.Cap.ROUND
+        paint.color = baseColor
+        paint.pathEffect = null
         canvas.drawLine(s1.x, s1.y, s2.x, s2.y, paint)
-        drawArrowHead(canvas, s1.x, s1.y, s2.x, s2.y, baseColor, 12f * density)
+        drawArrowHead(canvas, s1.x, s1.y, s2.x, s2.y, baseColor, 12f * density, scratch)
 
         if (showMeasurements && hypot(s2.x - s1.x, s2.y - s1.y) >= 44f * density) {
             val dx = p2.x.toDouble() - p1.x.toDouble()
@@ -795,7 +947,8 @@ object Geo2DRenderer {
                 (s1.y + s2.y) * 0.5f - 12f * density,
                 "(${Geo2DMathHelpers.formatNum(dx)}; ${Geo2DMathHelpers.formatNum(dy)})",
                 baseColor,
-                density
+                density,
+                scratch
             )
         }
     }
@@ -808,7 +961,8 @@ object Geo2DRenderer {
         cam: Geo2DCamera,
         ang: Geo2DObject.AngleMeasure,
         ptMap: Map<String, Geo2DPoint>,
-        showMeasurements: Boolean
+        showMeasurements: Boolean,
+        scratch: RenderScratch
     ) {
         val pA = ptMap[ang.pAId] ?: return
         val pV = ptMap[ang.vertexId] ?: return
@@ -825,13 +979,10 @@ object Geo2DRenderer {
         val deg = Geo2DMathHelpers.angleDegrees(Vec2(pA.x, pA.y), Vec2(pV.x, pV.y), Vec2(pC.x, pC.y))
         val baseColor = parseColor(ang.colorHex, 0xFFFBBF24.toInt())
 
-        // Draw subtle dashed arms V->A and V->C so standalone angle measurements clearly show both rays
-        val armPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 1.3f * density
-            color = Color.argb(135, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
-            pathEffect = DashPathEffect(floatArrayOf(5f * density, 4f * density), 0f)
-        }
+        val armPaint = scratch.dashedStrokePaint
+        armPaint.strokeWidth = 1.3f * density
+        armPaint.color = Color.argb(135, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
+        armPaint.pathEffect = scratch.dash54
         canvas.drawLine(sV.x, sV.y, sA.x, sA.y, armPaint)
         canvas.drawLine(sV.x, sV.y, sC.x, sC.y, armPaint)
 
@@ -843,15 +994,12 @@ object Geo2DRenderer {
 
         val arcR = min(24f * density, min(lenVA, lenVC) * 0.42f).coerceAtLeast(8f * density)
 
-        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-            color = Color.argb(56, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
-        }
-        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 1.9f * density
-            color = baseColor
-        }
+        val fillPaint = scratch.fillPaint
+        fillPaint.color = Color.argb(56, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
+        val strokePaint = scratch.strokePaint
+        strokePaint.strokeWidth = 1.9f * density
+        strokePaint.color = baseColor
+        strokePaint.pathEffect = null
 
         val isRightAngle = abs(deg - 90f) < 0.35f
         if (isRightAngle) {
@@ -866,14 +1014,15 @@ object Geo2DRenderer {
             val q2y = sV.y + uy2 * sq
             val q3x = q1x + ux2 * sq
             val q3y = q1y + uy2 * sq
-            val sqPath = Path().apply {
-                moveTo(sV.x, sV.y); lineTo(q1x, q1y); lineTo(q3x, q3y); lineTo(q2x, q2y); close()
-            }
+            val sqPath = scratch.scratchPath
+            sqPath.rewind()
+            sqPath.moveTo(sV.x, sV.y); sqPath.lineTo(q1x, q1y); sqPath.lineTo(q3x, q3y); sqPath.lineTo(q2x, q2y); sqPath.close()
             canvas.drawPath(sqPath, fillPaint)
             canvas.drawLine(q1x, q1y, q3x, q3y, strokePaint)
             canvas.drawLine(q3x, q3y, q2x, q2y, strokePaint)
         } else {
-            val oval = RectF(sV.x - arcR, sV.y - arcR, sV.x + arcR, sV.y + arcR)
+            val oval = scratch.scratchRect
+            oval.set(sV.x - arcR, sV.y - arcR, sV.x + arcR, sV.y + arcR)
             canvas.drawArc(oval, a1, sweep, true, fillPaint)
             canvas.drawArc(oval, a1, sweep, false, strokePaint)
         }
@@ -882,7 +1031,7 @@ object Geo2DRenderer {
             val midRad = Math.toRadians((a1 + sweep * 0.5f).toDouble())
             val lx = sV.x + (arcR + 17f * density) * cos(midRad).toFloat()
             val ly = sV.y + (arcR + 17f * density) * sin(midRad).toFloat()
-            drawSmallBadge(canvas, lx, ly, "${Geo2DMathHelpers.formatNum(deg)}°", baseColor, density)
+            drawSmallBadge(canvas, lx, ly, "${Geo2DMathHelpers.formatNum(deg)}°", baseColor, density, scratch)
         }
     }
 
@@ -892,29 +1041,25 @@ object Geo2DRenderer {
         height: Float,
         density: Float,
         cam: Geo2DCamera,
-        uiState: Geo2DUiState
+        uiState: Geo2DUiState,
+        scratch: RenderScratch
     ) {
         val snap = uiState.snapshot
-        val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-        val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 1.8f * density
-            color = Color.WHITE
-        }
-        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            textSize = 11f * density
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            textAlign = Paint.Align.CENTER
-        }
-        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 1.1f * density
-        }
+        val halfW = width * 0.5
+        val halfH = height * 0.5
+        val dotPaint = scratch.fillPaint
+        val ringPaint = scratch.pointRingPaint.apply { strokeWidth = 1.8f * density }
+        val textPaint = scratch.pointTextPaint.apply { textSize = 11f * density }
+        val bgPaint = scratch.pointBgPaint
+        val borderPaint = scratch.pointBorderPaint.apply { strokeWidth = 1.1f * density }
+        val rect = scratch.scratchRect
+        val fm = textPaint.fontMetrics
+        val textCenterOffset = (fm.ascent + fm.descent) * 0.5f
 
-        snap.points.forEach { pt ->
-            val sp = worldToScreen(pt.x, pt.y, cam, width, height)
-            if (sp.x !in -30f..(width + 30f) || sp.y !in -30f..(height + 30f)) return@forEach
+        for (pt in snap.points) {
+            val spx = worldToScreenX(pt.x.toDouble(), cam, halfW)
+            val spy = worldToScreenY(pt.y.toDouble(), cam, halfH)
+            if (spx !in -30f..(width + 30f) || spy !in -30f..(height + 30f)) continue
 
             val isDragging = uiState.draggingPointId == pt.id
             val isPending = uiState.pendingPointIds.contains(pt.id)
@@ -926,8 +1071,8 @@ object Geo2DRenderer {
             val r = if (isDragging || isPending) 6.5f * density else 5f * density
 
             dotPaint.color = baseColor
-            canvas.drawCircle(sp.x, sp.y, r, dotPaint)
-            canvas.drawCircle(sp.x, sp.y, r, ringPaint)
+            canvas.drawCircle(spx, spy, r, dotPaint)
+            canvas.drawCircle(spx, spy, r, ringPaint)
 
             val label = if (snap.showPointCoords) {
                 "${pt.name}(${Geo2DMathHelpers.formatNum(pt.x)}; ${Geo2DMathHelpers.formatNum(pt.y)})"
@@ -937,53 +1082,65 @@ object Geo2DRenderer {
             val padX = 6f * density
             val boxH = 19f * density
             val boxW = max(22f * density, textPaint.measureText(label) + padX * 2f)
-            val rect = RectF(
-                sp.x - boxW * 0.5f,
-                sp.y - 16f * density - boxH * 0.5f,
-                sp.x + boxW * 0.5f,
-                sp.y - 16f * density + boxH * 0.5f
+            rect.set(
+                spx - boxW * 0.5f,
+                spy - 16f * density - boxH * 0.5f,
+                spx + boxW * 0.5f,
+                spy - 16f * density + boxH * 0.5f
             )
 
             bgPaint.color = if (isDragging) 0xF0DB2777.toInt() else if (isPending) 0xF0059669.toInt() else 0xE60F172A.toInt()
             borderPaint.color = baseColor
-            textPaint.color = Color.WHITE
             canvas.drawRoundRect(rect, 5f * density, 5f * density, bgPaint)
             canvas.drawRoundRect(rect, 5f * density, 5f * density, borderPaint)
-            val fm = textPaint.fontMetrics
-            canvas.drawText(label, sp.x, rect.centerY() - (fm.ascent + fm.descent) * 0.5f, textPaint)
+            canvas.drawText(label, spx, rect.centerY() - textCenterOffset, textPaint)
         }
     }
 
-    private fun drawSmallBadge(canvas: Canvas, cx: Float, cy: Float, text: String, textColor: Int, density: Float) {
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            textSize = 10f * density
-            typeface = Typeface.MONOSPACE
-            color = textColor
-            textAlign = Paint.Align.CENTER
-        }
+    private fun drawSmallBadge(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        text: String,
+        textColor: Int,
+        density: Float,
+        scratch: RenderScratch
+    ) {
+        val paint = scratch.badgeTextPaint
+        paint.textSize = 10f * density
+        paint.color = textColor
         val tw = paint.measureText(text)
-        val rect = RectF(cx - tw * 0.5f - 5f * density, cy - 8.5f * density, cx + tw * 0.5f + 5f * density, cy + 8.5f * density)
-        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xD9090D16.toInt() }
-        val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 1f * density
-            color = 0xFF334155.toInt()
-        }
-        canvas.drawRoundRect(rect, 4.5f * density, 4.5f * density, bg)
+        val rect = scratch.scratchRect
+        rect.set(cx - tw * 0.5f - 5f * density, cy - 8.5f * density, cx + tw * 0.5f + 5f * density, cy + 8.5f * density)
+        val border = scratch.badgeBorderPaint
+        border.strokeWidth = 1f * density
+        canvas.drawRoundRect(rect, 4.5f * density, 4.5f * density, scratch.badgeBgPaint)
         canvas.drawRoundRect(rect, 4.5f * density, 4.5f * density, border)
         val fm = paint.fontMetrics
         canvas.drawText(text, cx, rect.centerY() - (fm.ascent + fm.descent) * 0.5f, paint)
     }
 
-    private fun drawArrowHead(canvas: Canvas, x1: Float, y1: Float, x2: Float, y2: Float, colorArgb: Int, headSize: Float) {
+    private fun drawArrowHead(
+        canvas: Canvas,
+        x1: Float,
+        y1: Float,
+        x2: Float,
+        y2: Float,
+        colorArgb: Int,
+        headSize: Float,
+        scratch: RenderScratch
+    ) {
         val angle = atan2((y2 - y1).toDouble(), (x2 - x1).toDouble())
         val spread = 0.42
         val lx = x2 - (headSize * cos(angle - spread)).toFloat()
         val ly = y2 - (headSize * sin(angle - spread)).toFloat()
         val rx = x2 - (headSize * cos(angle + spread)).toFloat()
         val ry = y2 - (headSize * sin(angle + spread)).toFloat()
-        val path = Path().apply { moveTo(x2, y2); lineTo(lx, ly); lineTo(rx, ry); close() }
-        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = colorArgb }
+        val path = scratch.scratchPath
+        path.rewind()
+        path.moveTo(x2, y2); path.lineTo(lx, ly); path.lineTo(rx, ry); path.close()
+        val fill = scratch.fillPaint
+        fill.color = colorArgb
         canvas.drawPath(path, fill)
     }
 
@@ -993,7 +1150,8 @@ object Geo2DRenderer {
         height: Float,
         density: Float,
         uiState: Geo2DUiState,
-        exportTitle: String
+        exportTitle: String,
+        scratch: RenderScratch
     ) {
         val activeFns = uiState.snapshot.functions.filter { it.visible && it.expression.isNotBlank() }
         val summary = if (activeFns.isNotEmpty()) {
@@ -1005,7 +1163,7 @@ object Geo2DRenderer {
         val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xFFA5B4FC.toInt()
             textSize = 13f * density
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            typeface = scratch.defaultBold
         }
         val infoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xFF38BDF8.toInt()
@@ -1017,12 +1175,13 @@ object Geo2DRenderer {
         val cardH = 54f * density
         val cardX = 16f * density
         val cardY = height - cardH - 16f * density
-        val rect = RectF(cardX, cardY, cardX + cardW, cardY + cardH)
-        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xE60F172A.toInt() }
-        val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
+        val rect = scratch.scratchRect
+        rect.set(cardX, cardY, cardX + cardW, cardY + cardH)
+        val bg = scratch.fillPaint.apply { color = 0xE60F172A.toInt() }
+        val border = scratch.strokePaint.apply {
             strokeWidth = 1.2f * density
             color = 0xFF334155.toInt()
+            pathEffect = null
         }
         canvas.drawRoundRect(rect, 10f * density, 10f * density, bg)
         canvas.drawRoundRect(rect, 10f * density, 10f * density, border)
