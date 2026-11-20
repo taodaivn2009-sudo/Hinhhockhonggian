@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "HinhHoc3D"
+rootProject.name = "ToolToan"
 
 include(":app")

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.GeometryPersistence
 import com.example.engine.*
+import com.example.geo2d.*
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -20,7 +21,7 @@ class ExampleRobolectricTest {
     fun `read app name from context`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
-        assertEquals("Hình Học 3D", appName)
+        assertEquals("Tool Toán", appName)
     }
 
     @Test
@@ -99,5 +100,45 @@ class ExampleRobolectricTest {
             assertTrue("${shape.key} OBJ should contain vertices", obj.contains("\nv "))
             assertTrue("${shape.key} OBJ should contain faces", obj.contains("\nf "))
         }
+    }
+
+    @Test
+    fun `2d arbitrary function parser evaluates complex expressions and finds roots`() {
+        val r1 = MathExprParser.parse("2x^2 - 8")
+        assertTrue(r1 is MathExprParser.ParseResult.Ok)
+        val e1 = (r1 as MathExprParser.ParseResult.Ok).expr
+        assertEquals(0.0, e1.eval(2.0), 1e-6)
+        assertEquals(0.0, e1.eval(-2.0), 1e-6)
+        assertEquals(-8.0, e1.eval(0.0), 1e-6)
+
+        val r2 = MathExprParser.parse("y = 2sin(pi/2) + sqrt(9) - | -4 |")
+        assertTrue(r2 is MathExprParser.ParseResult.Ok)
+        val e2 = (r2 as MathExprParser.ParseResult.Ok).expr
+        assertEquals(1.0, e2.eval(0.0), 1e-6)
+
+        val keyPoints = MathExprParser.analyzeFunction(e1, -5.0, 5.0, -10.0, 10.0, "#38BDF8")
+        val roots = keyPoints.filter { it.type == KeyPointType.ROOT }
+        assertEquals(2, roots.size)
+        assertTrue(keyPoints.any { it.type == KeyPointType.LOCAL_MIN })
+    }
+
+    @Test
+    fun `2d snapshot json serialization round trip preserves points objects and functions`() {
+        val p1 = Geo2DPoint("p1", "A", 1f, 2f)
+        val p2 = Geo2DPoint("p2", "B", 4f, 6f)
+        val snap = Geo2DSnapshot(
+            points = listOf(p1, p2),
+            objects = listOf(
+                Geo2DObject.Segment("s1", "p1", "p2"),
+                Geo2DObject.Circle("c1", "p1", fixedRadius = 3f)
+            ),
+            functions = listOf(GraphFunction("f1", "f1(x)", "x^3 - 3x", "#38BDF8", true))
+        )
+        val json = Geo2DPersistence.snapshotToJson(snap)
+        val restored = Geo2DPersistence.jsonToSnapshot(json)
+        assertEquals(2, restored.points.size)
+        assertEquals(2, restored.objects.size)
+        assertEquals(1, restored.functions.size)
+        assertEquals("x^3 - 3x", restored.functions.first().expression)
     }
 }

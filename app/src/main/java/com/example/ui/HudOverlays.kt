@@ -31,6 +31,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.engine.*
+import com.example.geo2d.MathWorkspace
+import com.example.geo2d.WorkspaceModeSwitch
 import com.example.ui.panes.SensitivityControlsSection
 import com.example.ui.panes.ShapePreviewThumbnail
 import com.example.ui.theme.*
@@ -43,6 +45,7 @@ fun TopStudioHeader(
     uiState: GeometryUiState,
     viewModel: GeometryViewModel,
     isCompactWidth: Boolean,
+    onSwitchWorkspace: (MathWorkspace) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val m = uiState.scene.metrics
@@ -55,17 +58,21 @@ fun TopStudioHeader(
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        // Row 1: Current Shape Selector Pill + Quick Undo/Redo/Reset/Save Actions
+        // Row 1: 3D/2D Mode Switcher + Current Shape Selector Pill + Quick Undo/Redo/Reset/Save Actions
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            WorkspaceModeSwitch(
+                current = MathWorkspace.SPACE_3D,
+                onSelect = onSwitchWorkspace
+            )
+
             // Interactive Shape Title Pill (opens Shapes pane)
             Row(
                 modifier = Modifier
-                    .weight(1f, fill = false)
-                    .padding(end = 8.dp)
+                    .weight(1f)
                     .testTag("top_shape_selector_pill")
                     .clip(RoundedCornerShape(12.dp))
                     .background(SlateDark.copy(alpha = 0.92f))

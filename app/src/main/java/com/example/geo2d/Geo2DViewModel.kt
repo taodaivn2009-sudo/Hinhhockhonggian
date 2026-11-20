@@ -1,0 +1,714 @@
+package com.example.geo2d
+
+import android.app.Application
+import android.graphics.Bitmap
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.example.data.GeometryPersistence
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.hypot
+import kotlin.math.round
+import kotlin.math.sqrt
+
+class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val persistence = Geo2DPersistence(application.applicationContext)
+    private val sharedFolderPrefs = GeometryPersistence(application.applicationContext)
+
+    private val _uiState = MutableStateFlow(Geo2DUiState())
+    val uiState: StateFlow<Geo2DUiState> = _uiState.asStateFlow()
+
+    private val undoStack = ArrayDeque<Geo2DSnapshot>()
+    private val redoStack = ArrayDeque<Geo2DSnapshot>()
+    private val maxHistory = 40
+    private var toastJob: Job? = null
+    private var idSeq = 100
+
+    private val palette = listOf(
+        "#38BDF8", "#10B981", "#F43F5E", "#FBBF24", "#A78BFA", "#FB923C", "#2DD4BF"
+    )
+
+    init {
+        val restored = persistence.loadAutoSession()
+        val savedFolder = loadValidExportFolder()
+        _uiState.value = _uiState.value.copy(
+            snapshot = restored ?: Geo2DSnapshot(),
+            exportFolderUri = savedFolder?.first,
+            exportFolderLabel = savedFolder?.second
+        )
+    }
+
+    private fun loadValidExportFolder(): Pair<String, String>? {
+        val saved = sharedFolderPrefs.loadExportFolder() ?: return null
+        val valid = getApplication<Application>().contentResolver.persistedUriPermissions.any {
+            it.uri.toString() == saved.first && it.isWritePermission
+        }
+        return if (valid) saved else null
+    }
+
+    fun refreshExportFolder() {
+        val folder = loadValidExportFolder()
+        _uiState.update { it.copy(exportFolderUri = folder?.first, exportFolderLabel = folder?.second) }
+    }
+
+    fun setExportFolder(uriString: String, label: String) {
+        sharedFolderPrefs.saveExportFolder(uriString, label)
+        _uiState.update { it.copy(exportFolderUri = uriString, exportFolderLabel = label) }
+        showToast("Đã chọn vị trí lưu: $label")
+    }
+
+    fun clearExportFolder() {
+        sharedFolderPrefs.clearExportFolder()
+        _uiState.update { it.copy(exportFolderUri = null, exportFolderLabel = null) }
+        showToast("Đã chuyển sang chế độ hỏi vị trí mỗi lần lưu")
+    }
+
+    private fun nextId(prefix: String): String = "${prefix}_${System.currentTimeMillis()}_${idSeq++}"
+
+    private fun nextPointName(existing: List<Geo2DPoint>): String {
+        val used = existing.map { it.name }.toSet()
+        for (c in 'A'..'Z') {
+            if (c != 'O' && c.toString() !in used) return c.toString()
+        }
+        var idx = 1
+        while ("P$idx" in used) idx++
+        return "P$idx"
+    }
+
+    private fun pushHistory(snap: Geo2DSnapshot = _uiState.value.snapshot) {
+        if (undoStack.lastOrNull() == snap) return
+        undoStack.addLast(snap)
+        if (undoStack.size > maxHistory) undoStack.removeFirst()
+        redoStack.clear()
+    }
+
+    private fun updateSnapshot(
+        recordHistory: Boolean = false,
+        autoSave: Boolean = true,
+        transform: (Geo2DSnapshot) -> Geo2DSnapshot
+    ) {
+        val current = _uiState.value.snapshot
+        if (recordHistory) pushHistory(current)
+        val next = transform(current)
+        _uiState.update { st ->
+            st.copy(
+                snapshot = next,
+                canUndo = undoStack.isNotEmpty(),
+                canRedo = redoStack.isNotEmpty()
+            )
+        }
+        if (autoSave) persistence.saveAutoSession(next)
+    }
+
+    fun undo() {
+        if (undoStack.isEmpty()) return
+        redoStack.addLast(_uiState.value.snapshot)
+        val prev = undoStack.removeLast()
+        _uiState.update { st ->
+            st.copy(
+                snapshot = prev,
+                pendingPointIds = emptyList(),
+                canUndo = undoStack.isNotEmpty(),
+                canRedo = redoStack.isNotEmpty()
+            )
+        }
+        persistence.saveAutoSession(prev)
+    }
+
+    fun redo() {
+        if (redoStack.isEmpty()) return
+        undoStack.addLast(_uiState.value.snapshot)
+        val next = redoStack.removeLast()
+        _uiState.update { st ->
+            st.copy(
+                snapshot = next,
+                pendingPointIds = emptyList(),
+                canUndo = undoStack.isNotEmpty(),
+                canRedo = redoStack.isNotEmpty()
+            )
+        }
+        persistence.saveAutoSession(next)
+    }
+
+    fun showToast(msg: String) {
+        toastJob?.cancel()
+        _uiState.update { it.copy(toastMessage = msg) }
+        toastJob = viewModelScope.launch {
+            delay(2400)
+            _uiState.update { it.copy(toastMessage = null) }
+        }
+    }
+
+    // ================= UI TABS & TOOL SELECTION =================
+    fun toggleTab(tab: Geo2DTab) {
+        _uiState.update { st ->
+            st.copy(activeTab = if (st.activeTab == tab) null else tab)
+        }
+    }
+
+    fun closeTab() {
+        _uiState.update { it.copy(activeTab = null) }
+    }
+
+    fun setTool(tool: Geo2DTool) {
+        _uiState.update { st ->
+            st.copy(
+                activeTool = tool,
+                pendingPointIds = emptyList(),
+                draggingPointId = null,
+                traceX = if (tool == Geo2DTool.TRACE_GRAPH) st.traceX ?: st.snapshot.camera.centerX.toDouble() else null,
+                traceResults = if (tool == Geo2DTool.TRACE_GRAPH) evaluateTrace(st.snapshot, st.traceX ?: st.snapshot.camera.centerX.toDouble()) else emptyList()
+            )
+        }
+    }
+
+    fun clearTrace() {
+        _uiState.update { it.copy(traceX = null, traceResults = emptyList()) }
+    }
+
+    // ================= CAMERA & DISPLAY TOGGLES =================
+    fun panCamera(dxPx: Float, dyPx: Float) {
+        val sens = _uiState.value.snapshot.sensitivity.pan
+        updateSnapshot(recordHistory = false, autoSave = false) { s ->
+            val ppu = s.camera.pixelsPerUnit
+            s.copy(
+                camera = s.camera.copy(
+                    centerX = s.camera.centerX - (dxPx * sens) / ppu,
+                    centerY = s.camera.centerY + (dyPx * sens) / ppu
+                )
+            )
+        }
+    }
+
+    fun zoomCamera(zoomFactor: Float, focalX: Float, focalY: Float, width: Float, height: Float) {
+        val sens = _uiState.value.snapshot.sensitivity.zoom
+        val adjustedZoom = 1f + (zoomFactor - 1f) * sens
+        if (adjustedZoom <= 0.05f) return
+        updateSnapshot(recordHistory = false, autoSave = false) { s ->
+            val oldCam = s.camera
+            val beforeWorld = Geo2DRenderer.screenToWorld(focalX, focalY, oldCam, width, height)
+            val newPpu = (oldCam.pixelsPerUnit * adjustedZoom).coerceIn(14f, 360f)
+            val newCenterX = beforeWorld.x - (focalX - width * 0.5f) / newPpu
+            val newCenterY = beforeWorld.y + (focalY - height * 0.5f) / newPpu
+            s.copy(camera = Geo2DCamera(newCenterX, newCenterY, newPpu))
+        }
+    }
+
+    fun stepZoom(zoomIn: Boolean) {
+        val sens = _uiState.value.snapshot.sensitivity.zoom
+        val factor = if (zoomIn) (1f + 0.25f * sens) else (1f / (1f + 0.25f * sens))
+        updateSnapshot(recordHistory = false, autoSave = true) { s ->
+            s.copy(camera = s.camera.copy(pixelsPerUnit = (s.camera.pixelsPerUnit * factor).coerceIn(14f, 360f)))
+        }
+    }
+
+    fun resetView() {
+        updateSnapshot(recordHistory = false, autoSave = true) { s ->
+            s.copy(camera = Geo2DCamera())
+        }
+        showToast("Đã đưa hệ trục về tâm O(0; 0)")
+    }
+
+    fun toggleAxes() = updateSnapshot { it.copy(showAxes = !it.showAxes) }
+    fun toggleGrid() = updateSnapshot { it.copy(showGrid = !it.showGrid) }
+    fun toggleSnap() = updateSnapshot { it.copy(snapToGrid = !it.snapToGrid) }
+    fun togglePointCoords() = updateSnapshot { it.copy(showPointCoords = !it.showPointCoords) }
+    fun toggleMeasurements() = updateSnapshot { it.copy(showMeasurements = !it.showMeasurements) }
+    fun toggleKeyGraphPoints() = updateSnapshot { it.copy(showKeyGraphPoints = !it.showKeyGraphPoints) }
+    fun toggleTangentOnTrace() = updateSnapshot { it.copy(showTangentOnTrace = !it.showTangentOnTrace) }
+
+    fun updateSensitivity(
+        pan: Float = _uiState.value.snapshot.sensitivity.pan,
+        zoom: Float = _uiState.value.snapshot.sensitivity.zoom,
+        touchRadius: Float = _uiState.value.snapshot.sensitivity.touchRadius
+    ) {
+        updateSnapshot(recordHistory = false, autoSave = true) { s ->
+            s.copy(
+                sensitivity = Geo2DSensitivity(
+                    pan = pan.coerceIn(0.4f, 2.2f),
+                    zoom = zoom.coerceIn(0.4f, 2.2f),
+                    touchRadius = touchRadius.coerceIn(0.7f, 1.7f)
+                )
+            )
+        }
+    }
+
+    // ================= CANVAS GESTURES & INTERACTIVE DRAWING =================
+    private fun findPointAtScreen(
+        sx: Float,
+        sy: Float,
+        width: Float,
+        height: Float,
+        density: Float
+    ): Geo2DPoint? {
+        val snap = _uiState.value.snapshot
+        val hitRadius = 26f * density * snap.sensitivity.touchRadius
+        var best: Geo2DPoint? = null
+        var bestDist = hitRadius
+        snap.points.forEach { pt ->
+            val sp = Geo2DRenderer.worldToScreen(pt.x, pt.y, snap.camera, width, height)
+            val d = hypot(sp.x - sx, sp.y - sy)
+            if (d < bestDist) {
+                bestDist = d
+                best = pt
+            }
+        }
+        return best
+    }
+
+    private fun snapCoord(raw: Vec2, density: Float): Vec2 {
+        val snap = _uiState.value.snapshot
+        if (!snap.snapToGrid) return Vec2(round2(raw.x), round2(raw.y))
+        val major = Geo2DRenderer.niceGridStep(snap.camera.pixelsPerUnit, density)
+        val snapStep = (major / 2.0).toFloat()
+        val sx = (round(raw.x / snapStep) * snapStep)
+        val sy = (round(raw.y / snapStep) * snapStep)
+        val tol = snapStep * 0.35f
+        return Vec2(
+            x = if (abs(raw.x - sx) <= tol) round2(sx) else round2(raw.x),
+            y = if (abs(raw.y - sy) <= tol) round2(sy) else round2(raw.y)
+        )
+    }
+
+    fun onCanvasTap(sx: Float, sy: Float, width: Float, height: Float, density: Float) {
+        val st = _uiState.value
+        val snap = st.snapshot
+        val rawWorld = Geo2DRenderer.screenToWorld(sx, sy, snap.camera, width, height)
+
+        if (st.activeTool == Geo2DTool.TRACE_GRAPH) {
+            updateTraceAtScreenX(sx, width)
+            return
+        }
+
+        if (st.activeTool == Geo2DTool.PAN_SELECT) {
+            // If user taps near a graphed curve when no point hit, show quick trace!
+            val hitPt = findPointAtScreen(sx, sy, width, height, density)
+            if (hitPt != null) {
+                showToast("${hitPt.name}(${Geo2DMathHelpers.formatNum(hitPt.x)}; ${Geo2DMathHelpers.formatNum(hitPt.y)})")
+                clearTrace()
+            } else {
+                val results = evaluateTrace(snap, rawWorld.x.toDouble())
+                val nearCurve = results.any { res ->
+                    res.y.isFinite() && abs(Geo2DRenderer.worldToScreen(res.x.toFloat(), res.y.toFloat(), snap.camera, width, height).y - sy) < 28f * density
+                }
+                if (nearCurve) {
+                    _uiState.update { it.copy(traceX = rawWorld.x.toDouble(), traceResults = results) }
+                } else {
+                    clearTrace()
+                }
+            }
+            return
+        }
+
+        // Helper: resolve clicked existing point OR create a new point at tapped position
+        fun resolveOrCreatePoint(): String {
+            val existing = findPointAtScreen(sx, sy, width, height, density)
+            if (existing != null) return existing.id
+            val snapped = snapCoord(rawWorld, density)
+            val newPt = Geo2DPoint(
+                id = nextId("pt"),
+                name = nextPointName(_uiState.value.snapshot.points),
+                x = snapped.x,
+                y = snapped.y
+            )
+            updateSnapshot(recordHistory = true) { s -> s.copy(points = s.points + newPt) }
+            return newPt.id
+        }
+
+        when (st.activeTool) {
+            Geo2DTool.ADD_POINT -> {
+                val snapped = snapCoord(rawWorld, density)
+                val name = nextPointName(snap.points)
+                val pt = Geo2DPoint(nextId("pt"), name, snapped.x, snapped.y)
+                updateSnapshot(recordHistory = true) { it.copy(points = it.points + pt) }
+                showToast("Đã đặt điểm $name(${Geo2DMathHelpers.formatNum(pt.x)}; ${Geo2DMathHelpers.formatNum(pt.y)})")
+            }
+
+            Geo2DTool.SEGMENT, Geo2DTool.LINE, Geo2DTool.RAY, Geo2DTool.VECTOR, Geo2DTool.CIRCLE -> {
+                val ptId = resolveOrCreatePoint()
+                val pending = _uiState.value.pendingPointIds
+                if (pending.isEmpty()) {
+                    _uiState.update { it.copy(pendingPointIds = listOf(ptId)) }
+                } else {
+                    val firstId = pending.first()
+                    if (firstId == ptId) {
+                        _uiState.update { it.copy(pendingPointIds = emptyList()) }
+                        return
+                    }
+                    val newObj: Geo2DObject = when (st.activeTool) {
+                        Geo2DTool.SEGMENT -> Geo2DObject.Segment(nextId("seg"), firstId, ptId)
+                        Geo2DTool.LINE -> Geo2DObject.Line(nextId("ln"), firstId, ptId)
+                        Geo2DTool.RAY -> Geo2DObject.Ray(nextId("ray"), firstId, ptId)
+                        Geo2DTool.VECTOR -> Geo2DObject.VectorObj(nextId("vec"), firstId, ptId)
+                        else -> Geo2DObject.Circle(nextId("cir"), firstId, edgePointId = ptId)
+                    }
+                    updateSnapshot(recordHistory = true) { s -> s.copy(objects = s.objects + newObj) }
+                    _uiState.update { it.copy(pendingPointIds = emptyList()) }
+                }
+            }
+
+            Geo2DTool.POLYGON -> {
+                val hitExisting = findPointAtScreen(sx, sy, width, height, density)
+                val pending = _uiState.value.pendingPointIds
+                if (hitExisting != null && pending.size >= 3 && hitExisting.id == pending.first()) {
+                    finishPendingPolygon()
+                    return
+                }
+                val ptId = hitExisting?.id ?: resolveOrCreatePoint()
+                if (ptId !in pending) {
+                    _uiState.update { it.copy(pendingPointIds = pending + ptId) }
+                }
+            }
+
+            Geo2DTool.MEASURE_ANGLE -> {
+                val ptId = resolveOrCreatePoint()
+                val pending = _uiState.value.pendingPointIds
+                if (ptId in pending) return
+                val updated = pending + ptId
+                if (updated.size < 3) {
+                    _uiState.update { it.copy(pendingPointIds = updated) }
+                } else {
+                    val ang = Geo2DObject.AngleMeasure(nextId("ang"), updated[0], updated[1], updated[2])
+                    updateSnapshot(recordHistory = true) { s -> s.copy(objects = s.objects + ang) }
+                    _uiState.update { it.copy(pendingPointIds = emptyList()) }
+                }
+            }
+
+            else -> Unit
+        }
+    }
+
+    fun finishPendingPolygon() {
+        val pending = _uiState.value.pendingPointIds
+        if (pending.size < 3) {
+            showToast("Cần ít nhất 3 đỉnh để tạo đa giác")
+            return
+        }
+        val poly = Geo2DObject.Polygon(nextId("poly"), pending)
+        updateSnapshot(recordHistory = true) { s -> s.copy(objects = s.objects + poly) }
+        _uiState.update { it.copy(pendingPointIds = emptyList()) }
+        showToast("Đã tạo đa giác ${pending.size} đỉnh!")
+    }
+
+    fun onDragStart(sx: Float, sy: Float, width: Float, height: Float, density: Float): Boolean {
+        val st = _uiState.value
+        if (st.activeTool == Geo2DTool.TRACE_GRAPH) {
+            updateTraceAtScreenX(sx, width)
+            return true
+        }
+        if (st.activeTool == Geo2DTool.PAN_SELECT) {
+            val hit = findPointAtScreen(sx, sy, width, height, density)
+            if (hit != null) {
+                pushHistory()
+                _uiState.update { it.copy(draggingPointId = hit.id, canUndo = undoStack.isNotEmpty(), canRedo = false) }
+                return true
+            }
+        }
+        return false
+    }
+
+    fun onDragMove(sx: Float, sy: Float, width: Float, height: Float, density: Float) {
+        val st = _uiState.value
+        if (st.activeTool == Geo2DTool.TRACE_GRAPH) {
+            updateTraceAtScreenX(sx, width)
+            return
+        }
+        val dragId = st.draggingPointId ?: return
+        val rawWorld = Geo2DRenderer.screenToWorld(sx, sy, st.snapshot.camera, width, height)
+        val snapped = snapCoord(rawWorld, density)
+        updateSnapshot(recordHistory = false, autoSave = false) { s ->
+            s.copy(
+                points = s.points.map { p ->
+                    if (p.id == dragId) p.copy(x = snapped.x, y = snapped.y) else p
+                }
+            )
+        }
+    }
+
+    fun onDragEnd() {
+        if (_uiState.value.draggingPointId != null) {
+            _uiState.update { it.copy(draggingPointId = null) }
+            persistence.saveAutoSession(_uiState.value.snapshot)
+        }
+    }
+
+    private fun updateTraceAtScreenX(sx: Float, width: Float) {
+        val snap = _uiState.value.snapshot
+        val wx = Geo2DRenderer.screenToWorld(sx, 0f, snap.camera, width, 1000f).x.toDouble()
+        val snappedX = if (snap.snapToGrid) round(wx * 20.0) / 20.0 else wx
+        _uiState.update { it.copy(traceX = snappedX, traceResults = evaluateTrace(snap, snappedX)) }
+    }
+
+    private fun evaluateTrace(snap: Geo2DSnapshot, x: Double): List<TraceResult> {
+        return snap.functions.mapNotNull { fn ->
+            if (!fn.visible || fn.expression.isBlank()) return@mapNotNull null
+            val parsed = MathExprParser.parse(fn.expression)
+            if (parsed is MathExprParser.ParseResult.Ok) {
+                val y = parsed.expr.eval(x)
+                val slope = parsed.expr.derivative(x)
+                TraceResult(fn.id, fn.label, fn.expression, fn.colorHex, x, y, slope)
+            } else null
+        }
+    }
+
+    // ================= FUNCTIONS MANAGEMENT (ARBITRARY f(x)) =================
+    fun addFunction(expression: String, colorHex: String? = null) {
+        val trimmed = expression.trim()
+        if (trimmed.isEmpty()) {
+            showToast("Vui lòng nhập biểu thức hàm số!")
+            return
+        }
+        val parsed = MathExprParser.parse(trimmed)
+        if (parsed is MathExprParser.ParseResult.Error) {
+            showToast("Lỗi hàm số: ${parsed.message}")
+            return
+        }
+        val existing = _uiState.value.snapshot.functions
+        val nextNum = existing.size + 1
+        val color = colorHex ?: palette[(nextNum - 1) % palette.size]
+        val fn = GraphFunction(
+            id = nextId("fn"),
+            label = "f$nextNum(x)",
+            expression = trimmed,
+            colorHex = color,
+            visible = true
+        )
+        updateSnapshot(recordHistory = true) { s -> s.copy(functions = s.functions + fn) }
+        showToast("Đã vẽ đồ thị y = $trimmed")
+    }
+
+    fun updateFunctionExpression(id: String, newExpr: String) {
+        updateSnapshot(recordHistory = false) { s ->
+            s.copy(
+                functions = s.functions.map { if (it.id == id) it.copy(expression = newExpr) else it }
+            )
+        }
+    }
+
+    fun toggleFunctionVisibility(id: String) {
+        updateSnapshot(recordHistory = true) { s ->
+            s.copy(
+                functions = s.functions.map { if (it.id == id) it.copy(visible = !it.visible) else it }
+            )
+        }
+    }
+
+    fun cycleFunctionColor(id: String) {
+        updateSnapshot(recordHistory = false) { s ->
+            s.copy(
+                functions = s.functions.map { fn ->
+                    if (fn.id == id) {
+                        val idx = palette.indexOf(fn.colorHex)
+                        fn.copy(colorHex = palette[(idx + 1) % palette.size])
+                    } else fn
+                }
+            )
+        }
+    }
+
+    fun deleteFunction(id: String) {
+        updateSnapshot(recordHistory = true) { s ->
+            s.copy(functions = s.functions.filterNot { it.id == id })
+        }
+    }
+
+    // ================= MANUAL COORDS, CIRCLES, & 2D PRESETS =================
+    fun addManualPoint(nameRaw: String, x: Float, y: Float) {
+        val name = nameRaw.trim().ifEmpty { nextPointName(_uiState.value.snapshot.points) }
+        val pt = Geo2DPoint(nextId("pt"), name, round2(x), round2(y))
+        updateSnapshot(recordHistory = true) { s -> s.copy(points = s.points + pt) }
+        showToast("Đã thêm điểm $name(${Geo2DMathHelpers.formatNum(pt.x)}; ${Geo2DMathHelpers.formatNum(pt.y)})")
+    }
+
+    fun addManualCircle(cx: Float, cy: Float, radius: Float) {
+        if (radius <= 0.05f) {
+            showToast("Bán kính R phải lớn hơn 0")
+            return
+        }
+        val centerName = if (_uiState.value.snapshot.points.none { it.name == "I" }) "I" else nextPointName(_uiState.value.snapshot.points)
+        val center = Geo2DPoint(nextId("pt"), centerName, round2(cx), round2(cy), "#10B981")
+        val circle = Geo2DObject.Circle(nextId("cir"), center.id, edgePointId = null, fixedRadius = round2(radius))
+        updateSnapshot(recordHistory = true) { s ->
+            s.copy(points = s.points + center, objects = s.objects + circle)
+        }
+        showToast("Đã vẽ đường tròn tâm $centerName, R = ${Geo2DMathHelpers.formatNum(radius)}")
+    }
+
+    fun deletePoint(pointId: String) {
+        updateSnapshot(recordHistory = true) { s ->
+            s.copy(
+                points = s.points.filterNot { it.id == pointId },
+                objects = s.objects.filterNot { obj ->
+                    when (obj) {
+                        is Geo2DObject.Segment -> obj.p1Id == pointId || obj.p2Id == pointId
+                        is Geo2DObject.Line -> obj.p1Id == pointId || obj.p2Id == pointId
+                        is Geo2DObject.Ray -> obj.startId == pointId || obj.throughId == pointId
+                        is Geo2DObject.VectorObj -> obj.fromId == pointId || obj.toId == pointId
+                        is Geo2DObject.Circle -> obj.centerId == pointId || obj.edgePointId == pointId
+                        is Geo2DObject.Polygon -> pointId in obj.pointIds
+                        is Geo2DObject.AngleMeasure -> obj.pAId == pointId || obj.vertexId == pointId || obj.pCId == pointId
+                    }
+                }
+            )
+        }
+    }
+
+    fun deleteObject(objectId: String) {
+        updateSnapshot(recordHistory = true) { s ->
+            s.copy(objects = s.objects.filterNot { it.id == objectId })
+        }
+    }
+
+    fun clearAllGeometryAndGraphs() {
+        updateSnapshot(recordHistory = true) { s ->
+            s.copy(points = emptyList(), objects = emptyList(), functions = emptyList())
+        }
+        clearTrace()
+        showToast("Đã xóa trắng mặt phẳng Oxy")
+    }
+
+    fun applyPreset(preset: Geo2DPreset) {
+        val pts = mutableListOf<Geo2DPoint>()
+        val objs = mutableListOf<Geo2DObject>()
+        var keepFuncs = _uiState.value.snapshot.functions
+
+        when (preset) {
+            Geo2DPreset.EMPTY_OXY -> {
+                keepFuncs = emptyList()
+            }
+            Geo2DPreset.EQUILATERAL_TRIANGLE -> {
+                val h = (2f * sqrt(3f))
+                val a = Geo2DPoint(nextId("p"), "A", 0f, round2(h * 0.66f))
+                val b = Geo2DPoint(nextId("p"), "B", -2f, round2(-h * 0.34f))
+                val c = Geo2DPoint(nextId("p"), "C", 2f, round2(-h * 0.34f))
+                pts.addAll(listOf(a, b, c))
+                objs.add(Geo2DObject.Polygon(nextId("poly"), listOf(a.id, b.id, c.id)))
+                objs.add(Geo2DObject.AngleMeasure(nextId("ang"), b.id, a.id, c.id))
+            }
+            Geo2DPreset.RIGHT_TRIANGLE -> {
+                val a = Geo2DPoint(nextId("p"), "A", -2f, -1f)
+                val b = Geo2DPoint(nextId("p"), "B", -2f, 2f)
+                val c = Geo2DPoint(nextId("p"), "C", 2f, -1f)
+                pts.addAll(listOf(a, b, c))
+                objs.add(Geo2DObject.Polygon(nextId("poly"), listOf(a.id, b.id, c.id)))
+                objs.add(Geo2DObject.AngleMeasure(nextId("ang"), b.id, a.id, c.id))
+            }
+            Geo2DPreset.SQUARE -> {
+                val a = Geo2DPoint(nextId("p"), "A", -2f, -2f)
+                val b = Geo2DPoint(nextId("p"), "B", 2f, -2f)
+                val c = Geo2DPoint(nextId("p"), "C", 2f, 2f)
+                val d = Geo2DPoint(nextId("p"), "D", -2f, 2f)
+                pts.addAll(listOf(a, b, c, d))
+                objs.add(Geo2DObject.Polygon(nextId("poly"), listOf(a.id, b.id, c.id, d.id)))
+                objs.add(Geo2DObject.Segment(nextId("seg"), a.id, c.id, dashed = true, colorHex = "#94A3B8"))
+                objs.add(Geo2DObject.Segment(nextId("seg"), b.id, d.id, dashed = true, colorHex = "#94A3B8"))
+            }
+            Geo2DPreset.RECTANGLE -> {
+                val a = Geo2DPoint(nextId("p"), "A", -3f, -1.5f)
+                val b = Geo2DPoint(nextId("p"), "B", 3f, -1.5f)
+                val c = Geo2DPoint(nextId("p"), "C", 3f, 1.5f)
+                val d = Geo2DPoint(nextId("p"), "D", -3f, 1.5f)
+                pts.addAll(listOf(a, b, c, d))
+                objs.add(Geo2DObject.Polygon(nextId("poly"), listOf(a.id, b.id, c.id, d.id)))
+            }
+            Geo2DPreset.PARALLELOGRAM -> {
+                val a = Geo2DPoint(nextId("p"), "A", -3f, -1.5f)
+                val b = Geo2DPoint(nextId("p"), "B", 1.5f, -1.5f)
+                val c = Geo2DPoint(nextId("p"), "C", 3f, 1.5f)
+                val d = Geo2DPoint(nextId("p"), "D", -1.5f, 1.5f)
+                pts.addAll(listOf(a, b, c, d))
+                objs.add(Geo2DObject.Polygon(nextId("poly"), listOf(a.id, b.id, c.id, d.id)))
+            }
+            Geo2DPreset.RHOMBUS -> {
+                val a = Geo2DPoint(nextId("p"), "A", 0f, 2.5f)
+                val b = Geo2DPoint(nextId("p"), "B", 3.5f, 0f)
+                val c = Geo2DPoint(nextId("p"), "C", 0f, -2.5f)
+                val d = Geo2DPoint(nextId("p"), "D", -3.5f, 0f)
+                pts.addAll(listOf(a, b, c, d))
+                objs.add(Geo2DObject.Polygon(nextId("poly"), listOf(a.id, b.id, c.id, d.id)))
+                objs.add(Geo2DObject.Segment(nextId("seg"), a.id, c.id, dashed = true, colorHex = "#94A3B8"))
+                objs.add(Geo2DObject.Segment(nextId("seg"), b.id, d.id, dashed = true, colorHex = "#94A3B8"))
+            }
+            Geo2DPreset.ISOSCELES_TRAPEZOID -> {
+                val a = Geo2DPoint(nextId("p"), "A", -3f, -1.5f)
+                val b = Geo2DPoint(nextId("p"), "B", 3f, -1.5f)
+                val c = Geo2DPoint(nextId("p"), "C", 1.5f, 1.5f)
+                val d = Geo2DPoint(nextId("p"), "D", -1.5f, 1.5f)
+                pts.addAll(listOf(a, b, c, d))
+                objs.add(Geo2DObject.Polygon(nextId("poly"), listOf(a.id, b.id, c.id, d.id)))
+            }
+            Geo2DPreset.CIRCLE_TANGENT -> {
+                val iPt = Geo2DPoint(nextId("p"), "I", 0f, 0f, "#10B981")
+                val mPt = Geo2DPoint(nextId("p"), "M", 3f, 0f, "#38BDF8")
+                pts.addAll(listOf(iPt, mPt))
+                objs.add(Geo2DObject.Circle(nextId("cir"), iPt.id, edgePointId = mPt.id))
+            }
+        }
+
+        updateSnapshot(recordHistory = true) { s ->
+            s.copy(
+                points = pts,
+                objects = objs,
+                functions = keepFuncs,
+                camera = Geo2DCamera()
+            )
+        }
+        _uiState.update { it.copy(pendingPointIds = emptyList(), activeTab = null) }
+        showToast("Đã dựng: ${preset.title}")
+    }
+
+    // ================= SAVE / EXPORT / IMPORT (2D) =================
+    fun openSaveModal() {
+        refreshExportFolder()
+        _uiState.update { it.copy(saveModalOpen = true) }
+    }
+
+    fun closeSaveModal() {
+        _uiState.update { it.copy(saveModalOpen = false) }
+    }
+
+    fun updateCustomFileName(name: String) {
+        _uiState.update { it.copy(customFileName = name) }
+    }
+
+    fun sanitizedFileName(): String {
+        val raw = _uiState.value.customFileName.trim()
+        return if (raw.isEmpty()) "ToolToan-2D-Oxy" else raw.replace(Regex("[\\\\/:*?\"<>|]"), "-")
+    }
+
+    fun exportSnapshotJson(): String = Geo2DPersistence.snapshotToJson(_uiState.value.snapshot)
+
+    fun importSnapshotJson(jsonContent: String, fileName: String? = null) {
+        runCatching { Geo2DPersistence.jsonToSnapshot(jsonContent) }.onSuccess { loaded ->
+            pushHistory()
+            val cleanName = fileName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() }
+            _uiState.update { st ->
+                st.copy(
+                    snapshot = loaded,
+                    customFileName = cleanName ?: st.customFileName,
+                    saveModalOpen = false,
+                    pendingPointIds = emptyList(),
+                    canUndo = undoStack.isNotEmpty(),
+                    canRedo = redoStack.isNotEmpty()
+                )
+            }
+            persistence.saveAutoSession(loaded)
+            showToast("Đã mở file 2D ${fileName ?: "JSON"}!")
+        }.onFailure {
+            showToast("File JSON 2D không hợp lệ!")
+        }
+    }
+
+    fun renderExportBitmap(widthPx: Int, heightPx: Int, density: Float): Bitmap {
+        return Geo2DRenderer.renderToBitmap(widthPx, heightPx, density, _uiState.value, sanitizedFileName())
+    }
+
+    private fun round2(v: Float): Float = round(v * 100f) / 100f
+}

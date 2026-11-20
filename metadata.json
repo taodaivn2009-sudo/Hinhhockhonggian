@@ -1,6 +1,6 @@
 {
-  "name": "Hình Học 3D",
-  "description": "Mô phỏng hình học không gian 3D và tọa độ hóa Oxyz với 15 khối hình, tương tác kéo đỉnh ràng buộc, máy tính vectơ, mặt cắt và xuất PNG/JSON.",
+  "name": "Tool Toán",
+  "description": "Công cụ toán học trực quan tích hợp tách biệt Hình học không gian 3D (Oxyz) và Hình học phẳng 2D cùng vẽ đồ thị hàm số bất kỳ (Oxy), hỗ trợ xuất file PNG, JSON và mô hình 3D OBJ.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1,0 +1,808 @@
+package com.example.geo2d
+
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Color as AndroidColor
+import android.net.Uri
+import android.provider.DocumentsContract
+import android.provider.OpenableColumns
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.ShowChart
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.ui.ToastBanner
+import com.example.ui.theme.*
+import java.io.OutputStreamWriter
+import kotlin.math.abs
+import kotlin.math.hypot
+
+/**
+ * Shared compact segmented switch between the completely separated 3D Space and 2D Plane workspaces.
+ */
+@Composable
+fun WorkspaceModeSwitch(
+    current: MathWorkspace,
+    onSelect: (MathWorkspace) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(SlateDeepest.copy(alpha = 0.94f))
+            .border(1.dp, SlateBorder, RoundedCornerShape(10.dp))
+            .padding(2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        WorkspaceTabChip(
+            label = "3D",
+            selected = current == MathWorkspace.SPACE_3D,
+            activeColor = IndigoPrimary,
+            testTag = "switch_workspace_3d",
+            onClick = { onSelect(MathWorkspace.SPACE_3D) }
+        )
+        WorkspaceTabChip(
+            label = "2D",
+            selected = current == MathWorkspace.PLANE_2D,
+            activeColor = EmeraldDark,
+            testTag = "switch_workspace_2d",
+            onClick = { onSelect(MathWorkspace.PLANE_2D) }
+        )
+    }
+}
+
+@Composable
+private fun WorkspaceTabChip(
+    label: String,
+    selected: Boolean,
+    activeColor: Color,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (selected) activeColor else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .testTag(testTag),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) Color.White else SlateTextSecondary,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+@Composable
+fun Geo2DStudioScreen(
+    onSwitchWorkspace: (MathWorkspace) -> Unit,
+    viewModel: Geo2DViewModel = viewModel()
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val density = LocalDensity.current.density
+    var canvasSize by remember { mutableStateOf(IntSize(1080, 1920)) }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshExportFolder()
+    }
+
+    fun writePngToUri(uri: Uri, locationSuffix: String = "") {
+        runCatching {
+            val bmp = viewModel.renderExportBitmap(
+                widthPx = canvasSize.width.coerceAtLeast(1080),
+                heightPx = canvasSize.height.coerceAtLeast(1080),
+                density = density
+            )
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+            } ?: error("Không thể mở luồng ghi tệp")
+            bmp.recycle()
+        }.onSuccess {
+            viewModel.closeSaveModal()
+            viewModel.showToast("Đã lưu ảnh ${viewModel.sanitizedFileName()}.png$locationSuffix")
+        }.onFailure {
+            viewModel.showToast("Lỗi lưu ảnh PNG 2D!")
+        }
+    }
+
+    fun writeJsonToUri(uri: Uri, locationSuffix: String = "") {
+        runCatching {
+            val jsonText = viewModel.exportSnapshotJson()
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                OutputStreamWriter(out, Charsets.UTF_8).use { it.write(jsonText) }
+            } ?: error("Không thể mở luồng ghi tệp")
+        }.onSuccess {
+            viewModel.closeSaveModal()
+            viewModel.showToast("Đã lưu file ${viewModel.sanitizedFileName()}.json$locationSuffix")
+        }.onFailure {
+            viewModel.showToast("Lỗi lưu file 2D JSON!")
+        }
+    }
+
+    val pickFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri ->
+        if (treeUri != null) {
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            runCatching { context.contentResolver.takePersistableUriPermission(treeUri, flags) }
+            viewModel.setExportFolder(treeUri.toString(), formatGeo2DTreeLabel(treeUri))
+        }
+    }
+
+    val exportPngLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("image/png")
+    ) { uri -> if (uri != null) writePngToUri(uri) }
+
+    val exportJsonLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri -> if (uri != null) writeJsonToUri(uri) }
+
+    val importJsonLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                var displayName: String? = null
+                context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) displayName = c.getString(0)
+                }
+                val text = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                if (text != null) viewModel.importSnapshotJson(text, displayName)
+            }.onFailure {
+                viewModel.showToast("Không thể đọc file 2D JSON!")
+            }
+        }
+    }
+
+    fun handleExport(
+        forcePicker: Boolean,
+        mimeType: String,
+        ext: String,
+        onDirect: (Uri, String) -> Unit,
+        launchPicker: (String) -> Unit
+    ) {
+        val fileName = "${viewModel.sanitizedFileName()}.$ext"
+        val folderUri = uiState.exportFolderUri
+        val folderLabel = uiState.exportFolderLabel
+        if (!forcePicker && !folderUri.isNullOrBlank()) {
+            val created = runCatching {
+                val tree = Uri.parse(folderUri)
+                val parentId = DocumentsContract.getTreeDocumentId(tree)
+                val parentDoc = DocumentsContract.buildDocumentUriUsingTree(tree, parentId)
+                DocumentsContract.createDocument(context.contentResolver, parentDoc, mimeType, fileName)
+            }.getOrNull()
+            if (created != null) {
+                onDirect(created, if (folderLabel != null) " vào $folderLabel" else "")
+                return
+            }
+            viewModel.clearExportFolder()
+        }
+        launchPicker(fileName)
+    }
+
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val isCompactWidth = maxWidth < 600.dp
+        val maxSheetHeight = (maxHeight * 0.56f).coerceIn(280.dp, 480.dp)
+
+        // 1. Interactive 2D Oxy + Function Graph Canvas
+        Geo2DCanvasViewport(
+            uiState = uiState,
+            viewModel = viewModel,
+            onSizeChanged = { canvasSize = it },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // 2. Top 2D Studio Header with 3D/2D Switcher
+        Geo2DTopHeader(
+            uiState = uiState,
+            viewModel = viewModel,
+            onSwitchWorkspace = onSwitchWorkspace,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
+
+        // 3. Right Quick Controls
+        if (!isCompactWidth || uiState.activeTab == null) {
+            Geo2DRightQuickControls(
+                uiState = uiState,
+                viewModel = viewModel,
+                modifier = Modifier.align(Alignment.CenterEnd)
+            )
+        }
+
+        // 4. Adaptive Inspector Sheet (Functions / Presets / Measurements / Settings)
+        Geo2DInspectorSheet(
+            uiState = uiState,
+            viewModel = viewModel,
+            isCompactWidth = isCompactWidth,
+            maxSheetHeight = maxSheetHeight,
+            modifier = Modifier.align(if (isCompactWidth) Alignment.BottomCenter else Alignment.CenterStart)
+        )
+
+        // 5. 2-Tier Bottom 2D Studio Dock
+        Geo2DBottomDock(
+            uiState = uiState,
+            viewModel = viewModel,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
+
+        // 6. Floating Toast
+        ToastBanner(
+            message = uiState.toastMessage,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
+
+        // 7. 2D Save / Export Modal
+        Geo2DSaveExportModal(
+            uiState = uiState,
+            viewModel = viewModel,
+            onPickExportFolderClick = { pickFolderLauncher.launch(null) },
+            onExportPngClick = { forcePicker ->
+                handleExport(forcePicker, "image/png", "png", ::writePngToUri) { exportPngLauncher.launch(it) }
+            },
+            onExportJsonClick = { forcePicker ->
+                handleExport(forcePicker, "application/json", "json", ::writeJsonToUri) { exportJsonLauncher.launch(it) }
+            },
+            onImportJsonClick = { importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
+        )
+    }
+}
+
+@Composable
+private fun Geo2DCanvasViewport(
+    uiState: Geo2DUiState,
+    viewModel: Geo2DViewModel,
+    onSizeChanged: (IntSize) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current.density
+    val latestState by rememberUpdatedState(uiState)
+    var sizePx by remember { mutableStateOf(IntSize(1080, 1920)) }
+
+    Canvas(
+        modifier = modifier
+            .onSizeChanged {
+                sizePx = it
+                onSizeChanged(it)
+            }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val downPos = down.position
+                    val w = sizePx.width.toFloat().coerceAtLeast(1f)
+                    val h = sizePx.height.toFloat().coerceAtLeast(1f)
+                    var moved = false
+                    var multiTouch = false
+                    var draggingEntity = viewModel.onDragStart(downPos.x, downPos.y, w, h, density)
+
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val pressed = event.changes.filter { it.pressed }
+                        if (pressed.isEmpty()) break
+
+                        if (pressed.size >= 2) {
+                            multiTouch = true
+                            if (draggingEntity) {
+                                viewModel.onDragEnd()
+                                draggingEntity = false
+                            }
+                            val zoom = event.calculateZoom()
+                            val pan = event.calculatePan()
+                            val centroid = event.calculateCentroid(useCurrent = true)
+                            if (abs(zoom - 1f) > 0.002f && centroid != Offset.Unspecified) {
+                                viewModel.zoomCamera(zoom, centroid.x, centroid.y, w, h)
+                            }
+                            if (pan != Offset.Zero) {
+                                viewModel.panCamera(pan.x, pan.y)
+                            }
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        } else {
+                            val change = pressed.first()
+                            val delta = change.position - change.previousPosition
+                            if (hypot(change.position.x - downPos.x, change.position.y - downPos.y) > 8f * density) {
+                                moved = true
+                            }
+                            if (draggingEntity) {
+                                viewModel.onDragMove(change.position.x, change.position.y, w, h, density)
+                                if (change.positionChanged()) change.consume()
+                            } else if (!multiTouch && delta != Offset.Zero && latestState.activeTool == Geo2DTool.PAN_SELECT) {
+                                viewModel.panCamera(delta.x, delta.y)
+                                if (change.positionChanged()) change.consume()
+                            }
+                        }
+                    }
+
+                    if (draggingEntity) {
+                        viewModel.onDragEnd()
+                    }
+                    if (!moved && !multiTouch) {
+                        viewModel.onCanvasTap(downPos.x, downPos.y, w, h, density)
+                    }
+                }
+            }
+            .testTag("geo2d_canvas")
+    ) {
+        Geo2DRenderer.renderScene(
+            canvas = drawContext.canvas.nativeCanvas,
+            width = size.width,
+            height = size.height,
+            density = density,
+            uiState = uiState
+        )
+    }
+}
+
+@Composable
+private fun Geo2DTopHeader(
+    uiState: Geo2DUiState,
+    viewModel: Geo2DViewModel,
+    onSwitchWorkspace: (MathWorkspace) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                WorkspaceModeSwitch(
+                    current = MathWorkspace.PLANE_2D,
+                    onSelect = onSwitchWorkspace
+                )
+
+                // Quick Functions Pill
+                val visibleFnCount = uiState.snapshot.functions.count { it.visible && it.expression.isNotBlank() }
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(SlateDark.copy(alpha = 0.9f))
+                        .border(1.dp, if (uiState.activeTab == Geo2DTab.FUNCTIONS) EmeraldAccent else SlateBorder, RoundedCornerShape(10.dp))
+                        .clickable { viewModel.toggleTab(Geo2DTab.FUNCTIONS) }
+                        .padding(horizontal = 9.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.ShowChart, contentDescription = null, tint = EmeraldAccent, modifier = Modifier.size(16.dp))
+                    Text(
+                        text = if (visibleFnCount > 0) "$visibleFnCount đồ thị" else "f(x)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = SlateTextPrimary,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            // Right Action Strip: Undo, Redo, Center O, Save
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(SlateDark.copy(alpha = 0.9f))
+                    .border(1.dp, SlateBorder, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TopIconBtn(Icons.AutoMirrored.Filled.Undo, "Hoàn tác", enabled = uiState.canUndo) { viewModel.undo() }
+                TopIconBtn(Icons.AutoMirrored.Filled.Redo, "Làm lại", enabled = uiState.canRedo) { viewModel.redo() }
+                TopIconBtn(Icons.Default.MyLocation, "Về tâm O(0;0)") { viewModel.resetView() }
+                TopIconBtn(Icons.Default.SaveAlt, "Lưu / Xuất 2D", tint = EmeraldAccent) { viewModel.openSaveModal() }
+            }
+        }
+
+        // Live Trace Readout Pill (when tracing graph)
+        if (uiState.traceX != null && uiState.traceResults.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(SlateDeepest.copy(alpha = 0.92f))
+                    .border(1.dp, CyanAccent.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "x = ${Geo2DMathHelpers.formatNum(uiState.traceX)}",
+                        style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily),
+                        color = AmberAccent,
+                        fontWeight = FontWeight.Bold
+                    )
+                    uiState.traceResults.take(3).forEach { res ->
+                        val c = try { Color(AndroidColor.parseColor(res.colorHex)) } catch (_: Exception) { CyanAccent }
+                        val yText = if (res.y.isFinite()) Geo2DMathHelpers.formatNum(res.y) else "Không XĐ"
+                        val slopeText = if (res.slope.isFinite()) " • f'(x)=${Geo2DMathHelpers.formatNum(res.slope)}" else ""
+                        Text(
+                            text = "${res.functionLabel} = $yText$slopeText",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                            color = c,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                IconButton(onClick = { viewModel.clearTrace() }, modifier = Modifier.size(30.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Đóng dò đồ thị", tint = SlateTextSecondary, modifier = Modifier.size(16.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TopIconBtn(
+    icon: ImageVector,
+    contentDesc: String,
+    enabled: Boolean = true,
+    tint: Color = SlateTextPrimary,
+    onClick: () -> Unit
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.size(36.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDesc,
+            tint = if (enabled) tint else SlateTextSecondary.copy(alpha = 0.35f),
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
+@Composable
+private fun Geo2DRightQuickControls(
+    uiState: Geo2DUiState,
+    viewModel: Geo2DViewModel,
+    modifier: Modifier = Modifier
+) {
+    val s = uiState.snapshot
+    Column(
+        modifier = modifier
+            .padding(end = 10.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(SlateDark.copy(alpha = 0.88f))
+            .border(1.dp, SlateBorder, RoundedCornerShape(14.dp))
+            .padding(vertical = 6.dp, horizontal = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        QuickChip2D("Oxy", Icons.Default.GridOn, s.showAxes) { viewModel.toggleAxes() }
+        QuickChip2D("Hút", Icons.Default.Straighten, s.snapToGrid) { viewModel.toggleSnap() }
+        QuickChip2D("Tọa độ", Icons.Default.Label, s.showPointCoords) { viewModel.togglePointCoords() }
+        HorizontalDivider(color = SlateBorder, modifier = Modifier.width(28.dp).padding(vertical = 2.dp))
+        IconButton(onClick = { viewModel.stepZoom(true) }, modifier = Modifier.size(38.dp)) {
+            Icon(Icons.Default.Add, contentDescription = "Phóng to", tint = SlateTextPrimary, modifier = Modifier.size(19.dp))
+        }
+        IconButton(onClick = { viewModel.stepZoom(false) }, modifier = Modifier.size(38.dp)) {
+            Icon(Icons.Default.Remove, contentDescription = "Thu nhỏ", tint = SlateTextPrimary, modifier = Modifier.size(19.dp))
+        }
+    }
+}
+
+@Composable
+private fun QuickChip2D(label: String, icon: ImageVector, active: Boolean, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .width(46.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (active) EmeraldDark.copy(alpha = 0.32f) else Color.Transparent)
+            .border(1.dp, if (active) EmeraldAccent.copy(alpha = 0.6f) else Color.Transparent, RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(icon, contentDescription = label, tint = if (active) EmeraldAccent else SlateTextSecondary, modifier = Modifier.size(17.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, color = if (active) SlateTextPrimary else SlateTextSecondary)
+    }
+}
+
+@Composable
+private fun Geo2DInspectorSheet(
+    uiState: Geo2DUiState,
+    viewModel: Geo2DViewModel,
+    isCompactWidth: Boolean,
+    maxSheetHeight: Dp,
+    modifier: Modifier = Modifier
+) {
+    val activeTab = uiState.activeTab
+    BackHandler(enabled = activeTab != null) {
+        viewModel.closeTab()
+    }
+
+    AnimatedVisibility(
+        visible = activeTab != null,
+        enter = fadeIn() + slideInVertically { it / 2 },
+        exit = fadeOut() + slideOutVertically { it / 2 },
+        modifier = modifier
+    ) {
+        if (activeTab == null) return@AnimatedVisibility
+        val shape = if (isCompactWidth) RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp) else RoundedCornerShape(16.dp)
+        val containerMod = if (isCompactWidth) {
+            Modifier
+                .fillMaxWidth()
+                .padding(bottom = 114.dp)
+                .heightIn(min = 240.dp, max = maxSheetHeight)
+        } else {
+            Modifier
+                .padding(start = 12.dp, top = 74.dp, bottom = 120.dp)
+                .width(350.dp)
+                .fillMaxHeight()
+        }
+
+        Column(
+            modifier = containerMod
+                .clip(shape)
+                .background(SlateDark.copy(alpha = 0.96f))
+                .border(1.dp, SlateBorder, shape)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SlateSurface)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(activeTab.title, style = MaterialTheme.typography.titleSmall, color = SlateTextPrimary)
+                IconButton(onClick = { viewModel.closeTab() }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Thu gọn bảng", tint = SlateTextSecondary)
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(12.dp)
+            ) {
+                when (activeTab) {
+                    Geo2DTab.FUNCTIONS -> Geo2DFunctionsPane(uiState, viewModel)
+                    Geo2DTab.PRESETS -> Geo2DPresetsPane(viewModel)
+                    Geo2DTab.OBJECTS -> Geo2DObjectsPane(uiState, viewModel)
+                    Geo2DTab.SETTINGS -> Geo2DSettingsPane(uiState, viewModel)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Geo2DBottomDock(
+    uiState: Geo2DUiState,
+    viewModel: Geo2DViewModel,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        // Active Tool Hint Pill + Finish Polygon Button
+        if (uiState.activeTool != Geo2DTool.PAN_SELECT && uiState.activeTab == null) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(SlateDeepest.copy(alpha = 0.92f))
+                    .border(1.dp, EmeraldAccent.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = uiState.activeTool.hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SlateTextLight,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (uiState.activeTool == Geo2DTool.POLYGON && uiState.pendingPointIds.size >= 3) {
+                    Text(
+                        text = "Khép (${uiState.pendingPointIds.size})",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(EmeraldDark)
+                            .clickable { viewModel.finishPendingPolygon() }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                Text(
+                    text = "Xong",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = CyanAccent,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clickable { viewModel.setTool(Geo2DTool.PAN_SELECT) }
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                )
+            }
+        }
+
+        // Main 2-Tier Dock Container
+        Column(
+            modifier = Modifier
+                .widthIn(max = 620.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .background(SlateDark.copy(alpha = 0.95f))
+                .border(1.dp, SlateBorder, RoundedCornerShape(18.dp))
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            // Tier 1: Scrollable 2D Tool Mode Strip
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Geo2DTool.entries.forEach { tool ->
+                    val selected = uiState.activeTool == tool
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (selected) EmeraldDark else SlateSurface.copy(alpha = 0.85f))
+                            .border(1.dp, if (selected) EmeraldAccent else SlateBorder, RoundedCornerShape(10.dp))
+                            .clickable { viewModel.setTool(tool) }
+                            .padding(horizontal = 10.dp, vertical = 7.dp)
+                            .testTag("geo2d_tool_${tool.name.lowercase()}"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = iconFor2DTool(tool),
+                            contentDescription = null,
+                            tint = if (selected) Color.White else SlateTextLight,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = tool.shortLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (selected) Color.White else SlateTextLight,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider(color = SlateBorder.copy(alpha = 0.6f))
+
+            // Tier 2: 4 Studio Navigation Tabs
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                Geo2DTab.entries.forEach { tab ->
+                    val selected = uiState.activeTab == tab
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (selected) EmeraldDark.copy(alpha = 0.25f) else Color.Transparent)
+                            .clickable { viewModel.toggleTab(tab) }
+                            .padding(vertical = 5.dp)
+                            .testTag("geo2d_tab_${tab.name.lowercase()}"),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Icon(
+                            imageVector = iconFor2DTab(tab),
+                            contentDescription = tab.shortLabel,
+                            tint = if (selected) EmeraldAccent else SlateTextSecondary,
+                            modifier = Modifier.size(19.dp)
+                        )
+                        Text(
+                            text = tab.shortLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 10.5.sp,
+                            color = if (selected) SlateTextPrimary else SlateTextSecondary,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun iconFor2DTool(tool: Geo2DTool): ImageVector = when (tool) {
+    Geo2DTool.PAN_SELECT -> Icons.Default.PanTool
+    Geo2DTool.TRACE_GRAPH -> Icons.Default.Timeline
+    Geo2DTool.ADD_POINT -> Icons.Default.FiberManualRecord
+    Geo2DTool.SEGMENT -> Icons.Default.HorizontalRule
+    Geo2DTool.LINE -> Icons.Default.ShowChart
+    Geo2DTool.RAY -> Icons.Default.CallMade
+    Geo2DTool.VECTOR -> Icons.Default.NorthEast
+    Geo2DTool.CIRCLE -> Icons.Default.RadioButtonUnchecked
+    Geo2DTool.POLYGON -> Icons.Default.Pentagon
+    Geo2DTool.MEASURE_ANGLE -> Icons.Default.Architecture
+}
+
+private fun iconFor2DTab(tab: Geo2DTab): ImageVector = when (tab) {
+    Geo2DTab.FUNCTIONS -> Icons.AutoMirrored.Filled.ShowChart
+    Geo2DTab.PRESETS -> Icons.Default.Category
+    Geo2DTab.OBJECTS -> Icons.Default.Straighten
+    Geo2DTab.SETTINGS -> Icons.Default.Tune
+}
+
+private fun formatGeo2DTreeLabel(treeUri: Uri): String {
+    val docId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
+    if (!docId.isNullOrBlank()) {
+        val parts = docId.split(":", limit = 2)
+        if (parts.size == 2) {
+            val root = if (parts[0].equals("primary", ignoreCase = true)) "Bộ nhớ trong" else "Bộ nhớ ngoài (${parts[0]})"
+            val sub = parts[1].trim('/').replace("/", " / ")
+            return if (sub.isBlank()) root else "$root / $sub"
+        }
+        return docId
+    }
+    return Uri.decode(treeUri.lastPathSegment ?: "Thư mục đã chọn")
+}

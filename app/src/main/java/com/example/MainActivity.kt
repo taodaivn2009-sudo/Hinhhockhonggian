@@ -25,6 +25,9 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.geo2d.Geo2DPersistence
+import com.example.geo2d.Geo2DStudioScreen
+import com.example.geo2d.MathWorkspace
 import com.example.ui.BottomStudioDock
 import com.example.ui.GeometryCanvasView
 import com.example.ui.RightCanvasQuickControls
@@ -46,14 +49,34 @@ class MainActivity : ComponentActivity() {
         )
         setContent {
             Geo3DTheme {
-                GeometryStudioScreen()
+                ToolToanRootScreen()
             }
         }
     }
 }
 
 @Composable
+fun ToolToanRootScreen() {
+    val context = LocalContext.current
+    val workspacePrefs = remember(context) { Geo2DPersistence(context.applicationContext) }
+    var activeWorkspace by remember { mutableStateOf(workspacePrefs.loadLastWorkspace()) }
+
+    val onSelectWorkspace: (MathWorkspace) -> Unit = { target ->
+        if (target != activeWorkspace) {
+            activeWorkspace = target
+            workspacePrefs.saveLastWorkspace(target)
+        }
+    }
+
+    when (activeWorkspace) {
+        MathWorkspace.SPACE_3D -> GeometryStudioScreen(onSwitchWorkspace = onSelectWorkspace)
+        MathWorkspace.PLANE_2D -> Geo2DStudioScreen(onSwitchWorkspace = onSelectWorkspace)
+    }
+}
+
+@Composable
 fun GeometryStudioScreen(
+    onSwitchWorkspace: (MathWorkspace) -> Unit,
     viewModel: GeometryViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -201,11 +224,12 @@ fun GeometryStudioScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // 2. Top Studio Header (Shape Selector + Live Metrics + Quick Actions)
+        // 2. Top Studio Header (3D/2D Switcher + Shape Selector + Live Metrics + Quick Actions)
         TopStudioHeader(
             uiState = uiState,
             viewModel = viewModel,
             isCompactWidth = isCompactWidth,
+            onSwitchWorkspace = onSwitchWorkspace,
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
