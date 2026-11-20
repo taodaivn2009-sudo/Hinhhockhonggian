@@ -1,0 +1,69 @@
+package com.example
+
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
+import com.example.data.GeometryPersistence
+import com.example.engine.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import kotlin.math.PI
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36])
+class ExampleRobolectricTest {
+
+    @Test
+    fun `read app name from context`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val appName = context.getString(R.string.app_name)
+        assertEquals("Hình Học 3D", appName)
+    }
+
+    @Test
+    fun `all 15 shapes build with valid positive volume`() {
+        ShapeType.entries.forEach { shape ->
+            val snap = GeometrySnapshot(shape = shape, a = 4f, b = 3f, h = 5f)
+            val built = ShapeBuilder.build(snap)
+            assertTrue("Shape ${shape.key} should have vertices", built.pointRegistry.isNotEmpty())
+            assertTrue("Shape ${shape.key} should have positive volume", built.metrics.vol > 0f)
+        }
+    }
+
+    @Test
+    fun `cube and sphere exact volume calculations`() {
+        val cube = ShapeBuilder.build(GeometrySnapshot(shape = ShapeType.CUBE, a = 3f))
+        assertEquals(27f, cube.metrics.vol, 0.05f)
+        assertEquals(54f, cube.metrics.sTp, 0.05f)
+
+        val sphere = ShapeBuilder.build(GeometrySnapshot(shape = ShapeType.SPHERE, a = 4f))
+        val expectedVol = ((4.0 / 3.0) * PI * 8.0).toFloat()
+        assertEquals(expectedVol, sphere.metrics.vol, 0.05f)
+    }
+
+    @Test
+    fun `json serialization round trip matches HTML format`() {
+        val snap = GeometrySnapshot(
+            shape = ShapeType.PYRAMID4_SA,
+            a = 4.5f,
+            h = 5.2f,
+            showAxes = true,
+            originPoint = "A",
+            customPoints = listOf(CustomEdgePoint("pt_1", "M", "S", "C", 0.5f)),
+            customLines = listOf(CustomLine("ln_1", "A", "M", LineStyle.VECTOR_SOLID, "#f43f5e")),
+            customPlanes = listOf(CustomPlane("pl_1", listOf("A", "B", "M")))
+        )
+        val json = GeometryPersistence.snapshotToJson(snap)
+        val restored = GeometryPersistence.jsonToSnapshot(json)
+        assertEquals(snap.shape, restored.shape)
+        assertEquals(snap.a, restored.a, 0.01f)
+        assertEquals(snap.h, restored.h, 0.01f)
+        assertEquals(snap.showAxes, restored.showAxes)
+        assertEquals(1, restored.customPoints.size)
+        assertEquals(1, restored.customLines.size)
+        assertEquals(1, restored.customPlanes.size)
+    }
+}
