@@ -1,4 +1,4 @@
-name: Build and Publish Debug APK
+name: Tool Toán v1
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build-and-publish-debug-apk:
-    name: Build & Publish Debug APK
+    name: Build & Publish Tool Toán v1 APK
     runs-on: ubuntu-latest
 
     steps:
@@ -138,7 +138,7 @@ jobs:
         id: upload_artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
+          name: tool-toan-v1-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
@@ -154,13 +154,7 @@ jobs:
             exit 1
           fi
 
-          RAW_REPO_NAME="${GITHUB_REPOSITORY#*/}"
-          SAFE_REPO_NAME="$(printf '%s' "${RAW_REPO_NAME}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g; s/-\{2,\}/-/g; s/^[-.]*//; s/[-.]*$//')"
-          if [ -z "${SAFE_REPO_NAME}" ]; then
-            SAFE_REPO_NAME="android-app"
-          fi
-
-          ASSET_FILENAME="${SAFE_REPO_NAME}-debug-build-${GITHUB_RUN_NUMBER}.apk"
+          ASSET_FILENAME="tool-toan-v1-build-${GITHUB_RUN_NUMBER}.apk"
           RELEASE_DIR="${RUNNER_TEMP}/apk-release-asset"
           mkdir -p "${RELEASE_DIR}"
           ASSET_PATH="${RELEASE_DIR}/${ASSET_FILENAME}"
@@ -198,21 +192,20 @@ jobs:
             exit 1
           fi
 
-          RELEASE_TAG="debug-apk-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-          RELEASE_TITLE="Debug APK Build #${GITHUB_RUN_NUMBER}"
+          RELEASE_TAG="tool-toan-v1-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          RELEASE_TITLE="Tool Toán v1 (Build #${GITHUB_RUN_NUMBER})"
 
           RELEASE_NOTES="$(cat <<EOF
-          This is an automatically generated debug APK built by GitHub Actions.
+          Bản dựng APK tự động cho **Tool Toán v1** được tạo bởi GitHub Actions.
 
           - **Workflow Run Number:** ${GITHUB_RUN_NUMBER}
           - **Workflow Run Attempt:** ${GITHUB_RUN_ATTEMPT}
           - **Source Commit SHA:** ${GITHUB_SHA}
           - **APK Asset:** \`${ASSET_NAME}\`
 
-          **Important Notes:**
-          - This APK is intended for testing only.
-          - This APK is not a Play Store production release.
-          - This APK is signed only with a temporary debug keystore.
+          **Lưu ý:**
+          - File APK debug dùng để cài đặt và trải nghiệm trực tiếp trên Android.
+          - Ký bằng khóa debug tạm thời trong quá trình build.
           EOF
           )"
 
@@ -232,8 +225,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PUBLISH_OUTCOME: ${{ steps.publish_release.outcome }}
           ASSET_NAME: ${{ steps.prepare_release_asset.outputs.asset_name }}
-          RELEASE_TAG: debug-apk-build-${{ github.run_number }}-${{ github.run_attempt }}
-          RELEASE_TITLE: Debug APK Build #${{ github.run_number }}
+          RELEASE_TAG: tool-toan-v1-build-${{ github.run_number }}-${{ github.run_attempt }}
+          RELEASE_TITLE: Tool Toán v1 (Build #${{ github.run_number }})
         run: |
           set -euo pipefail
 
@@ -246,7 +239,7 @@ jobs:
               echo "APK Asset Filename: ${ASSET_NAME}"
 
               {
-                echo "## Debug APK Build & Release Result"
+                echo "## Tool Toán v1 — Kết quả Build & Release APK"
                 echo ""
                 echo "- **Status:** APK build, Actions artifact upload, and GitHub Release publishing succeeded."
                 echo "- **Release Tag:** \`${RELEASE_TAG}\`"
@@ -254,20 +247,20 @@ jobs:
                 echo "- **APK Asset Filename:** \`${ASSET_NAME}\`"
                 echo "- **GitHub Release URL:** ${RELEASE_URL}"
                 echo ""
-                echo "Download the APK directly from the **Assets** section on the GitHub Release page above."
-                echo "The normal GitHub Actions artifact (\`app-debug-apk\`) is also available in this workflow run as a backup."
+                echo "Tải file APK trực tiếp tại mục **Assets** của trang GitHub Release phía trên."
+                echo "Bản dự phòng cũng có trong GitHub Actions artifact (\`tool-toan-v1-apk\`)."
               } >> "${GITHUB_STEP_SUMMARY}"
               exit 0
             fi
           fi
 
-          echo "::warning::GitHub Release publishing failed or could not be verified, but the debug APK build succeeded and the Actions artifact 'app-debug-apk' remains available."
+          echo "::warning::GitHub Release publishing failed or could not be verified, but the debug APK build succeeded and the Actions artifact 'tool-toan-v1-apk' remains available."
           {
-            echo "## Debug APK Build & Release Result"
+            echo "## Tool Toán v1 — Kết quả Build & Release APK"
             echo ""
             echo "> **Warning:** GitHub Release publishing failed or could not be verified."
             echo ""
             echo "- **APK Build:** Succeeded"
-            echo "- **Actions Artifact Backup:** \`app-debug-apk\` remains available for download in this workflow run."
+            echo "- **Actions Artifact Backup:** \`tool-toan-v1-apk\` remains available for download in this workflow run."
             echo "- **GitHub Release:** Not published or unverified"
           } >> "${GITHUB_STEP_SUMMARY}"

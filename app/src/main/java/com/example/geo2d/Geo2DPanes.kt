@@ -39,21 +39,18 @@ fun Geo2DFunctionsPane(
     viewModel: Geo2DViewModel
 ) {
     var draftExpr by remember { mutableStateOf("") }
+    var selectedCategory by remember { mutableStateOf(FunctionCategory.EXP_LOG) }
     val draftCheck = remember(draftExpr) {
         if (draftExpr.isBlank()) null else MathExprParser.parse(draftExpr)
     }
 
-    val quickSymbols = listOf("x", "^2", "^3", "^", "sqrt(", "sin(", "cos(", "tan(", "abs(", "ln(", "log(", "pi", "e^", "(", ")")
-    val sampleFuncs = listOf(
-        "x^2 - 2x - 1",
-        "x^3 - 3x",
-        "sin(x)",
-        "cos(2x)",
-        "1/x",
-        "sqrt(x + 2)",
-        "|x - 1| - 2",
-        "ln(x)"
+    val quickSymbols = listOf(
+        "x", "^2", "^3", "^", "e^", "2^x", "ln(", "log(", "log2(", "log(3; ",
+        "sqrt(", "sin(", "cos(", "tan(", "abs(", "pi", "(", ")"
     )
+    val categoryTemplates = remember(selectedCategory) {
+        FunctionLibrary.byCategory(selectedCategory)
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         // 1. Add New Arbitrary Function Card
@@ -71,7 +68,7 @@ fun Geo2DFunctionsPane(
                 OutlinedTextField(
                     value = draftExpr,
                     onValueChange = { draftExpr = it },
-                    placeholder = { Text("VD: x^2 - 3x + 2, sin(x)...", color = SlateTextSecondary, fontSize = 12.sp) },
+                    placeholder = { Text("VD: e^x, log(2; x), x^3 - 3x...", color = SlateTextSecondary, fontSize = 12.sp) },
                     prefix = { Text("y = ", color = CyanAccent, fontWeight = FontWeight.Bold) },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(
@@ -115,7 +112,7 @@ fun Geo2DFunctionsPane(
                 )
             }
 
-            // Quick math symbol keypad
+            // Quick math symbol keypad (including exp & log)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -132,55 +129,108 @@ fun Geo2DFunctionsPane(
                             .padding(horizontal = 9.dp, vertical = 6.dp)
                     ) {
                         Text(
-                            text = sym,
+                            text = sym.trim(),
                             style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily),
                             color = IndigoSoft
                         )
                     }
                 }
             }
+        }
 
-            // Quick sample function chips
-            Text("Hàm mẫu bấm vẽ nhanh:", style = MaterialTheme.typography.labelSmall, color = SlateTextSecondary)
+        // 2. Categorized Function Library (Mũ & Loga, Đa thức, Phân thức & Căn, Lượng giác, Đặc biệt)
+        SettingBox(
+            title = "Thư viện hàm số theo nhóm (chạm để vẽ)",
+            titleColor = EmeraldAccent,
+            borderColor = EmeraldAccent.copy(alpha = 0.45f)
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                sampleFuncs.forEach { sample ->
+                FunctionCategory.entries.forEach { cat ->
+                    val isSelected = selectedCategory == cat
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(SlateSurface)
-                            .border(1.dp, SlateMuted, RoundedCornerShape(8.dp))
-                            .clickable { viewModel.addFunction(sample) }
-                            .padding(horizontal = 9.dp, vertical = 6.dp)
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(if (isSelected) EmeraldDark else SlateDeepest)
+                            .border(
+                                1.dp,
+                                if (isSelected) EmeraldAccent else SlateBorder,
+                                RoundedCornerShape(9.dp)
+                            )
+                            .clickable { selectedCategory = cat }
+                            .padding(horizontal = 10.dp, vertical = 7.dp)
+                            .testTag("geo2d_fn_cat_${cat.name.lowercase()}")
                     ) {
                         Text(
-                            text = "y = $sample",
-                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
-                            color = SlateTextPrimary
+                            text = cat.title,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isSelected) Color.White else SlateTextLight,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                         )
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                categoryTemplates.chunked(2).forEach { pair ->
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        pair.forEach { tpl ->
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(9.dp))
+                                    .background(SlateDeepest)
+                                    .border(1.dp, SlateMuted.copy(alpha = 0.7f), RoundedCornerShape(9.dp))
+                                    .clickable { viewModel.addFunction(tpl.expr) }
+                                    .padding(horizontal = 9.dp, vertical = 7.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(
+                                    text = "y = ${tpl.expr}",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily),
+                                    color = CyanAccent,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = tpl.note,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = SlateTextSecondary,
+                                    fontSize = 10.5.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        if (pair.size == 1) Spacer(Modifier.weight(1f))
                     }
                 }
             }
         }
 
-        // 2. Active Functions List
+        // 3. Active Functions List with independent Graph Toggle & Derivative Button
         SettingBox(
             title = "Danh sách đồ thị (${uiState.snapshot.functions.size})",
             titleColor = IndigoSoft
         ) {
             if (uiState.snapshot.functions.isEmpty()) {
                 Text(
-                    text = "Chưa có hàm số nào. Nhập công thức ở trên hoặc bấm vào hàm mẫu để vẽ ngay!",
+                    text = "Chưa có hàm số nào. Nhập công thức ở trên hoặc chọn từ thư viện nhóm hàm để vẽ ngay!",
                     style = MaterialTheme.typography.bodySmall,
                     color = SlateTextSecondary
                 )
             } else {
                 uiState.snapshot.functions.forEach { fn ->
                     val parsed = remember(fn.expression) { MathExprParser.parse(fn.expression) }
+                    val derived = remember(fn.expression) { MathExprParser.derive(fn.expression) }
                     val fnColor = remember(fn.colorHex) {
                         try {
                             Color(AndroidColor.parseColor(fn.colorHex))
@@ -188,15 +238,22 @@ fun Geo2DFunctionsPane(
                             CyanAccent
                         }
                     }
+                    val anyCurveVisible = fn.visible || fn.showDerivative
+
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
                             .background(SlateDeepest)
-                            .border(1.dp, if (fn.visible) fnColor.copy(alpha = 0.5f) else SlateBorder, RoundedCornerShape(10.dp))
+                            .border(
+                                1.dp,
+                                if (anyCurveVisible) fnColor.copy(alpha = 0.55f) else SlateBorder,
+                                RoundedCornerShape(10.dp)
+                            )
                             .padding(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
                     ) {
+                        // Row 1: Color swatch, label, expression input, delete button
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -204,9 +261,9 @@ fun Geo2DFunctionsPane(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(18.dp)
+                                    .size(20.dp)
                                     .clip(CircleShape)
-                                    .background(fnColor)
+                                    .background(if (fn.visible) fnColor else fnColor.copy(alpha = 0.35f))
                                     .border(1.5.dp, Color.White, CircleShape)
                                     .clickable { viewModel.cycleFunctionColor(fn.id) }
                             )
@@ -234,19 +291,8 @@ fun Geo2DFunctionsPane(
                                 modifier = Modifier.weight(1f)
                             )
                             IconButton(
-                                onClick = { viewModel.toggleFunctionVisibility(fn.id) },
-                                modifier = Modifier.size(34.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (fn.visible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                    contentDescription = "Ẩn/hiện hàm ${fn.label}",
-                                    tint = if (fn.visible) EmeraldAccent else SlateTextSecondary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            IconButton(
                                 onClick = { viewModel.deleteFunction(fn.id) },
-                                modifier = Modifier.size(34.dp)
+                                modifier = Modifier.size(36.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.DeleteOutline,
@@ -256,6 +302,110 @@ fun Geo2DFunctionsPane(
                                 )
                             }
                         }
+
+                        // Row 2: Independent Graph f(x) Toggle + Derivative f'(x) Button
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (fn.visible) fnColor.copy(alpha = 0.2f) else SlateSurface)
+                                    .border(
+                                        1.dp,
+                                        if (fn.visible) fnColor.copy(alpha = 0.75f) else SlateBorder,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable { viewModel.toggleFunctionVisibility(fn.id) }
+                                    .padding(horizontal = 9.dp, vertical = 7.dp)
+                                    .testTag("geo2d_toggle_fn_${fn.id}"),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (fn.visible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Bật/tắt đồ thị ${fn.label}",
+                                    tint = if (fn.visible) fnColor else SlateTextSecondary,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(Modifier.width(5.dp))
+                                Text(
+                                    text = if (fn.visible) "Đang bật đồ thị" else "Đang tắt đồ thị",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (fn.visible) SlateTextPrimary else SlateTextSecondary,
+                                    fontWeight = if (fn.visible) FontWeight.SemiBold else FontWeight.Normal,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (fn.showDerivative) AmberAccent.copy(alpha = 0.22f) else SlateSurface)
+                                    .border(
+                                        1.dp,
+                                        if (fn.showDerivative) AmberAccent else SlateBorder,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable { viewModel.toggleFunctionDerivative(fn.id) }
+                                    .padding(horizontal = 9.dp, vertical = 7.dp)
+                                    .testTag("geo2d_toggle_deriv_${fn.id}"),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Timeline,
+                                    contentDescription = "Bật/tắt đạo hàm ${fn.label}",
+                                    tint = if (fn.showDerivative) AmberAccent else SlateTextSecondary,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(Modifier.width(5.dp))
+                                Text(
+                                    text = if (fn.showDerivative) "Đạo hàm f'(x)" else "Đạo hàm f'(x)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (fn.showDerivative) AmberAccent else SlateTextLight,
+                                    fontWeight = if (fn.showDerivative) FontWeight.Bold else FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        // Symbolic Derivative Formula Strip (when derivative is ON)
+                        if (fn.showDerivative && parsed is MathExprParser.ParseResult.Ok) {
+                            val derivLabel = fn.label.replace("(x)", "'(x)")
+                            val formulaText = derived?.second ?: "Tính đạo hàm số"
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(7.dp))
+                                    .background(AmberAccent.copy(alpha = 0.11f))
+                                    .border(1.dp, AmberAccent.copy(alpha = 0.4f), RoundedCornerShape(7.dp))
+                                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "- -",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                                    color = AmberAccent,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                                Text(
+                                    text = "$derivLabel = $formulaText",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                                    color = SlateTextPrimary,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
                         if (parsed is MathExprParser.ParseResult.Error) {
                             Text(
                                 text = parsed.message,

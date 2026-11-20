@@ -121,8 +121,64 @@ data class GraphFunction(
     val label: String,
     val expression: String,
     val colorHex: String,
-    val visible: Boolean = true
+    val visible: Boolean = true,
+    val showDerivative: Boolean = false
 )
+
+enum class FunctionCategory(val title: String) {
+    EXP_LOG("Mũ & Loga"),
+    POLY("Đa thức"),
+    RATIONAL_RADICAL("Phân thức & Căn"),
+    TRIG("Lượng giác"),
+    SPECIAL("Đặc biệt")
+}
+
+data class FunctionTemplate(
+    val expr: String,
+    val note: String,
+    val category: FunctionCategory
+)
+
+object FunctionLibrary {
+    val templates: List<FunctionTemplate> = listOf(
+        // Mũ & Logarit
+        FunctionTemplate("e^x", "Hàm mũ tự nhiên", FunctionCategory.EXP_LOG),
+        FunctionTemplate("2^x", "Hàm mũ cơ số 2", FunctionCategory.EXP_LOG),
+        FunctionTemplate("(1/2)^x", "Mũ nghịch biến", FunctionCategory.EXP_LOG),
+        FunctionTemplate("ln(x)", "Logarit tự nhiên", FunctionCategory.EXP_LOG),
+        FunctionTemplate("log(x)", "Logarit thập phân", FunctionCategory.EXP_LOG),
+        FunctionTemplate("log2(x)", "Logarit cơ số 2", FunctionCategory.EXP_LOG),
+        FunctionTemplate("log(3; x)", "Logarit cơ số 3", FunctionCategory.EXP_LOG),
+        FunctionTemplate("x*e^(-x)", "Hàm mũ tắt dần", FunctionCategory.EXP_LOG),
+
+        // Đa thức
+        FunctionTemplate("x^2 - 2x - 1", "Parabol bậc 2", FunctionCategory.POLY),
+        FunctionTemplate("x^3 - 3x", "Hàm bậc 3 có 2 cực trị", FunctionCategory.POLY),
+        FunctionTemplate("x^4 - 4x^2 + 1", "Hàm trùng phương", FunctionCategory.POLY),
+        FunctionTemplate("2x + 1", "Đường thẳng bậc 1", FunctionCategory.POLY),
+
+        // Phân thức & Căn thức
+        FunctionTemplate("1/x", "Hypebol cơ bản", FunctionCategory.RATIONAL_RADICAL),
+        FunctionTemplate("(2x - 1)/(x - 1)", "Hàm nhất biến", FunctionCategory.RATIONAL_RADICAL),
+        FunctionTemplate("(x^2 + 1)/x", "Tiệm cận xiên", FunctionCategory.RATIONAL_RADICAL),
+        FunctionTemplate("sqrt(x + 2)", "Căn bậc 2", FunctionCategory.RATIONAL_RADICAL),
+        FunctionTemplate("cbrt(x)", "Căn bậc 3", FunctionCategory.RATIONAL_RADICAL),
+
+        // Lượng giác
+        FunctionTemplate("sin(x)", "Sóng sin cơ bản", FunctionCategory.TRIG),
+        FunctionTemplate("cos(x)", "Sóng cos cơ bản", FunctionCategory.TRIG),
+        FunctionTemplate("tan(x)", "Hàm tang tuần hoàn", FunctionCategory.TRIG),
+        FunctionTemplate("sin(2x) + cos(x)", "Tổng hợp điều hòa", FunctionCategory.TRIG),
+
+        // Trị tuyệt đối & Đặc biệt
+        FunctionTemplate("|x - 1| - 2", "Trị tuyệt đối chữ V", FunctionCategory.SPECIAL),
+        FunctionTemplate("|x^2 - 4|", "Trị tuyệt đối parabol", FunctionCategory.SPECIAL),
+        FunctionTemplate("e^(-x^2)", "Đường cong Gauss", FunctionCategory.SPECIAL),
+        FunctionTemplate("sinh(x)", "Sin hyperbolic", FunctionCategory.SPECIAL)
+    )
+
+    fun byCategory(cat: FunctionCategory): List<FunctionTemplate> = templates.filter { it.category == cat }
+}
 
 enum class KeyPointType(val vnLabel: String) {
     ROOT("Giao Ox"),
@@ -150,9 +206,9 @@ data class TraceResult(
 )
 
 data class Geo2DCamera(
-    val centerX: Float = 0f,
-    val centerY: Float = 0f,
-    val pixelsPerUnit: Float = 72f
+    val centerX: Double = 0.0,
+    val centerY: Double = 0.0,
+    val pixelsPerUnit: Double = 72.0
 )
 
 data class Geo2DSensitivity(
@@ -198,12 +254,38 @@ data class Geo2DUiState(
 
 object Geo2DMathHelpers {
     fun formatNum(v: Double): String {
-        val clean = if (kotlin.math.abs(v) < 1e-4) 0.0 else v
+        val clean = if (kotlin.math.abs(v) < 1e-9) 0.0 else v
+        val absV = kotlin.math.abs(clean)
+        if (absV >= 1e6 || (absV > 0.0 && absV < 1e-3)) {
+            return String.format(java.util.Locale.US, "%.2e", clean)
+                .replace("e+0", "e")
+                .replace("e+", "e")
+                .replace("e-0", "e-")
+        }
         val rounded = kotlin.math.round(clean * 100.0) / 100.0
         return if (rounded == rounded.toLong().toDouble()) {
             rounded.toLong().toString()
         } else {
             String.format(java.util.Locale.US, "%.2f", rounded).trimEnd('0').trimEnd('.')
+        }
+    }
+
+    fun formatAxisTick(v: Double): String {
+        val absV = kotlin.math.abs(v)
+        if (absV < 1e-12) return "0"
+        return when {
+            absV >= 1e6 || absV < 1e-3 -> String.format(java.util.Locale.US, "%.1e", v)
+                .replace(".0e", "e")
+                .replace("e+0", "e")
+                .replace("e+", "e")
+                .replace("e-0", "e-")
+            absV >= 10000.0 -> {
+                val k = v / 1000.0
+                val rounded = kotlin.math.round(k * 10.0) / 10.0
+                if (rounded == rounded.toLong().toDouble()) "${rounded.toLong()}k" else "${rounded}k"
+            }
+            absV < 0.1 -> String.format(java.util.Locale.US, "%.4f", v).trimEnd('0').trimEnd('.')
+            else -> formatNum(v)
         }
     }
 

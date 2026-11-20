@@ -175,7 +175,7 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
 
     // ================= CAMERA & DISPLAY TOGGLES =================
     fun panCamera(dxPx: Float, dyPx: Float) {
-        val sens = _uiState.value.snapshot.sensitivity.pan
+        val sens = _uiState.value.snapshot.sensitivity.pan.toDouble()
         updateSnapshot(recordHistory = false, autoSave = false) { s ->
             val ppu = s.camera.pixelsPerUnit
             s.copy(
@@ -188,24 +188,25 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun zoomCamera(zoomFactor: Float, focalX: Float, focalY: Float, width: Float, height: Float) {
-        val sens = _uiState.value.snapshot.sensitivity.zoom
-        val adjustedZoom = 1f + (zoomFactor - 1f) * sens
-        if (adjustedZoom <= 0.05f) return
+        val sens = _uiState.value.snapshot.sensitivity.zoom.toDouble()
+        val adjustedZoom = 1.0 + (zoomFactor - 1.0) * sens
+        if (adjustedZoom <= 0.05) return
         updateSnapshot(recordHistory = false, autoSave = false) { s ->
             val oldCam = s.camera
-            val beforeWorld = Geo2DRenderer.screenToWorld(focalX, focalY, oldCam, width, height)
-            val newPpu = (oldCam.pixelsPerUnit * adjustedZoom).coerceIn(14f, 360f)
-            val newCenterX = beforeWorld.x - (focalX - width * 0.5f) / newPpu
-            val newCenterY = beforeWorld.y + (focalY - height * 0.5f) / newPpu
+            val (beforeX, beforeY) = Geo2DRenderer.screenToWorldDouble(focalX, focalY, oldCam, width, height)
+            // Effectively infinite zoom: supports viewing spans from 1e-4 up to 1e12 units!
+            val newPpu = (oldCam.pixelsPerUnit * adjustedZoom).coerceIn(1e-9, 1e7)
+            val newCenterX = beforeX - (focalX - width * 0.5) / newPpu
+            val newCenterY = beforeY + (focalY - height * 0.5) / newPpu
             s.copy(camera = Geo2DCamera(newCenterX, newCenterY, newPpu))
         }
     }
 
     fun stepZoom(zoomIn: Boolean) {
-        val sens = _uiState.value.snapshot.sensitivity.zoom
-        val factor = if (zoomIn) (1f + 0.25f * sens) else (1f / (1f + 0.25f * sens))
+        val sens = _uiState.value.snapshot.sensitivity.zoom.toDouble()
+        val factor = if (zoomIn) (1.0 + 0.45 * sens) else (1.0 / (1.0 + 0.45 * sens))
         updateSnapshot(recordHistory = false, autoSave = true) { s ->
-            s.copy(camera = s.camera.copy(pixelsPerUnit = (s.camera.pixelsPerUnit * factor).coerceIn(14f, 360f)))
+            s.copy(camera = s.camera.copy(pixelsPerUnit = (s.camera.pixelsPerUnit * factor).coerceIn(1e-9, 1e7)))
         }
     }
 
@@ -441,18 +442,21 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun updateTraceAtScreenX(sx: Float, width: Float) {
         val snap = _uiState.value.snapshot
-        val wx = Geo2DRenderer.screenToWorld(sx, 0f, snap.camera, width, 1000f).x.toDouble()
-        val snappedX = if (snap.snapToGrid) round(wx * 20.0) / 20.0 else wx
+        val (wx, _) = Geo2DRenderer.screenToWorldDouble(sx, 0f, snap.camera, width, 1000f)
+        val snapStep = Geo2DRenderer.niceGridStep(snap.camera.pixelsPerUnit, 2.5f) / 10.0
+        val snappedX = if (snap.snapToGrid && snapStep > 0.0) round(wx / snapStep) * snapStep else wx
         _uiState.update { it.copy(traceX = snappedX, traceResults = evaluateTrace(snap, snappedX)) }
     }
 
     private fun evaluateTrace(snap: Geo2DSnapshot, x: Double): List<TraceResult> {
+        val step = kotlin.math.max(1e-7, (1.0 / snap.camera.pixelsPerUnit) * 1e-3)
         return snap.functions.mapNotNull { fn ->
-            if (!fn.visible || fn.expression.isBlank()) return@mapNotNull null
+            if ((!fn.visible && !fn.showDerivative) || fn.expression.isBlank()) return@mapNotNull null
             val parsed = MathExprParser.parse(fn.expression)
             if (parsed is MathExprParser.ParseResult.Ok) {
                 val y = parsed.expr.eval(x)
-                val slope = parsed.expr.derivative(x)
+                val symDeriv = parsed.expr.symbolicDerivative()?.simplify()
+                val slope = symDeriv?.eval(x) ?: parsed.expr.derivative(x, step)
                 TraceResult(fn.id, fn.label, fn.expression, fn.colorHex, x, y, slope)
             } else null
         }
@@ -497,6 +501,22 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
             s.copy(
                 functions = s.functions.map { if (it.id == id) it.copy(visible = !it.visible) else it }
             )
+        }
+    }
+
+    fun toggleFunctionDerivative(id: String) {
+        val target = _uiState.value.snapshot.functions.firstOrNull { it.id == id } ?: return
+        val turningOn = !target.showDerivative
+        updateSnapshot(recordHistory = true) { s ->
+            s.copy(
+                functions = s.functions.map { if (it.id == id) it.copy(showDerivative = turningOn) else it }
+            )
+        }
+        if (turningOn) {
+            val formula = MathExprParser.derive(target.expression)?.second
+            showToast(if (formula != null) "Đã bật đạo hàm: y' = $formula" else "Đã bật đồ thị đạo hàm ${target.label}'")
+        } else {
+            showToast("Đã tắt đồ thị đạo hàm ${target.label}'")
         }
     }
 

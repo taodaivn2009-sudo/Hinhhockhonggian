@@ -3,12 +3,14 @@ package com.example.geo2d
 import kotlin.math.*
 
 /**
- * Recursive-descent mathematical expression parser & evaluator for arbitrary y = f(x) functions.
+ * Recursive-descent mathematical expression parser, AST evaluator, symbolic differentiator,
+ * and graph key-point analyzer for arbitrary y = f(x) functions.
+ *
  * Supports:
  *  - Operators: +, -, *, /, ^ (right-associative), unary +/-, implicit multiplication (2x, 3sin(x), (x+1)(x-1))
  *  - Constants: pi, π, e
- *  - Functions: sin, cos, tan, cot, asin, acos, atan, sinh, cosh, tanh, sqrt, cbrt, abs, ln, log, log2, exp, floor, ceil, round, sign
- *  - Preprocessing: accepts "y = ..." or "f(x) = ..." prefix, superscript ² ³, unicode × ÷ −
+ *  - Functions: sin, cos, tan, cot, asin, acos, atan, sinh, cosh, tanh, sqrt, cbrt, abs, ln, log (base 10 or log(base; x)), log2, log10, exp, floor, ceil, round, sign
+ *  - Symbolic differentiation: expr.differentiate().simplify() + pretty formula string
  */
 object MathExprParser {
 
@@ -17,7 +19,7 @@ object MathExprParser {
         data object VarX : Expr()
         data class UnaryNeg(val inner: Expr) : Expr()
         data class Binary(val op: Char, val left: Expr, val right: Expr) : Expr()
-        data class Func(val name: String, val arg: Expr) : Expr()
+        data class Func(val name: String, val arg: Expr, val base: Expr? = null) : Expr()
 
         fun eval(x: Double): Double = when (this) {
             is Num -> value
@@ -58,7 +60,15 @@ object MathExprParser {
                     "cbrt" -> cbrt(v)
                     "abs" -> abs(v)
                     "ln" -> if (v <= 0.0) Double.NaN else ln(v)
-                    "log", "log10" -> if (v <= 0.0) Double.NaN else log10(v)
+                    "log" -> {
+                        if (base != null) {
+                            val b = base.eval(x)
+                            if (v <= 0.0 || b <= 0.0 || abs(b - 1.0) < 1e-12) Double.NaN else ln(v) / ln(b)
+                        } else {
+                            if (v <= 0.0) Double.NaN else log10(v)
+                        }
+                    }
+                    "log10" -> if (v <= 0.0) Double.NaN else log10(v)
                     "log2" -> if (v <= 0.0) Double.NaN else log2(v)
                     "exp" -> exp(v)
                     "floor" -> floor(v)
@@ -70,12 +80,209 @@ object MathExprParser {
             }
         }
 
-        fun derivative(x: Double): Double {
-            val h = 1e-5
+        fun derivative(x: Double, stepScale: Double = 1e-5): Double {
+            val h = max(1e-7, abs(stepScale))
             val f1 = eval(x + h)
             val f0 = eval(x - h)
             if (!f1.isFinite() || !f0.isFinite()) return Double.NaN
             return (f1 - f0) / (2.0 * h)
+        }
+
+        fun containsVarX(): Boolean = when (this) {
+            is Num -> false
+            is VarX -> true
+            is UnaryNeg -> inner.containsVarX()
+            is Binary -> left.containsVarX() || right.containsVarX()
+            is Func -> arg.containsVarX() || (base?.containsVarX() == true)
+        }
+
+        /**
+         * Returns the exact symbolic derivative AST, or null if non-differentiable (e.g. floor/ceil).
+         */
+        fun symbolicDerivative(): Expr? = when (this) {
+            is Num -> Num(0.0)
+            is VarX -> Num(1.0)
+            is UnaryNeg -> inner.symbolicDerivative()?.let { UnaryNeg(it) }
+            is Binary -> {
+                val dl = left.symbolicDerivative() ?: return null
+                val dr = right.symbolicDerivative() ?: return null
+                when (op) {
+                    '+' -> Binary('+', dl, dr)
+                    '-' -> Binary('-', dl, dr)
+                    '*' -> Binary('+', Binary('*', dl, right), Binary('*', left, dr))
+                    '/' -> Binary('/', Binary('-', Binary('*', dl, right), Binary('*', left, dr)), Binary('^', right, Num(2.0)))
+                    '^' -> {
+                        val lHasX = left.containsVarX()
+                        val rHasX = right.containsVarX()
+                        when {
+                            !lHasX && !rHasX -> Num(0.0)
+                            lHasX && !rHasX -> {
+                                // u^c -> c * u^(c-1) * u'
+                                Binary('*', Binary('*', right, Binary('^', left, Binary('-', right, Num(1.0)))), dl)
+                            }
+                            !lHasX && rHasX -> {
+                                // a^v -> a^v * ln(a) * v'
+                                val aVal = left.eval(0.0)
+                                val lnFactor = if (abs(aVal - E) < 1e-9) Num(1.0) else Func("ln", left)
+                                Binary('*', Binary('*', this, lnFactor), dr)
+                            }
+                            else -> {
+                                // u^v -> u^v * (v' * ln(u) + v * u' / u)
+                                Binary(
+                                    '*',
+                                    this,
+                                    Binary('+', Binary('*', dr, Func("ln", left)), Binary('/', Binary('*', right, dl), left))
+                                )
+                            }
+                        }
+                    }
+                    else -> null
+                }
+            }
+            is Func -> {
+                val du = arg.symbolicDerivative() ?: return null
+                val outer: Expr = when (name) {
+                    "sin" -> Func("cos", arg)
+                    "cos" -> UnaryNeg(Func("sin", arg))
+                    "tan" -> Binary('/', Num(1.0), Binary('^', Func("cos", arg), Num(2.0)))
+                    "cot" -> Binary('/', Num(-1.0), Binary('^', Func("sin", arg), Num(2.0)))
+                    "asin", "arcsin" -> Binary('/', Num(1.0), Func("sqrt", Binary('-', Num(1.0), Binary('^', arg, Num(2.0)))))
+                    "acos", "arccos" -> Binary('/', Num(-1.0), Func("sqrt", Binary('-', Num(1.0), Binary('^', arg, Num(2.0)))))
+                    "atan", "arctan" -> Binary('/', Num(1.0), Binary('+', Num(1.0), Binary('^', arg, Num(2.0))))
+                    "sinh" -> Func("cosh", arg)
+                    "cosh" -> Func("sinh", arg)
+                    "tanh" -> Binary('/', Num(1.0), Binary('^', Func("cosh", arg), Num(2.0)))
+                    "sqrt" -> Binary('/', Num(1.0), Binary('*', Num(2.0), Func("sqrt", arg)))
+                    "cbrt" -> Binary('/', Num(1.0), Binary('*', Num(3.0), Binary('^', arg, Binary('/', Num(2.0), Num(3.0)))))
+                    "abs" -> Binary('/', arg, Func("abs", arg))
+                    "ln" -> Binary('/', Num(1.0), arg)
+                    "log10" -> Binary('/', Num(1.0), Binary('*', arg, Func("ln", Num(10.0))))
+                    "log2" -> Binary('/', Num(1.0), Binary('*', arg, Func("ln", Num(2.0))))
+                    "log" -> {
+                        if (base == null) {
+                            Binary('/', Num(1.0), Binary('*', arg, Func("ln", Num(10.0))))
+                        } else if (!base.containsVarX()) {
+                            Binary('/', Num(1.0), Binary('*', arg, Func("ln", base)))
+                        } else {
+                            // log_b(u) = ln(u) / ln(b)
+                            return Binary('/', Func("ln", arg), Func("ln", base)).symbolicDerivative()
+                        }
+                    }
+                    "exp" -> Func("exp", arg)
+                    else -> return null
+                }
+                Binary('*', outer, du)
+            }
+        }
+
+        fun simplify(): Expr = when (this) {
+            is Num, is VarX -> this
+            is UnaryNeg -> {
+                when (val s = inner.simplify()) {
+                    is Num -> Num(-s.value)
+                    is UnaryNeg -> s.inner
+                    else -> UnaryNeg(s)
+                }
+            }
+            is Func -> {
+                val sa = arg.simplify()
+                val sb = base?.simplify()
+                if (name == "ln" && sa is Num && abs(sa.value - E) < 1e-9) Num(1.0)
+                else Func(name, sa, sb)
+            }
+            is Binary -> {
+                val l = left.simplify()
+                val r = right.simplify()
+                if (l is Num && r is Num) {
+                    val res = Binary(op, l, r).eval(0.0)
+                    if (res.isFinite() && op != '/') return Num(res)
+                    if (op == '/' && res.isFinite() && abs(res - round(res)) < 1e-9) return Num(res)
+                }
+                when (op) {
+                    '+' -> when {
+                        l is Num && abs(l.value) < 1e-12 -> r
+                        r is Num && abs(r.value) < 1e-12 -> l
+                        r is UnaryNeg -> Binary('-', l, r.inner).simplify()
+                        else -> Binary('+', l, r)
+                    }
+                    '-' -> when {
+                        r is Num && abs(r.value) < 1e-12 -> l
+                        l is Num && abs(l.value) < 1e-12 -> UnaryNeg(r).simplify()
+                        r is UnaryNeg -> Binary('+', l, r.inner).simplify()
+                        else -> Binary('-', l, r)
+                    }
+                    '*' -> when {
+                        (l is Num && abs(l.value) < 1e-12) || (r is Num && abs(r.value) < 1e-12) -> Num(0.0)
+                        l is Num && abs(l.value - 1.0) < 1e-12 -> r
+                        r is Num && abs(r.value - 1.0) < 1e-12 -> l
+                        l is Num && abs(l.value + 1.0) < 1e-12 -> UnaryNeg(r).simplify()
+                        r is Num && abs(r.value + 1.0) < 1e-12 -> UnaryNeg(l).simplify()
+                        // Combine constant * (constant * expr)
+                        l is Num && r is Binary && r.op == '*' && r.left is Num ->
+                            Binary('*', Num(l.value * r.left.value), r.right).simplify()
+                        r is Num && l is Binary && l.op == '*' && l.left is Num ->
+                            Binary('*', Num(r.value * l.left.value), l.right).simplify()
+                        r is Num && l !is Num -> Binary('*', r, l)
+                        else -> Binary('*', l, r)
+                    }
+                    '/' -> when {
+                        l is Num && abs(l.value) < 1e-12 -> Num(0.0)
+                        r is Num && abs(r.value - 1.0) < 1e-12 -> l
+                        else -> Binary('/', l, r)
+                    }
+                    '^' -> when {
+                        r is Num && abs(r.value) < 1e-12 -> Num(1.0)
+                        r is Num && abs(r.value - 1.0) < 1e-12 -> l
+                        l is Num && abs(l.value) < 1e-12 -> Num(0.0)
+                        l is Num && abs(l.value - 1.0) < 1e-12 -> Num(1.0)
+                        else -> Binary('^', l, r)
+                    }
+                    else -> Binary(op, l, r)
+                }
+            }
+        }
+
+        fun toPrettyString(parentPrec: Int = 0): String = when (this) {
+            is Num -> when {
+                abs(value - PI) < 1e-9 -> "π"
+                abs(value - E) < 1e-9 -> "e"
+                else -> Geo2DMathHelpers.formatNum(value)
+            }
+            is VarX -> "x"
+            is UnaryNeg -> {
+                val innerStr = inner.toPrettyString(3)
+                "-${innerStr}"
+            }
+            is Func -> {
+                if (name == "log" && base != null) {
+                    "log_${base.toPrettyString(4)}(${arg.toPrettyString(0)})"
+                } else {
+                    "$name(${arg.toPrettyString(0)})"
+                }
+            }
+            is Binary -> {
+                val prec = when (op) {
+                    '+', '-' -> 1
+                    '*', '/' -> 2
+                    '^' -> 4
+                    else -> 0
+                }
+                val lStr = left.toPrettyString(prec)
+                val rStr = right.toPrettyString(if (op == '-' || op == '/') prec + 1 else prec)
+                val core = when (op) {
+                    '+' -> "$lStr + $rStr"
+                    '-' -> "$lStr - $rStr"
+                    '*' -> if (left is Num && (right is VarX || right is Func || (right is Binary && right.op == '^'))) {
+                        "$lStr$rStr"
+                    } else {
+                        "$lStr·$rStr"
+                    }
+                    '/' -> "$lStr / $rStr"
+                    '^' -> "$lStr^$rStr"
+                    else -> "$lStr $op $rStr"
+                }
+                if (prec < parentPrec) "($core)" else core
+            }
         }
     }
 
@@ -90,6 +297,7 @@ object MathExprParser {
         data class Op(val ch: Char) : Token()
         data object LParen : Token()
         data object RParen : Token()
+        data object ArgSep : Token()
     }
 
     private val KNOWN_FUNCS = setOf(
@@ -119,9 +327,17 @@ object MathExprParser {
         }
     }
 
+    /**
+     * Compiles and returns a simplified symbolic derivative + readable formula for a raw function string.
+     */
+    fun derive(rawInput: String): Pair<Expr, String>? {
+        val parsed = parse(rawInput) as? ParseResult.Ok ?: return null
+        val d = parsed.expr.symbolicDerivative()?.simplify() ?: return null
+        return d to d.toPrettyString()
+    }
+
     private fun preprocess(raw: String): String {
         var s = raw.trim()
-        // Strip leading "y =" or "f(x) =" or "g(x) ="
         val eqIdx = s.indexOf('=')
         if (eqIdx != -1) {
             s = s.substring(eqIdx + 1)
@@ -139,9 +355,11 @@ object MathExprParser {
             .replace("]", ")")
             .replace("{", "(")
             .replace("}", ")")
-            .replace(",", ".")
 
-        // Convert |expr| into abs(expr) for simple non-nested vertical bars
+        // Support shorthand log_a(x) -> log(a; x)
+        s = Regex("log_([0-9.]+|e|pi)\\(").replace(s) { m -> "log(${m.groupValues[1]}; " }
+
+        // Convert |expr| into abs(expr)
         if (s.contains('|')) {
             val out = StringBuilder()
             var open = false
@@ -171,6 +389,23 @@ object MathExprParser {
             val c = s[i]
             when {
                 c.isWhitespace() -> i++
+                c == ';' -> {
+                    out.add(Token.ArgSep); i++
+                }
+                c == ',' -> {
+                    // Treat comma as argument separator inside log(a, x) or decimal separator otherwise
+                    val prevIsDigit = i > 0 && s[i - 1].isDigit()
+                    val nextIsDigit = i + 1 < s.length && s[i + 1].isDigit()
+                    val insideLog = out.any { it is Token.Ident && it.name == "log" }
+                    if (insideLog && !nextIsDigit) {
+                        out.add(Token.ArgSep); i++
+                    } else if (prevIsDigit && nextIsDigit && !insideLog) {
+                        // Replace decimal comma with dot by scanning back? Already handled if we parse digits with ','
+                        return null
+                    } else {
+                        out.add(Token.ArgSep); i++
+                    }
+                }
                 c.isDigit() || c == '.' -> {
                     val start = i
                     var dotSeen = false
@@ -188,11 +423,9 @@ object MathExprParser {
                         i++
                     }
                     val word = s.substring(start, i).lowercase()
-                    // Split combined identifiers like "xsin" or "pix" if not a known func/const
                     if (word in KNOWN_FUNCS || word == "pi" || word == "e" || word == "x") {
                         out.add(Token.Ident(word))
                     } else {
-                        // Try breaking into known prefixes (e.g. "2pix" -> "pi", "x" or "x2")
                         var pos = 0
                         while (pos < word.length) {
                             val rem = word.substring(pos)
@@ -298,7 +531,6 @@ object MathExprParser {
             val t = peek()
             if (t is Token.Op && t.ch == '^') {
                 consume()
-                // Right-associative exponentiation
                 val exponent = parsePower()
                 return Expr.Binary('^', base, exponent)
             }
@@ -313,7 +545,6 @@ object MathExprParser {
             }
             if (t is Token.Op && t.ch == '-') {
                 consume()
-                // Note: -x^2 means -(x^2) in standard math notation
                 return Expr.UnaryNeg(parsePower())
             }
             return parsePrimary()
@@ -340,17 +571,23 @@ object MathExprParser {
                         "pi" -> Expr.Num(PI)
                         "e" -> Expr.Num(E)
                         in KNOWN_FUNCS -> {
-                            val arg = if (peek() is Token.LParen) {
+                            if (peek() is Token.LParen) {
                                 consume()
-                                val e = parseExpression()
-                                if (peek() !is Token.RParen) throw ParseException("Thiếu ')' sau hàm ${t.name}(...")
-                                consume()
-                                e
+                                val first = parseExpression()
+                                if (t.name == "log" && peek() is Token.ArgSep) {
+                                    consume()
+                                    val second = parseExpression()
+                                    if (peek() !is Token.RParen) throw ParseException("Thiếu ')' sau hàm log(a; x)")
+                                    consume()
+                                    Expr.Func("log", arg = second, base = first)
+                                } else {
+                                    if (peek() !is Token.RParen) throw ParseException("Thiếu ')' sau hàm ${t.name}(...")
+                                    consume()
+                                    Expr.Func(t.name, arg = first)
+                                }
                             } else {
-                                // Allow shorthand like "sin x" or "sqrt 4"
-                                parseUnary()
+                                Expr.Func(t.name, arg = parseUnary())
                             }
-                            Expr.Func(t.name, arg)
                         }
                         else -> throw ParseException("Không hiểu ký hiệu '${t.name}'")
                     }
@@ -362,9 +599,9 @@ object MathExprParser {
 
     /**
      * Finds key features of a compiled function within [xMin, xMax]:
-     *  - Y-intercept (0, f(0))
      *  - Real roots (x-intercepts where f(x) = 0)
      *  - Local extrema (where f'(x) changes sign)
+     *  - Y-intercept (0, f(0))
      */
     fun analyzeFunction(
         expr: Expr,
@@ -375,23 +612,27 @@ object MathExprParser {
         funcColorHex: String
     ): List<GraphKeyPoint> {
         val points = mutableListOf<GraphKeyPoint>()
-        val ySpan = max(1.0, yMax - yMin)
+        val ySpan = max(1e-6, yMax - yMin)
+        val xSpan = max(1e-6, xMax - xMin)
+        val dStep = xSpan * 1e-5
+        val symDeriv = expr.symbolicDerivative()?.simplify()
+
+        fun evalDeriv(x: Double): Double = symDeriv?.eval(x) ?: expr.derivative(x, dStep)
 
         val steps = 221
-        val dx = (xMax - xMin) / steps
+        val dx = xSpan / steps
         if (dx <= 0.0) return points
 
         var prevX = xMin
         var prevY = expr.eval(prevX)
-        var prevD = expr.derivative(prevX)
+        var prevD = evalDeriv(prevX)
 
         for (i in 1..steps) {
             val curX = xMin + i * dx
             val curY = expr.eval(curX)
-            val curD = expr.derivative(curX)
+            val curD = evalDeriv(curX)
 
             if (prevY.isFinite() && curY.isFinite() && abs(curY - prevY) < ySpan * 1.5) {
-                // Root detection
                 if (prevY * curY <= 0.0 && (prevY != 0.0 || curY != 0.0)) {
                     val rootX = bisect(prevX, curX) { expr.eval(it) }
                     val rootY = expr.eval(rootX)
@@ -401,10 +642,9 @@ object MathExprParser {
                 }
             }
 
-            // Local extremum detection (derivative sign change or exact zero crossing)
             if (prevD.isFinite() && curD.isFinite() && prevY.isFinite() && curY.isFinite()) {
                 if (((prevD > 0.0 && curD <= 0.0) || (prevD < 0.0 && curD >= 0.0)) && abs(curY - prevY) < ySpan * 0.8) {
-                    val extX = bisect(prevX, curX) { expr.derivative(it) }
+                    val extX = bisect(prevX, curX) { evalDeriv(it) }
                     val extY = expr.eval(extX)
                     if (extY.isFinite() && extY in (yMin - ySpan * 0.1)..(yMax + ySpan * 0.1)) {
                         val type = if (prevD > 0.0) KeyPointType.LOCAL_MAX else KeyPointType.LOCAL_MIN
@@ -418,7 +658,6 @@ object MathExprParser {
             prevD = curD
         }
 
-        // Y-intercept (added if not already marked by a root or extremum at x = 0)
         if (xMin <= 0.0 && xMax >= 0.0) {
             val y0 = expr.eval(0.0)
             if (y0.isFinite() && y0 in (yMin - ySpan * 0.1)..(yMax + ySpan * 0.1)) {
@@ -428,9 +667,6 @@ object MathExprParser {
         return points.take(16)
     }
 
-    /**
-     * Finds intersections between two compiled functions within [xMin, xMax].
-     */
     fun findIntersections(
         f1: Expr,
         f2: Expr,
@@ -442,7 +678,8 @@ object MathExprParser {
         val out = mutableListOf<GraphKeyPoint>()
         val steps = 200
         val dx = (xMax - xMin) / steps
-        val ySpan = max(1.0, yMax - yMin)
+        if (dx <= 0.0) return out
+        val ySpan = max(1e-6, yMax - yMin)
         var prevX = xMin
         var prevDiff = f1.eval(prevX) - f2.eval(prevX)
 
@@ -467,7 +704,7 @@ object MathExprParser {
         var lo = a
         var hi = b
         var fLo = fn(lo)
-        repeat(24) {
+        repeat(26) {
             val mid = (lo + hi) * 0.5
             val fMid = fn(mid)
             if (!fMid.isFinite()) return mid
@@ -482,7 +719,7 @@ object MathExprParser {
     }
 
     private fun addDistinctPoint(list: MutableList<GraphKeyPoint>, pt: GraphKeyPoint, tol: Double) {
-        val exists = list.any { hypot(it.x - pt.x, it.y - pt.y) < max(0.08, tol) }
+        val exists = list.any { hypot(it.x - pt.x, it.y - pt.y) < max(1e-5, tol) }
         if (!exists) list.add(pt)
     }
 }

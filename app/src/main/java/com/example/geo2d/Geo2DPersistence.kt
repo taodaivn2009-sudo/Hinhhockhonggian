@@ -123,6 +123,7 @@ class Geo2DPersistence(context: Context) {
                     put("expression", fn.expression)
                     put("color", fn.colorHex)
                     put("visible", fn.visible)
+                    put("showDerivative", fn.showDerivative)
                 })
             }
             root.put("functions", fnArr)
@@ -198,7 +199,8 @@ class Geo2DPersistence(context: Context) {
                             label = f.optString("label", "f${i + 1}(x)"),
                             expression = f.optString("expression", ""),
                             colorHex = f.optString("color", "#38BDF8"),
-                            visible = f.optBoolean("visible", true)
+                            visible = f.optBoolean("visible", true),
+                            showDerivative = f.optBoolean("showDerivative", false)
                         )
                     )
                 }
@@ -214,9 +216,9 @@ class Geo2DPersistence(context: Context) {
 
             val cam = o.optJSONObject("camera")?.let {
                 Geo2DCamera(
-                    centerX = it.optDouble("centerX", 0.0).toFloat(),
-                    centerY = it.optDouble("centerY", 0.0).toFloat(),
-                    pixelsPerUnit = it.optDouble("pixelsPerUnit", 72.0).toFloat().coerceIn(14f, 360f)
+                    centerX = it.optDouble("centerX", 0.0),
+                    centerY = it.optDouble("centerY", 0.0),
+                    pixelsPerUnit = it.optDouble("pixelsPerUnit", 72.0).coerceIn(1e-9, 1e7)
                 )
             } ?: Geo2DCamera()
 

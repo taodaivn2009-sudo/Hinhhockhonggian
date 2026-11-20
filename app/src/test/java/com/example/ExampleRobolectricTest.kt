@@ -141,4 +141,45 @@ class ExampleRobolectricTest {
         assertEquals(1, restored.functions.size)
         assertEquals("x^3 - 3x", restored.functions.first().expression)
     }
+
+    @Test
+    fun `2d exp log functions symbolic derivative and infinite zoom persistence work`() {
+        // 1. Exponential & arbitrary-base logarithmic functions
+        val log2Res = MathExprParser.parse("log(2; 8)") as MathExprParser.ParseResult.Ok
+        assertEquals(3.0, log2Res.expr.eval(0.0), 1e-6)
+
+        val logSubRes = MathExprParser.parse("log_3(x)") as MathExprParser.ParseResult.Ok
+        assertEquals(2.0, logSubRes.expr.eval(9.0), 1e-6)
+
+        val expRes = MathExprParser.parse("e^x") as MathExprParser.ParseResult.Ok
+        assertEquals(kotlin.math.E, expRes.expr.eval(1.0), 1e-6)
+
+        // 2. Symbolic derivative evaluation
+        val derivPoly = MathExprParser.derive("x^3 - 3x")
+        assertTrue(derivPoly != null)
+        assertEquals(9.0, derivPoly!!.first.eval(2.0), 1e-6)
+        assertEquals(-3.0, derivPoly.first.eval(0.0), 1e-6)
+
+        val derivLn = MathExprParser.derive("ln(x)")
+        assertTrue(derivLn != null)
+        assertEquals(0.25, derivLn!!.first.eval(4.0), 1e-6)
+
+        // 3. Grouped FunctionLibrary covers every category including EXP_LOG
+        FunctionCategory.entries.forEach { cat ->
+            assertTrue("Category $cat should have templates", FunctionLibrary.byCategory(cat).isNotEmpty())
+        }
+
+        // 4. Infinite zoom Double camera & showDerivative round trip
+        val extremeSnap = Geo2DSnapshot(
+            functions = listOf(
+                GraphFunction("f1", "f₁(x)", "e^x", "#38BDF8", visible = false, showDerivative = true)
+            ),
+            camera = Geo2DCamera(centerX = 12500.0, centerY = -8400.0, pixelsPerUnit = 0.001)
+        )
+        val restored = Geo2DPersistence.jsonToSnapshot(Geo2DPersistence.snapshotToJson(extremeSnap))
+        assertEquals(false, restored.functions.first().visible)
+        assertEquals(true, restored.functions.first().showDerivative)
+        assertEquals(12500.0, restored.camera.centerX, 1e-3)
+        assertEquals(0.001, restored.camera.pixelsPerUnit, 1e-6)
+    }
 }

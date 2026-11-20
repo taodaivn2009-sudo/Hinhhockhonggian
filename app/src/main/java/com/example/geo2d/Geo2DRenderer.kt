@@ -9,22 +9,30 @@ import kotlin.math.*
  */
 object Geo2DRenderer {
 
-    fun worldToScreen(wx: Float, wy: Float, cam: Geo2DCamera, width: Float, height: Float): Vec2 {
-        val sx = width * 0.5f + (wx - cam.centerX) * cam.pixelsPerUnit
-        val sy = height * 0.5f - (wy - cam.centerY) * cam.pixelsPerUnit
+    fun worldToScreen(wx: Double, wy: Double, cam: Geo2DCamera, width: Float, height: Float): Vec2 {
+        val sx = (width * 0.5 + (wx - cam.centerX) * cam.pixelsPerUnit).toFloat()
+        val sy = (height * 0.5 - (wy - cam.centerY) * cam.pixelsPerUnit).toFloat()
         return Vec2(sx, sy)
     }
 
-    fun screenToWorld(sx: Float, sy: Float, cam: Geo2DCamera, width: Float, height: Float): Vec2 {
-        val wx = cam.centerX + (sx - width * 0.5f) / cam.pixelsPerUnit
-        val wy = cam.centerY - (sy - height * 0.5f) / cam.pixelsPerUnit
-        return Vec2(wx, wy)
+    fun worldToScreen(wx: Float, wy: Float, cam: Geo2DCamera, width: Float, height: Float): Vec2 =
+        worldToScreen(wx.toDouble(), wy.toDouble(), cam, width, height)
+
+    fun screenToWorldDouble(sx: Float, sy: Float, cam: Geo2DCamera, width: Float, height: Float): Pair<Double, Double> {
+        val wx = cam.centerX + (sx - width * 0.5) / cam.pixelsPerUnit
+        val wy = cam.centerY - (sy - height * 0.5) / cam.pixelsPerUnit
+        return wx to wy
     }
 
-    fun niceGridStep(pixelsPerUnit: Float, density: Float): Double {
-        val targetPx = 68.0 * density
-        val rawStep = targetPx / pixelsPerUnit.toDouble()
-        val exp = floor(log10(max(1e-6, rawStep)))
+    fun screenToWorld(sx: Float, sy: Float, cam: Geo2DCamera, width: Float, height: Float): Vec2 {
+        val (wx, wy) = screenToWorldDouble(sx, sy, cam, width, height)
+        return Vec2(wx.toFloat(), wy.toFloat())
+    }
+
+    fun niceGridStep(pixelsPerUnit: Double, density: Float): Double {
+        val targetPx = 72.0 * density
+        val rawStep = targetPx / max(1e-12, pixelsPerUnit)
+        val exp = floor(log10(max(1e-12, rawStep)))
         val base = 10.0.pow(exp)
         val frac = rawStep / base
         return when {
@@ -59,10 +67,8 @@ object Geo2DRenderer {
         }
         canvas.drawRect(0f, 0f, width, height, bgPaint)
 
-        val xMin = screenToWorld(0f, height, cam, width, height).x.toDouble()
-        val xMax = screenToWorld(width, 0f, cam, width, height).x.toDouble()
-        val yMin = screenToWorld(0f, height, cam, width, height).y.toDouble()
-        val yMax = screenToWorld(width, 0f, cam, width, height).y.toDouble()
+        val (xMin, yMin) = screenToWorldDouble(0f, height, cam, width, height)
+        val (xMax, yMax) = screenToWorldDouble(width, 0f, cam, width, height)
         val majorStep = niceGridStep(cam.pixelsPerUnit, density)
 
         // 2. Adaptive Coordinate Grid
@@ -75,14 +81,43 @@ object Geo2DRenderer {
             drawAxes(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, majorStep)
         }
 
-        // 4. Compile & Draw Arbitrary Mathematical Function Graphs y = f(x)
+        // 4. Compile & Draw Arbitrary Mathematical Function Graphs y = f(x) and optional Derivative y = f'(x)
         val compiledFunctions = mutableListOf<Pair<GraphFunction, MathExprParser.Expr>>()
+        val xSpan = max(1e-9, xMax - xMin)
+        val ySpan = max(1e-9, yMax - yMin)
         snap.functions.forEach { fn ->
-            if (!fn.visible || fn.expression.isBlank()) return@forEach
+            if ((!fn.visible && !fn.showDerivative) || fn.expression.isBlank()) return@forEach
             val parsed = MathExprParser.parse(fn.expression)
             if (parsed is MathExprParser.ParseResult.Ok) {
-                compiledFunctions.add(fn to parsed.expr)
-                drawFunctionCurve(canvas, width, height, density, cam, parsed.expr, fn.colorHex, yMax - yMin)
+                if (fn.visible) {
+                    compiledFunctions.add(fn to parsed.expr)
+                    drawFunctionCurve(
+                        canvas = canvas,
+                        width = width,
+                        height = height,
+                        density = density,
+                        cam = cam,
+                        evaluator = { x -> parsed.expr.eval(x) },
+                        colorHex = fn.colorHex,
+                        worldHeight = ySpan,
+                        isDashedDerivative = false
+                    )
+                }
+                if (fn.showDerivative) {
+                    val symDeriv = parsed.expr.symbolicDerivative()?.simplify()
+                    val numStep = xSpan * 1e-5
+                    drawFunctionCurve(
+                        canvas = canvas,
+                        width = width,
+                        height = height,
+                        density = density,
+                        cam = cam,
+                        evaluator = { x -> symDeriv?.eval(x) ?: parsed.expr.derivative(x, numStep) },
+                        colorHex = fn.colorHex,
+                        worldHeight = ySpan,
+                        isDashedDerivative = true
+                    )
+                }
             }
         }
 
@@ -198,14 +233,14 @@ object Geo2DRenderer {
         var mx = floor(xMin / minorStep) * minorStep
         var guard = 0
         while (mx <= xMax && guard++ < 400) {
-            val sx = worldToScreen(mx.toFloat(), 0f, cam, width, height).x
+            val sx = worldToScreen(mx, 0.0, cam, width, height).x
             canvas.drawLine(sx, 0f, sx, height, minorPaint)
             mx += minorStep
         }
         var my = floor(yMin / minorStep) * minorStep
         guard = 0
         while (my <= yMax && guard++ < 400) {
-            val sy = worldToScreen(0f, my.toFloat(), cam, width, height).y
+            val sy = worldToScreen(0.0, my, cam, width, height).y
             canvas.drawLine(0f, sy, width, sy, minorPaint)
             my += minorStep
         }
@@ -214,14 +249,14 @@ object Geo2DRenderer {
         var gx = floor(xMin / majorStep) * majorStep
         guard = 0
         while (gx <= xMax && guard++ < 150) {
-            val sx = worldToScreen(gx.toFloat(), 0f, cam, width, height).x
+            val sx = worldToScreen(gx, 0.0, cam, width, height).x
             canvas.drawLine(sx, 0f, sx, height, majorPaint)
             gx += majorStep
         }
         var gy = floor(yMin / majorStep) * majorStep
         guard = 0
         while (gy <= yMax && guard++ < 150) {
-            val sy = worldToScreen(0f, gy.toFloat(), cam, width, height).y
+            val sy = worldToScreen(0.0, gy, cam, width, height).y
             canvas.drawLine(0f, sy, width, sy, majorPaint)
             gy += majorStep
         }
@@ -239,7 +274,7 @@ object Geo2DRenderer {
         yMax: Double,
         majorStep: Double
     ) {
-        val origin = worldToScreen(0f, 0f, cam, width, height)
+        val origin = worldToScreen(0.0, 0.0, cam, width, height)
         val axisXPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xFF94A3B8.toInt()
             strokeWidth = 2.0f * density
@@ -250,7 +285,7 @@ object Geo2DRenderer {
         }
         val tickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xFF94A3B8.toInt()
-            textSize = 11f * density
+            textSize = 10.5f * density
             typeface = Typeface.MONOSPACE
         }
 
@@ -269,7 +304,7 @@ object Geo2DRenderer {
         }
 
         // Y Axis
-        val clampedX = origin.x.coerceIn(26f * density, width - 26f * density)
+        val clampedX = origin.x.coerceIn(32f * density, width - 26f * density)
         val yVisible = origin.x in -2f..width + 2f
         if (yVisible) {
             canvas.drawLine(origin.x, height, origin.x, 6f * density, axisYPaint)
@@ -288,16 +323,16 @@ object Geo2DRenderer {
             canvas.drawText("O", origin.x - 6f * density, origin.y + 14f * density, tickPaint)
         }
 
-        // X tick numbers
+        // X tick numbers (with scientific/compact infinite-zoom formatting)
         tickPaint.textAlign = Paint.Align.CENTER
         var gx = floor(xMin / majorStep) * majorStep
         var guard = 0
         while (gx <= xMax && guard++ < 120) {
             if (abs(gx) > majorStep * 0.1) {
-                val sx = worldToScreen(gx.toFloat(), 0f, cam, width, height).x
-                if (sx in (20f * density)..(width - 24f * density)) {
+                val sx = worldToScreen(gx, 0.0, cam, width, height).x
+                if (sx in (24f * density)..(width - 26f * density)) {
                     if (xVisible) canvas.drawLine(sx, origin.y - 3.5f * density, sx, origin.y + 3.5f * density, axisXPaint)
-                    canvas.drawText(Geo2DMathHelpers.formatNum(gx), sx, clampedY + 14f * density, tickPaint)
+                    canvas.drawText(Geo2DMathHelpers.formatAxisTick(gx), sx, clampedY + 14f * density, tickPaint)
                 }
             }
             gx += majorStep
@@ -309,10 +344,10 @@ object Geo2DRenderer {
         guard = 0
         while (gy <= yMax && guard++ < 120) {
             if (abs(gy) > majorStep * 0.1) {
-                val sy = worldToScreen(0f, gy.toFloat(), cam, width, height).y
+                val sy = worldToScreen(0.0, gy, cam, width, height).y
                 if (sy in (24f * density)..(height - 20f * density)) {
                     if (yVisible) canvas.drawLine(origin.x - 3.5f * density, sy, origin.x + 3.5f * density, sy, axisYPaint)
-                    canvas.drawText(Geo2DMathHelpers.formatNum(gy), clampedX - 7f * density, sy + 4f * density, tickPaint)
+                    canvas.drawText(Geo2DMathHelpers.formatAxisTick(gy), clampedX - 7f * density, sy + 4f * density, tickPaint)
                 }
             }
             gy += majorStep
@@ -325,39 +360,52 @@ object Geo2DRenderer {
         height: Float,
         density: Float,
         cam: Geo2DCamera,
-        expr: MathExprParser.Expr,
+        evaluator: (Double) -> Double,
         colorHex: String,
-        worldHeight: Double
+        worldHeight: Double,
+        isDashedDerivative: Boolean
     ) {
-        val baseColor = parseColor(colorHex, 0xFF38BDF8.toInt())
+        val rawColor = parseColor(colorHex, 0xFF38BDF8.toInt())
+        // Lighten/warm slightly for dashed derivative so both f(x) and f'(x) pop cleanly together
+        val baseColor = if (isDashedDerivative) {
+            Color.rgb(
+                ((Color.red(rawColor) + 251) / 2).coerceIn(0, 255),
+                ((Color.green(rawColor) + 191) / 2).coerceIn(0, 255),
+                ((Color.blue(rawColor) + 60) / 2).coerceIn(0, 255)
+            )
+        } else rawColor
+
         val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = 6.5f * density
+            strokeWidth = (if (isDashedDerivative) 5f else 6.5f) * density
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
-            color = Color.argb(42, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
+            color = Color.argb(if (isDashedDerivative) 34 else 42, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
         }
         val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = 2.5f * density
+            strokeWidth = (if (isDashedDerivative) 2.2f else 2.5f) * density
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
             color = baseColor
+            if (isDashedDerivative) {
+                pathEffect = DashPathEffect(floatArrayOf(9f * density, 6f * density), 0f)
+            }
         }
 
         val path = Path()
         val stepPx = max(1.5f, 1.5f * density)
-        val maxJumpWorld = max(6.0, worldHeight * 1.15)
+        val maxJumpWorld = max(1e-4, worldHeight * 1.15)
         var sx = 0f
         var penDown = false
         var prevWy = Double.NaN
         var prevSy = 0f
 
         while (sx <= width + stepPx) {
-            val wx = screenToWorld(sx, 0f, cam, width, height).x.toDouble()
-            val wy = expr.eval(wx)
+            val (wx, _) = screenToWorldDouble(sx, 0f, cam, width, height)
+            val wy = evaluator(wx)
             if (wy.isFinite()) {
-                val sy = worldToScreen(wx.toFloat(), wy.toFloat(), cam, width, height).y
+                val sy = worldToScreen(wx, wy, cam, width, height).y
                 val isAsymptoteJump = penDown && prevWy.isFinite() &&
                     (abs(wy - prevWy) > maxJumpWorld || (abs(sy - prevSy) > height * 1.2f && (wy * prevWy < 0.0)))
 
@@ -409,7 +457,7 @@ object Geo2DRenderer {
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC0F172A.toInt() }
 
         keyPoints.forEach { kp ->
-            val p = worldToScreen(kp.x.toFloat(), kp.y.toFloat(), cam, width, height)
+            val p = worldToScreen(kp.x, kp.y, cam, width, height)
             if (p.x !in 12f..(width - 12f) || p.y !in 12f..(height - 12f)) return@forEach
             val c = parseColor(kp.colorHex, 0xFFFBBF24.toInt())
             val r = if (kp.type == KeyPointType.INTERSECTION) 5.2f * density else 4.2f * density
@@ -436,7 +484,7 @@ object Geo2DRenderer {
         results: List<TraceResult>,
         showTangent: Boolean
     ) {
-        val sx = worldToScreen(traceX.toFloat(), 0f, cam, width, height).x
+        val sx = worldToScreen(traceX, 0.0, cam, width, height).x
         val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeWidth = 1.4f * density
@@ -447,18 +495,18 @@ object Geo2DRenderer {
 
         results.forEach { res ->
             if (!res.y.isFinite()) return@forEach
-            val pt = worldToScreen(res.x.toFloat(), res.y.toFloat(), cam, width, height)
+            val pt = worldToScreen(res.x, res.y, cam, width, height)
             val curveColor = parseColor(res.colorHex, 0xFF38BDF8.toInt())
 
             // Tangent line at traced point
             if (showTangent && res.slope.isFinite()) {
-                val spanWorld = (100f * density) / cam.pixelsPerUnit
+                val spanWorld = (100.0 * density) / cam.pixelsPerUnit
                 val x1 = res.x - spanWorld
                 val y1 = res.y + res.slope * (x1 - res.x)
                 val x2 = res.x + spanWorld
                 val y2 = res.y + res.slope * (x2 - res.x)
-                val p1 = worldToScreen(x1.toFloat(), y1.toFloat(), cam, width, height)
-                val p2 = worldToScreen(x2.toFloat(), y2.toFloat(), cam, width, height)
+                val p1 = worldToScreen(x1, y1, cam, width, height)
+                val p2 = worldToScreen(x2, y2, cam, width, height)
                 val tanPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     style = Paint.Style.STROKE
                     strokeWidth = 1.6f * density
@@ -546,7 +594,7 @@ object Geo2DRenderer {
         if (worldR < 1e-4f) return
 
         val sc = worldToScreen(cPt.x, cPt.y, cam, width, height)
-        val screenR = worldR * cam.pixelsPerUnit
+        val screenR = (worldR * cam.pixelsPerUnit).toFloat()
         val baseColor = parseColor(circle.colorHex, 0xFF10B981.toInt())
 
         val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {

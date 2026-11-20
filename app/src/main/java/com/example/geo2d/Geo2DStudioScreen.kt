@@ -24,6 +24,7 @@ import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -260,6 +261,19 @@ fun Geo2DStudioScreen(
             )
         }
 
+        // 3b. Tap anywhere on empty canvas area to quickly dismiss open panel
+        if (uiState.activeTab != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { viewModel.closeTab() }
+                    .testTag("geo2d_dismiss_scrim")
+            )
+        }
+
         // 4. Adaptive Inspector Sheet (Functions / Presets / Measurements / Settings)
         Geo2DInspectorSheet(
             uiState = uiState,
@@ -411,7 +425,7 @@ private fun Geo2DTopHeader(
                 )
 
                 // Quick Functions Pill
-                val visibleFnCount = uiState.snapshot.functions.count { it.visible && it.expression.isNotBlank() }
+                val visibleFnCount = uiState.snapshot.functions.count { (it.visible || it.showDerivative) && it.expression.isNotBlank() }
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
@@ -595,6 +609,10 @@ private fun Geo2DInspectorSheet(
                 .clip(shape)
                 .background(SlateDark.copy(alpha = 0.96f))
                 .border(1.dp, SlateBorder, shape)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {}
         ) {
             Row(
                 modifier = Modifier
