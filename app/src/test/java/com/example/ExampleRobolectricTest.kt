@@ -66,4 +66,22 @@ class ExampleRobolectricTest {
         assertEquals(1, restored.customLines.size)
         assertEquals(1, restored.customPlanes.size)
     }
+
+    @Test
+    fun `sensitivity config persists accurately in json round trip`() {
+        val customSens = SensitivityConfig(
+            rotation = 0.55f,
+            zoom = 1.45f,
+            drag = 0.65f,
+            touchRadius = 1.3f
+        )
+        val snap = GeometrySnapshot(sensitivity = customSens)
+        val json = GeometryPersistence.snapshotToJson(snap)
+        val restored = GeometryPersistence.jsonToSnapshot(json)
+
+        assertEquals(0.55f, restored.sensitivity.rotation, 0.01f)
+        assertEquals(1.45f, restored.sensitivity.zoom, 0.01f)
+        assertEquals(0.65f, restored.sensitivity.drag, 0.01f)
+        assertEquals(1.30f, restored.sensitivity.touchRadius, 0.01f)
+    }
 }

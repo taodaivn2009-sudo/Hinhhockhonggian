@@ -91,6 +91,12 @@ class GeometryPersistence(context: Context) {
             root.put("secRatio", s.secRatio.toDouble())
             root.put("keepRelations", s.keepRelations)
             root.put("snapEnabled", s.snapEnabled)
+            root.put("sensitivity", JSONObject().apply {
+                put("rotation", s.sensitivity.rotation.toDouble())
+                put("zoom", s.sensitivity.zoom.toDouble())
+                put("drag", s.sensitivity.drag.toDouble())
+                put("touchRadius", s.sensitivity.touchRadius.toDouble())
+            })
 
             val camPos = s.camera.cameraPosition()
             root.put("cameraPos", JSONObject().apply {
@@ -242,6 +248,14 @@ class GeometryPersistence(context: Context) {
                 secRatio = o.optDouble("secRatio", 0.5).toFloat(),
                 keepRelations = o.optBoolean("keepRelations", true),
                 snapEnabled = o.optBoolean("snapEnabled", true),
+                sensitivity = o.optJSONObject("sensitivity")?.let { sens ->
+                    SensitivityConfig(
+                        rotation = sens.optDouble("rotation", 1.0).toFloat().coerceIn(0.2f, 2.5f),
+                        zoom = sens.optDouble("zoom", 1.0).toFloat().coerceIn(0.3f, 2.5f),
+                        drag = sens.optDouble("drag", 1.0).toFloat().coerceIn(0.2f, 2.0f),
+                        touchRadius = sens.optDouble("touchRadius", 1.0).toFloat().coerceIn(0.6f, 1.8f)
+                    )
+                } ?: SensitivityConfig(),
                 vertexOverrides = overrides,
                 customPoints = customPts,
                 customXYZPoints = xyzPts,

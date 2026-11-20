@@ -36,7 +36,9 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         val name: String,
         val type: DragPointType,
         val lockedRail: LockedRail?,
-        var startWorldPos: Vec3
+        var startWorldPos: Vec3,
+        val anchorScreenX: Float,
+        val anchorScreenY: Float
     )
 
     private enum class DragPointType { EDGE, XYZ, BASE }
@@ -153,12 +155,62 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
 
     fun toggleLeftPane(pane: LeftPane) {
         _uiState.update { st ->
-            st.copy(activeLeftPane = if (st.activeLeftPane == pane) null else pane)
+            st.copy(
+                activeLeftPane = if (st.activeLeftPane == pane) null else pane,
+                sensitivityPopoverOpen = false
+            )
         }
     }
 
     fun closeLeftPane() {
         _uiState.update { it.copy(activeLeftPane = null) }
+    }
+
+    fun toggleSensitivityPopover() {
+        _uiState.update { st ->
+            st.copy(
+                sensitivityPopoverOpen = !st.sensitivityPopoverOpen,
+                activeLeftPane = if (!st.sensitivityPopoverOpen) null else st.activeLeftPane
+            )
+        }
+    }
+
+    fun closeSensitivityPopover() {
+        _uiState.update { it.copy(sensitivityPopoverOpen = false) }
+    }
+
+    fun updateSensitivity(
+        rotation: Float? = null,
+        zoom: Float? = null,
+        drag: Float? = null,
+        touchRadius: Float? = null
+    ) {
+        updateSnapshot(autoSave = false) { snap ->
+            val cur = snap.sensitivity
+            snap.copy(
+                sensitivity = cur.copy(
+                    rotation = (rotation ?: cur.rotation).coerceIn(0.2f, 2.5f),
+                    zoom = (zoom ?: cur.zoom).coerceIn(0.3f, 2.5f),
+                    drag = (drag ?: cur.drag).coerceIn(0.2f, 2.0f),
+                    touchRadius = (touchRadius ?: cur.touchRadius).coerceIn(0.6f, 1.8f)
+                )
+            )
+        }
+    }
+
+    fun applySensitivityPreset(preset: String) {
+        val next = when (preset) {
+            "precise" -> SensitivityConfig(rotation = 0.5f, zoom = 0.7f, drag = 0.5f, touchRadius = 1.25f)
+            "fast" -> SensitivityConfig(rotation = 1.7f, zoom = 1.5f, drag = 1.35f, touchRadius = 1.1f)
+            else -> SensitivityConfig(rotation = 1.0f, zoom = 1.0f, drag = 1.0f, touchRadius = 1.0f)
+        }
+        updateSnapshot { it.copy(sensitivity = next) }
+        val label = when (preset) {
+            "precise" -> "Chính xác (Chậm & êm)"
+            "fast" -> "Nhanh & linh hoạt"
+            else -> "Cân bằng (Mặc định)"
+        }
+        showToast("Độ nhạy: $label")
     }
 
     fun toggleShapeCategory(category: ShapeCategory) {
@@ -314,9 +366,10 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
     fun orbitCamera(deltaX: Float, deltaY: Float) {
         _uiState.update { st ->
             val cam = st.snapshot.camera
+            val sens = st.snapshot.sensitivity.rotation
             val nextCam = cam.copy(
-                theta = cam.theta - deltaX * 0.0085f,
-                phi = (cam.phi - deltaY * 0.0085f).coerceIn(0.12f, PI.toFloat() - 0.12f)
+                theta = cam.theta - deltaX * 0.0085f * sens,
+                phi = (cam.phi - deltaY * 0.0085f * sens).coerceIn(0.12f, PI.toFloat() - 0.12f)
             )
             st.copy(snapshot = st.snapshot.copy(camera = nextCam))
         }
@@ -325,12 +378,22 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
     fun zoomAndPanCamera(zoomFactor: Float, panX: Float, panY: Float, viewportHeight: Float) {
         _uiState.update { st ->
             val cam = st.snapshot.camera
-            val nextRadius = (cam.radius / zoomFactor).coerceIn(3.5f, 28f)
+            val zoomSens = st.snapshot.sensitivity.zoom
+            val scaledZoom = (1f + (zoomFactor - 1f) * zoomSens).coerceIn(0.55f, 1.85f)
+            val nextRadius = (cam.radius / scaledZoom).coerceIn(3.5f, 28f)
             val proj = CameraProjection(cam.cameraPosition(), cam.target, viewportHeight, viewportHeight)
-            val panScale = nextRadius * 0.0014f
+            val panScale = nextRadius * 0.0014f * zoomSens
             val nextTarget = cam.target - proj.right * (panX * panScale) + proj.up * (panY * panScale)
             val nextCam = cam.copy(radius = nextRadius, target = nextTarget)
             st.copy(snapshot = st.snapshot.copy(camera = nextCam))
+        }
+    }
+
+    fun stepZoom(zoomIn: Boolean) {
+        updateSnapshot { snap ->
+            val factor = if (zoomIn) (1f + 0.18f * snap.sensitivity.zoom) else 1f / (1f + 0.18f * snap.sensitivity.zoom)
+            val nextRadius = (snap.camera.radius / factor).coerceIn(3.5f, 28f)
+            snap.copy(camera = snap.camera.copy(radius = nextRadius))
         }
     }
 
@@ -338,7 +401,8 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         if (!_uiState.value.autoRotate) return
         _uiState.update { st ->
             val cam = st.snapshot.camera
-            st.copy(snapshot = st.snapshot.copy(camera = cam.copy(theta = cam.theta + deltaSec * 0.55f)))
+            val rotSens = st.snapshot.sensitivity.rotation
+            st.copy(snapshot = st.snapshot.copy(camera = cam.copy(theta = cam.theta + deltaSec * 0.55f * rotSens)))
         }
     }
 
@@ -554,7 +618,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
     fun onCanvasTap(sx: Float, sy: Float, width: Float, height: Float, density: Float) {
         val st = _uiState.value
         val proj = makeProjection(width, height)
-        val hitThreshold = 40f * density
+        val hitThreshold = 40f * density * st.snapshot.sensitivity.touchRadius
 
         when (st.interactionMode) {
             InteractionMode.VIEW -> {
@@ -607,7 +671,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
     fun onDragStart(sx: Float, sy: Float, width: Float, height: Float, density: Float): Boolean {
         val st = _uiState.value
         val proj = makeProjection(width, height)
-        val hitThreshold = 42f * density
+        val hitThreshold = 42f * density * st.snapshot.sensitivity.touchRadius
 
         if (st.interactionMode == InteractionMode.ADD_POINT) {
             val hit = findNearestEdgeHit2D(sx, sy, proj, hitThreshold)
@@ -635,7 +699,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
             else -> DragPointType.BASE
         }
         val rail = findBestRailForPoint(targetName)
-        activeDrag = ActiveDrag(targetName, type, rail, startPos)
+        activeDrag = ActiveDrag(targetName, type, rail, startPos, sx, sy)
 
         _uiState.update {
             it.copy(
@@ -651,9 +715,10 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
     fun onDragMove(sx: Float, sy: Float, width: Float, height: Float, density: Float) {
         val st = _uiState.value
         val proj = makeProjection(width, height)
+        val touchRadius = st.snapshot.sensitivity.touchRadius
 
         if (st.interactionMode == InteractionMode.ADD_POINT) {
-            val hit = findNearestEdgeHit2D(sx, sy, proj, 48f * density)
+            val hit = findNearestEdgeHit2D(sx, sy, proj, 48f * density * touchRadius)
             _uiState.update {
                 if (hit != null) {
                     it.copy(
@@ -670,12 +735,15 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
 
         val drag = activeDrag ?: return
         val snap = st.snapshot
+        val dragSens = snap.sensitivity.drag
+        val effX = drag.anchorScreenX + (sx - drag.anchorScreenX) * dragSens
+        val effY = drag.anchorScreenY + (sy - drag.anchorScreenY) * dragSens
         val origin = ShapeBuilder.getOriginWorld(st.scene.pointRegistry, snap.originPoint)
 
         // Mode 1: Locked on Segment (or Custom Edge Point)
         if (st.dragConstraint == DragConstraintMode.SEGMENT || drag.type == DragPointType.EDGE) {
             val rail = drag.lockedRail ?: return
-            val hit = projectOntoSegment(sx, sy, rail, proj, snap.snapEnabled) ?: return
+            val hit = projectOntoSegment(effX, effY, rail, proj, snap.snapEnabled) ?: return
             var relMsg = ""
             var linked = emptySet<String>()
 
@@ -725,7 +793,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
 
         // Mode 2 & 3: Horizontal (Oxy) or Vertical (Oz)
         val isVertical = st.dragConstraint == DragConstraintMode.VERTICAL
-        val ray = proj.screenToRay(sx, sy)
+        val ray = proj.screenToRay(effX, effY)
         val rawPos = if (isVertical) {
             val horizCam = Vec3(proj.forward.x, 0f, proj.forward.z).let {
                 if (it.lengthSq() < 1e-4f) Vec3(0f, 0f, 1f) else it.normalized()

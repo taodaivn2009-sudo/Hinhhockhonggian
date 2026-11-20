@@ -219,6 +219,13 @@ data class HoverTooltip(
     val relationBadge: String = ""
 )
 
+data class SensitivityConfig(
+    val rotation: Float = 1.0f,
+    val zoom: Float = 1.0f,
+    val drag: Float = 1.0f,
+    val touchRadius: Float = 1.0f
+)
+
 data class GeometrySnapshot(
     val shape: ShapeType = ShapeType.PYRAMID3,
     val a: Float = 4.0f,
@@ -236,6 +243,7 @@ data class GeometrySnapshot(
     val secRatio: Float = 0.5f,
     val keepRelations: Boolean = true,
     val snapEnabled: Boolean = true,
+    val sensitivity: SensitivityConfig = SensitivityConfig(),
     val vertexOverrides: Map<String, Vec3> = emptyMap(),
     val customPoints: List<CustomEdgePoint> = emptyList(),
     val customXYZPoints: List<CustomXYZPoint> = emptyList(),
@@ -254,6 +262,7 @@ data class GeometryUiState(
     val linkedPartners: Set<String> = emptySet(),
     val autoRotate: Boolean = false,
     val activeLeftPane: LeftPane? = null,
+    val sensitivityPopoverOpen: Boolean = false,
     val bottomDockCollapsed: Boolean = false,
     val dragSubdrawerOpen: Boolean = false,
     val openCategories: Set<ShapeCategory> = setOf(ShapeCategory.PYRAMID),

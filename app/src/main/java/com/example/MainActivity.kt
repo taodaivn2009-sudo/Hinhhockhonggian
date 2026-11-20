@@ -21,11 +21,13 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.ui.BottomToolDock
+import com.example.ui.BottomStudioDock
 import com.example.ui.GeometryCanvasView
-import com.example.ui.LeftDockAndDrawer
+import com.example.ui.RightCanvasQuickControls
+import com.example.ui.SensitivityQuickPopover
+import com.example.ui.StudioInspectorSheet
 import com.example.ui.ToastBanner
-import com.example.ui.TopRightMetricsBar
+import com.example.ui.TopStudioHeader
 import com.example.ui.panes.SaveExportModal
 import com.example.ui.theme.Geo3DTheme
 import com.example.viewmodel.GeometryViewModel
@@ -122,7 +124,7 @@ fun GeometryStudioScreen(
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isCompactWidth = maxWidth < 600.dp
-        val drawerMaxWidth = (maxWidth - 78.dp).coerceIn(250.dp, 348.dp)
+        val maxSheetHeight = (maxHeight * 0.56f).coerceIn(280.dp, 480.dp)
 
         // 1. Full-bleed Interactive 3D Viewport
         GeometryCanvasView(
@@ -132,37 +134,54 @@ fun GeometryStudioScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // 2. Top-Right Live Metrics & Camera Quick Actions
-        TopRightMetricsBar(
+        // 2. Top Studio Header (Shape Selector + Live Metrics + Quick Actions)
+        TopStudioHeader(
             uiState = uiState,
             viewModel = viewModel,
             isCompactWidth = isCompactWidth,
-            modifier = Modifier.align(Alignment.TopEnd)
+            modifier = Modifier.align(Alignment.TopCenter)
         )
 
-        // 3. Left Icon Rail & Slide-Out Drawer
-        LeftDockAndDrawer(
+        // 3. Right Floating Quick Controls (Oxyz, Snap, Sensitivity, Auto-Rotate, Zoom +/-)
+        if (!isCompactWidth || uiState.activeLeftPane == null) {
+            RightCanvasQuickControls(
+                uiState = uiState,
+                viewModel = viewModel,
+                modifier = Modifier.align(Alignment.CenterEnd)
+            )
+        }
+
+        // 4. Live Floating Sensitivity Quick Popover
+        SensitivityQuickPopover(
             uiState = uiState,
             viewModel = viewModel,
-            drawerMaxWidth = drawerMaxWidth,
-            onImportJsonClick = { importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
-            modifier = Modifier.align(Alignment.CenterStart)
+            modifier = Modifier.align(Alignment.CenterEnd)
         )
 
-        // 4. Bottom Floating Collapsible Dock & Drag Constraint Sub-Bar
-        BottomToolDock(
+        // 5. Adaptive Inspector Sheet (Bottom Sheet on mobile, Left Side Panel on tablet)
+        StudioInspectorSheet(
+            uiState = uiState,
+            viewModel = viewModel,
+            isCompactWidth = isCompactWidth,
+            maxSheetHeight = maxSheetHeight,
+            onImportJsonClick = { importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
+            modifier = Modifier.align(if (isCompactWidth) Alignment.BottomCenter else Alignment.CenterStart)
+        )
+
+        // 6. Intuitive 2-Tier Bottom Studio Dock
+        BottomStudioDock(
             uiState = uiState,
             viewModel = viewModel,
             modifier = Modifier.align(Alignment.BottomCenter)
         )
 
-        // 5. Floating Toast Notification
+        // 7. Floating Toast Notification
         ToastBanner(
             message = uiState.toastMessage,
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
-        // 6. Save / Export Modal Dialog
+        // 8. Save / Export Modal Dialog
         SaveExportModal(
             uiState = uiState,
             viewModel = viewModel,
