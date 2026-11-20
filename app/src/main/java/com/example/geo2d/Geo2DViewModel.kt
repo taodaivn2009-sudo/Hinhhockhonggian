@@ -266,15 +266,28 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun snapCoord(raw: Vec2, density: Float): Vec2 {
         val snap = _uiState.value.snapshot
-        if (!snap.snapToGrid) return Vec2(round2(raw.x), round2(raw.y))
-        val major = Geo2DRenderer.niceGridStep(snap.camera.pixelsPerUnit, density)
-        val snapStep = (major / 2.0).toFloat()
-        val sx = (round(raw.x / snapStep) * snapStep)
-        val sy = (round(raw.y / snapStep) * snapStep)
-        val tol = snapStep * 0.35f
+        val major = Geo2DRenderer.niceGridStep(snap.camera.pixelsPerUnit, density).coerceAtLeast(1e-6)
+        val snapStep = (major / 2.0).coerceAtLeast(1e-6)
+        val fineStep = (major / 20.0).coerceAtLeast(1e-6)
+
+        fun roundDynamic(v: Double): Float {
+            if (!v.isFinite()) return 0f
+            val r = round(v / fineStep) * fineStep
+            return (if (abs(r) < fineStep * 1e-3) 0.0 else r).toFloat()
+        }
+
+        if (!snap.snapToGrid) {
+            return Vec2(roundDynamic(raw.x.toDouble()), roundDynamic(raw.y.toDouble()))
+        }
+
+        val rx = raw.x.toDouble()
+        val ry = raw.y.toDouble()
+        val sx = round(rx / snapStep) * snapStep
+        val sy = round(ry / snapStep) * snapStep
+        val tol = snapStep * 0.35
         return Vec2(
-            x = if (abs(raw.x - sx) <= tol) round2(sx) else round2(raw.x),
-            y = if (abs(raw.y - sy) <= tol) round2(sy) else round2(raw.y)
+            x = if (abs(rx - sx) <= tol) sx.toFloat() else roundDynamic(rx),
+            y = if (abs(ry - sy) <= tol) sy.toFloat() else roundDynamic(ry)
         )
     }
 
@@ -371,13 +384,20 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
             Geo2DTool.MEASURE_ANGLE -> {
                 val ptId = resolveOrCreatePoint()
                 val pending = _uiState.value.pendingPointIds
-                if (ptId in pending) return
+                if (ptId in pending) {
+                    showToast("Hãy chọn điểm khác để tạo góc gồm 3 điểm phân biệt")
+                    return
+                }
                 val updated = pending + ptId
-                if (updated.size < 3) {
+                val ptMap = _uiState.value.snapshot.points.associateBy { it.id }
+                if (updated.size == 1) {
                     _uiState.update { it.copy(pendingPointIds = updated) }
+                    showToast("Đã chọn ${ptMap[updated[0]]?.name ?: "A"} → Chạm chọn đỉnh góc")
+                } else if (updated.size == 2) {
+                    _uiState.update { it.copy(pendingPointIds = updated) }
+                    showToast("Đỉnh ${ptMap[updated[1]]?.name ?: "B"} → Chạm chọn điểm thứ 3")
                 } else {
-                    val ang = Geo2DObject.AngleMeasure(nextId("ang"), updated[0], updated[1], updated[2])
-                    updateSnapshot(recordHistory = true) { s -> s.copy(objects = s.objects + ang) }
+                    addAngleMeasure(updated[0], updated[1], updated[2])
                     _uiState.update { it.copy(pendingPointIds = emptyList()) }
                 }
             }
@@ -561,6 +581,55 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         showToast("Đã vẽ đường tròn tâm $centerName, R = ${Geo2DMathHelpers.formatNum(radius)}")
     }
 
+    fun addSegmentBetween(p1Id: String, p2Id: String) {
+        if (p1Id == p2Id) {
+            showToast("Hãy chọn 2 điểm khác nhau")
+            return
+        }
+        val exists = _uiState.value.snapshot.objects.any { obj ->
+            obj is Geo2DObject.Segment && ((obj.p1Id == p1Id && obj.p2Id == p2Id) || (obj.p1Id == p2Id && obj.p2Id == p1Id))
+        }
+        if (exists) {
+            showToast("Đoạn thẳng này đã tồn tại trên hình")
+            return
+        }
+        val ptMap = _uiState.value.snapshot.points.associateBy { it.id }
+        val p1 = ptMap[p1Id] ?: return
+        val p2 = ptMap[p2Id] ?: return
+        val d = Geo2DMathHelpers.distance(Vec2(p1.x, p1.y), Vec2(p2.x, p2.y))
+        updateSnapshot(recordHistory = true) { s ->
+            s.copy(objects = s.objects + Geo2DObject.Segment(nextId("seg"), p1Id, p2Id))
+        }
+        showToast("Đã nối ${p1.name}${p2.name} = ${Geo2DMathHelpers.formatNum(d)}")
+    }
+
+    fun addAngleMeasure(pAId: String, vertexId: String, pCId: String) {
+        if (pAId == vertexId || pCId == vertexId || pAId == pCId) {
+            showToast("Cần 3 điểm phân biệt để đo góc")
+            return
+        }
+        val ptMap = _uiState.value.snapshot.points.associateBy { it.id }
+        val pA = ptMap[pAId] ?: return
+        val pV = ptMap[vertexId] ?: return
+        val pC = ptMap[pCId] ?: return
+        if (Geo2DMathHelpers.distance(Vec2(pA.x, pA.y), Vec2(pV.x, pV.y)) < 1e-5 ||
+            Geo2DMathHelpers.distance(Vec2(pC.x, pC.y), Vec2(pV.x, pV.y)) < 1e-5
+        ) {
+            showToast("Hai điểm trùng nhau, không thể đo góc")
+            return
+        }
+        val duplicate = _uiState.value.snapshot.objects.any { obj ->
+            obj is Geo2DObject.AngleMeasure && obj.vertexId == vertexId &&
+                ((obj.pAId == pAId && obj.pCId == pCId) || (obj.pAId == pCId && obj.pCId == pAId))
+        }
+        val deg = Geo2DMathHelpers.angleDegrees(Vec2(pA.x, pA.y), Vec2(pV.x, pV.y), Vec2(pC.x, pC.y))
+        if (!duplicate) {
+            val ang = Geo2DObject.AngleMeasure(nextId("ang"), pAId, vertexId, pCId)
+            updateSnapshot(recordHistory = true) { s -> s.copy(objects = s.objects + ang) }
+        }
+        showToast("Góc ∠${pA.name}${pV.name}${pC.name} = ${Geo2DMathHelpers.formatNum(deg)}°")
+    }
+
     fun deletePoint(pointId: String) {
         updateSnapshot(recordHistory = true) { s ->
             s.copy(
@@ -604,10 +673,10 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
                 keepFuncs = emptyList()
             }
             Geo2DPreset.EQUILATERAL_TRIANGLE -> {
-                val h = (2f * sqrt(3f))
-                val a = Geo2DPoint(nextId("p"), "A", 0f, round2(h * 0.66f))
-                val b = Geo2DPoint(nextId("p"), "B", -2f, round2(-h * 0.34f))
-                val c = Geo2DPoint(nextId("p"), "C", 2f, round2(-h * 0.34f))
+                val h = (2.0 * sqrt(3.0))
+                val a = Geo2DPoint(nextId("p"), "A", 0f, (h * 2.0 / 3.0).toFloat())
+                val b = Geo2DPoint(nextId("p"), "B", -2f, (-h / 3.0).toFloat())
+                val c = Geo2DPoint(nextId("p"), "C", 2f, (-h / 3.0).toFloat())
                 pts.addAll(listOf(a, b, c))
                 objs.add(Geo2DObject.Polygon(nextId("poly"), listOf(a.id, b.id, c.id)))
                 objs.add(Geo2DObject.AngleMeasure(nextId("ang"), b.id, a.id, c.id))

@@ -1,4 +1,5 @@
-name: Tool Toán v1
+name: Tool Toán Auto Release
+run-name: Tool Toán (Build #${{ github.run_number }})
 
 on:
   push:
@@ -11,12 +12,54 @@ permissions:
 
 jobs:
   build-and-publish-debug-apk:
-    name: Build & Publish Tool Toán v1 APK
+    name: Build & Publish Tool Toán APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Determine next app version
+        id: app_version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          MAX_V=0
+
+          ALL_TAGS="$(git tag -l || true)"
+          if command -v gh >/dev/null 2>&1; then
+            REL_TAGS="$(gh release list --limit 100 --json tagName --jq '.[].tagName' 2>/dev/null || true)"
+            ALL_TAGS="$(printf '%s\n%s\n' "${ALL_TAGS}" "${REL_TAGS}")"
+          fi
+
+          while IFS= read -r tag; do
+            [ -z "${tag}" ] && continue
+            num=""
+            if [[ "${tag}" =~ ^v([0-9]+)$ ]]; then
+              num="${BASH_REMATCH[1]}"
+            elif [[ "${tag}" =~ ^tool-toan-v([0-9]+) ]]; then
+              num="${BASH_REMATCH[1]}"
+            fi
+            if [ -n "${num}" ] && [ "${num}" -gt "${MAX_V}" ]; then
+              MAX_V="${num}"
+            fi
+          done <<< "${ALL_TAGS}"
+
+          NEXT_V=$((MAX_V + 1))
+          VERSION_TAG="v${NEXT_V}"
+          RELEASE_TITLE="Tool Toán ${VERSION_TAG}"
+
+          echo "Detected max existing version: v${MAX_V}"
+          echo "Next release version: ${RELEASE_TITLE} (versionCode=${NEXT_V}, tag=${VERSION_TAG})"
+
+          echo "version_num=${NEXT_V}" >> "${GITHUB_OUTPUT}"
+          echo "version_tag=${VERSION_TAG}" >> "${GITHUB_OUTPUT}"
+          echo "release_title=${RELEASE_TITLE}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Temurin Java 17
         uses: actions/setup-java@v4
@@ -97,6 +140,9 @@ jobs:
 
       - name: Build debug APK
         shell: bash
+        env:
+          APP_VERSION_CODE: ${{ steps.app_version.outputs.version_num }}
+          APP_VERSION_NAME: ${{ steps.app_version.outputs.version_tag }}
         run: gradle :app:assembleDebug --stacktrace --no-daemon
 
       - name: Verify debug APK
@@ -138,13 +184,15 @@ jobs:
         id: upload_artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tool-toan-v1-apk
+          name: tool-toan-${{ steps.app_version.outputs.version_tag }}-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
       - name: Prepare APK release asset
         id: prepare_release_asset
         shell: bash
+        env:
+          VERSION_TAG: ${{ steps.app_version.outputs.version_tag }}
         run: |
           set -euo pipefail
           SOURCE_APK="app/build/outputs/apk/debug/app-debug.apk"
@@ -154,7 +202,7 @@ jobs:
             exit 1
           fi
 
-          ASSET_FILENAME="tool-toan-v1-build-${GITHUB_RUN_NUMBER}.apk"
+          ASSET_FILENAME="tool-toan-${VERSION_TAG}.apk"
           RELEASE_DIR="${RUNNER_TEMP}/apk-release-asset"
           mkdir -p "${RELEASE_DIR}"
           ASSET_PATH="${RELEASE_DIR}/${ASSET_FILENAME}"
@@ -178,6 +226,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ASSET_PATH: ${{ steps.prepare_release_asset.outputs.asset_path }}
           ASSET_NAME: ${{ steps.prepare_release_asset.outputs.asset_name }}
+          VERSION_NUM: ${{ steps.app_version.outputs.version_num }}
+          VERSION_TAG: ${{ steps.app_version.outputs.version_tag }}
+          RELEASE_TITLE: ${{ steps.app_version.outputs.release_title }}
         run: |
           set -euo pipefail
 
@@ -192,22 +243,45 @@ jobs:
             exit 1
           fi
 
-          RELEASE_TAG="tool-toan-v1-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-          RELEASE_TITLE="Tool Toán v1 (Build #${GITHUB_RUN_NUMBER})"
+          RELEASE_TAG="${VERSION_TAG}"
 
-          RELEASE_NOTES="$(cat <<EOF
-          Bản dựng APK tự động cho **Tool Toán v1** được tạo bởi GitHub Actions.
+          CHANGELOG_SECTION=""
+          if [ -f "CHANGELOG.md" ]; then
+            CHANGELOG_SECTION="$(awk '
+              /^## / {
+                if (found) exit
+                found = 1
+                next
+              }
+              found { print }
+            ' CHANGELOG.md | sed '/./,$!d')"
+          fi
 
-          - **Workflow Run Number:** ${GITHUB_RUN_NUMBER}
-          - **Workflow Run Attempt:** ${GITHUB_RUN_ATTEMPT}
-          - **Source Commit SHA:** ${GITHUB_SHA}
-          - **APK Asset:** \`${ASSET_NAME}\`
+          PREV_TAG=""
+          if [ "${VERSION_NUM}" -gt 1 ]; then
+            PREV_TAG="v$((VERSION_NUM - 1))"
+          fi
 
-          **Lưu ý:**
-          - File APK debug dùng để cài đặt và trải nghiệm trực tiếp trên Android.
-          - Ký bằng khóa debug tạm thời trong quá trình build.
-          EOF
-          )"
+          COMMIT_LOG=""
+          if [ -n "${PREV_TAG}" ] && git rev-parse -q --verify "refs/tags/${PREV_TAG}" >/dev/null 2>&1; then
+            COMMIT_LOG="$(git log "${PREV_TAG}..HEAD" --no-merges --pretty=format:'- %s (`%h`)' -n 20 || true)"
+          else
+            COMMIT_LOG="$(git log --no-merges --pretty=format:'- %s (`%h`)' -n 10 || true)"
+          fi
+
+          RELEASE_NOTES="## 📝 Nhật ký thay đổi (${RELEASE_TITLE})"$'\n\n'
+          if [ -n "${CHANGELOG_SECTION}" ]; then
+            RELEASE_NOTES+="${CHANGELOG_SECTION}"$'\n\n'
+          fi
+          if [ -n "${COMMIT_LOG}" ]; then
+            RELEASE_NOTES+="### Chi tiết commit cập nhật"$'\n'"${COMMIT_LOG}"$'\n\n'
+          fi
+          RELEASE_NOTES+="---"$'\n'
+          RELEASE_NOTES+="### Thông tin bản dựng"$'\n'
+          RELEASE_NOTES+="- **Phiên bản ứng dụng:** \`${VERSION_TAG}\` (versionCode: \`${VERSION_NUM}\`)"$'\n'
+          RELEASE_NOTES+="- **File APK:** \`${ASSET_NAME}\`"$'\n'
+          RELEASE_NOTES+="- **Workflow Run:** #${GITHUB_RUN_NUMBER}"$'\n'
+          RELEASE_NOTES+="- **Commit SHA:** \`${GITHUB_SHA}\`"$'\n'
 
           gh release create "${RELEASE_TAG}" "${ASSET_PATH}" \
             --target "${GITHUB_SHA}" \
@@ -225,8 +299,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PUBLISH_OUTCOME: ${{ steps.publish_release.outcome }}
           ASSET_NAME: ${{ steps.prepare_release_asset.outputs.asset_name }}
-          RELEASE_TAG: tool-toan-v1-build-${{ github.run_number }}-${{ github.run_attempt }}
-          RELEASE_TITLE: Tool Toán v1 (Build #${{ github.run_number }})
+          VERSION_TAG: ${{ steps.app_version.outputs.version_tag }}
+          RELEASE_TAG: ${{ steps.app_version.outputs.version_tag }}
+          RELEASE_TITLE: ${{ steps.app_version.outputs.release_title }}
         run: |
           set -euo pipefail
 
@@ -239,7 +314,7 @@ jobs:
               echo "APK Asset Filename: ${ASSET_NAME}"
 
               {
-                echo "## Tool Toán v1 — Kết quả Build & Release APK"
+                echo "## ${RELEASE_TITLE} — Kết quả Build & Release APK"
                 echo ""
                 echo "- **Status:** APK build, Actions artifact upload, and GitHub Release publishing succeeded."
                 echo "- **Release Tag:** \`${RELEASE_TAG}\`"
@@ -248,19 +323,19 @@ jobs:
                 echo "- **GitHub Release URL:** ${RELEASE_URL}"
                 echo ""
                 echo "Tải file APK trực tiếp tại mục **Assets** của trang GitHub Release phía trên."
-                echo "Bản dự phòng cũng có trong GitHub Actions artifact (\`tool-toan-v1-apk\`)."
+                echo "Bản dự phòng cũng có trong GitHub Actions artifact (\`tool-toan-${VERSION_TAG}-apk\`)."
               } >> "${GITHUB_STEP_SUMMARY}"
               exit 0
             fi
           fi
 
-          echo "::warning::GitHub Release publishing failed or could not be verified, but the debug APK build succeeded and the Actions artifact 'tool-toan-v1-apk' remains available."
+          echo "::warning::GitHub Release publishing failed or could not be verified, but the debug APK build succeeded and the Actions artifact 'tool-toan-${VERSION_TAG}-apk' remains available."
           {
-            echo "## Tool Toán v1 — Kết quả Build & Release APK"
+            echo "## ${RELEASE_TITLE} — Kết quả Build & Release APK"
             echo ""
             echo "> **Warning:** GitHub Release publishing failed or could not be verified."
             echo ""
             echo "- **APK Build:** Succeeded"
-            echo "- **Actions Artifact Backup:** \`tool-toan-v1-apk\` remains available for download in this workflow run."
+            echo "- **Actions Artifact Backup:** \`tool-toan-${VERSION_TAG}-apk\` remains available for download in this workflow run."
             echo "- **GitHub Release:** Not published or unverified"
           } >> "${GITHUB_STEP_SUMMARY}"

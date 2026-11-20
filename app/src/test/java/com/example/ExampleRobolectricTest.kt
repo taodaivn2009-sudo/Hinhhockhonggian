@@ -182,4 +182,28 @@ class ExampleRobolectricTest {
         assertEquals(12500.0, restored.camera.centerX, 1e-3)
         assertEquals(0.001, restored.camera.pixelsPerUnit, 1e-6)
     }
+
+    @Test
+    fun `2d and 3d measurement accuracy fixes verified`() {
+        // 1. Exact equilateral triangle: side = 4, angle = 60 deg
+        val hEq = 2.0 * kotlin.math.sqrt(3.0)
+        val a = Vec2(0f, (hEq * 2.0 / 3.0).toFloat())
+        val b = Vec2(-2f, (-hEq / 3.0).toFloat())
+        val c = Vec2(2f, (-hEq / 3.0).toFloat())
+        assertEquals(4.0, Geo2DMathHelpers.distance(a, b), 1e-4)
+        assertEquals(4.0, Geo2DMathHelpers.distance(b, c), 1e-4)
+        assertEquals(60.0f, Geo2DMathHelpers.angleDegrees(b, a, c), 0.01f)
+        assertEquals(12.0f, Geo2DMathHelpers.polygonPerimeter(listOf(a, b, c)), 0.01f)
+        assertEquals((4.0 * kotlin.math.sqrt(3.0)).toFloat(), Geo2DMathHelpers.polygonArea(listOf(a, b, c)), 0.01f)
+
+        // 2. 3D true perpendicular altitude stays exact even when apex S shifts sideways
+        val shiftedPyramid = GeometrySnapshot(
+            shape = ShapeType.PYRAMID4,
+            a = 4f,
+            h = 6f,
+            vertexOverrides = mapOf("S" to Vec3(5f, 6f, -3f))
+        )
+        val built = ShapeBuilder.build(shiftedPyramid)
+        assertEquals(6.0f, built.metrics.realH, 0.02f)
+    }
 }

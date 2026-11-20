@@ -684,6 +684,18 @@ object ShapeBuilder {
             val p2 = reg[n2] ?: return 0f
             return p1.distanceTo(p2)
         }
+        fun distToBasePlane(apexName: String, b1: String, b2: String, b3: String, fallbackFoot: String): Float {
+            val apex = reg[apexName] ?: return 0f
+            val p1 = reg[b1]; val p2 = reg[b2]; val p3 = reg[b3]
+            if (p1 != null && p2 != null && p3 != null) {
+                val normal = (p2 - p1).cross(p3 - p1)
+                val nLen = normal.length()
+                if (nLen > 1e-4f) {
+                    return abs((apex - p1).dot(normal)) / nLen
+                }
+            }
+            return dist(apexName, fallbackFoot)
+        }
         fun f2(v: Float) = String.format(java.util.Locale.US, "%.2f", v)
 
         var sDay = poly?.sDay ?: 0f
@@ -698,9 +710,9 @@ object ShapeBuilder {
         when (snap.shape) {
             ShapeType.PYRAMID3, ShapeType.PYRAMID3_SA -> {
                 title = if (snap.shape == ShapeType.PYRAMID3) "Chóp tam giác S.ABC" else "Chóp S.ABC (SA ⊥ đáy)"
-                realH = dist("S", "O")
+                realH = distToBasePlane("S", "A", "B", "C", "O")
                 dims = listOf(
-                    "Đường cao thực (SO)" to f2(realH),
+                    "Đường cao thực h = d(S, đáy)" to f2(realH),
                     "Cạnh đáy (AB | BC | CA)" to "${f2(dist("A", "B"))} | ${f2(dist("B", "C"))} | ${f2(dist("C", "A"))}",
                     "Cạnh bên (SA | SB | SC)" to "${f2(dist("S", "A"))} | ${f2(dist("S", "B"))} | ${f2(dist("S", "C"))}"
                 )
@@ -711,7 +723,7 @@ object ShapeBuilder {
             }
             ShapeType.TETRA_ORTHO -> {
                 title = "Tứ diện vuông O.ABC"
-                realH = dist("C", "O")
+                realH = distToBasePlane("C", "O", "A", "B", "O")
                 dims = listOf(
                     "Độ dài OA | OB | OC" to "${f2(dist("O", "A"))} | ${f2(dist("O", "B"))} | ${f2(dist("O", "C"))}",
                     "Cạnh đáy AB | BC | CA" to "${f2(dist("A", "B"))} | ${f2(dist("B", "C"))} | ${f2(dist("C", "A"))}"
@@ -724,9 +736,9 @@ object ShapeBuilder {
                     ShapeType.PYRAMID4_SA -> "Chóp S.ABCD (SA ⊥ đáy)"
                     else -> "Chóp đáy hình thang S.ABCD"
                 }
-                realH = dist("S", "O")
+                realH = distToBasePlane("S", "A", "B", "C", "O")
                 dims = listOf(
-                    "Đường cao thực (SO)" to f2(realH),
+                    "Đường cao thực h = d(S, đáy)" to f2(realH),
                     "Cạnh đáy AB|BC|CD|DA" to "${f2(dist("A", "B"))} | ${f2(dist("B", "C"))} | ${f2(dist("C", "D"))} | ${f2(dist("D", "A"))}",
                     "Cạnh bên SA|SB|SC|SD" to "${f2(dist("S", "A"))} | ${f2(dist("S", "B"))} | ${f2(dist("S", "C"))} | ${f2(dist("S", "D"))}"
                 )
@@ -737,9 +749,9 @@ object ShapeBuilder {
             }
             ShapeType.CUBE, ShapeType.BOX -> {
                 title = if (snap.shape == ShapeType.CUBE) "Hình lập phương" else "Hình hộp chữ nhật"
-                realH = dist("A", "A'")
+                realH = distToBasePlane("A'", "A", "B", "D", "A")
                 dims = listOf(
-                    "Chiều cao thực (AA')" to f2(realH),
+                    "Chiều cao thực h" to f2(realH),
                     "Cạnh đáy AB | AD" to "${f2(dist("A", "B"))} | ${f2(dist("A", "D"))}",
                     "Đường chéo khối AC'" to f2(dist("A", "C'"))
                 )
@@ -764,9 +776,9 @@ object ShapeBuilder {
             }
             ShapeType.PRISM3, ShapeType.PRISM3_OBLIQUE -> {
                 title = if (snap.shape == ShapeType.PRISM3) "Lăng trụ tam giác ABC.A'B'C'" else "Lăng trụ xiên ABC.A'B'C'"
-                realH = if (snap.shape == ShapeType.PRISM3) dist("A", "A'") else dist("A'", "O")
+                realH = distToBasePlane("A'", "A", "B", "C", if (snap.shape == ShapeType.PRISM3) "A" else "O")
                 dims = listOf(
-                    "Chiều cao thực (h)" to f2(realH),
+                    "Chiều cao thực h = d(A', đáy)" to f2(realH),
                     "Cạnh bên AA'" to f2(dist("A", "A'")),
                     "Cạnh đáy AB | BC | CA" to "${f2(dist("A", "B"))} | ${f2(dist("B", "C"))} | ${f2(dist("C", "A"))}"
                 )

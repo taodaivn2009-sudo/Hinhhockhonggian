@@ -57,8 +57,8 @@ fun TopStudioHeader(
         modifier = modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
         // Row 1: 3D/2D Mode Switcher + Current Shape Selector Pill + Quick Undo/Redo/Reset/Save Actions
         Row(
@@ -76,28 +76,29 @@ fun TopStudioHeader(
                 modifier = Modifier
                     .weight(1f)
                     .testTag("top_shape_selector_pill")
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(SlateDark.copy(alpha = 0.92f))
+                    .clip(RoundedCornerShape(11.dp))
+                    .background(SlateDark.copy(alpha = 0.88f))
                     .border(
                         width = 1.dp,
-                        color = if (uiState.activeLeftPane == LeftPane.SHAPES) CyanAccent else SlateBorder,
-                        shape = RoundedCornerShape(12.dp)
+                        color = if (uiState.activeLeftPane == LeftPane.SHAPES) CyanAccent else SlateBorder.copy(alpha = 0.75f),
+                        shape = RoundedCornerShape(11.dp)
                     )
                     .clickable { viewModel.toggleLeftPane(LeftPane.SHAPES) }
-                    .padding(horizontal = 9.dp, vertical = 6.dp),
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(7.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 ShapePreviewThumbnail(
                     shape = uiState.snapshot.shape,
                     accent = CyanAccent,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(22.dp)
                 )
                 Column(Modifier.weight(1f, fill = false)) {
                     Text(
                         text = uiState.snapshot.shape.title,
-                        style = MaterialTheme.typography.labelLarge,
+                        style = MaterialTheme.typography.labelMedium,
                         color = SlateTextPrimary,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -105,7 +106,7 @@ fun TopStudioHeader(
                         text = uiState.snapshot.shape.subtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = SlateTextSecondary,
-                        fontSize = 10.sp,
+                        fontSize = 9.5.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -114,19 +115,19 @@ fun TopStudioHeader(
                     imageVector = Icons.Default.KeyboardArrowDown,
                     contentDescription = "Chọn khối hình khác",
                     tint = CyanAccent,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(16.dp)
                 )
             }
 
             // Right Studio Action Strip
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(SlateDark.copy(alpha = 0.92f))
-                    .border(1.dp, SlateBorder, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 4.dp, vertical = 3.dp),
+                    .clip(RoundedCornerShape(11.dp))
+                    .background(SlateDark.copy(alpha = 0.88f))
+                    .border(1.dp, SlateBorder.copy(alpha = 0.75f), RoundedCornerShape(11.dp))
+                    .padding(horizontal = 3.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                horizontalArrangement = Arrangement.spacedBy(1.dp)
             ) {
                 TopIconBtn(
                     icon = Icons.AutoMirrored.Filled.Undo,
@@ -280,12 +281,12 @@ fun RightCanvasQuickControls(
 
     Column(
         modifier = modifier
-            .padding(end = 10.dp)
+            .padding(end = 8.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(SlateDark.copy(alpha = 0.90f))
-            .border(1.dp, SlateBorder, RoundedCornerShape(14.dp))
-            .padding(5.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp),
+            .background(SlateDark.copy(alpha = 0.84f))
+            .border(1.dp, SlateBorder.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+            .padding(vertical = 5.dp, horizontal = 3.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         QuickCanvasButton(

@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.hinhhoc3d.vkmqzp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+    versionName = System.getenv("APP_VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "v1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

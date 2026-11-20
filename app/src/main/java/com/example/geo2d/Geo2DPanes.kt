@@ -40,6 +40,7 @@ fun Geo2DFunctionsPane(
 ) {
     var draftExpr by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf(FunctionCategory.EXP_LOG) }
+    var libraryExpanded by remember { mutableStateOf(uiState.snapshot.functions.isEmpty()) }
     val draftCheck = remember(draftExpr) {
         if (draftExpr.isBlank()) null else MathExprParser.parse(draftExpr)
     }
@@ -138,79 +139,117 @@ fun Geo2DFunctionsPane(
             }
         }
 
-        // 2. Categorized Function Library (Mũ & Loga, Đa thức, Phân thức & Căn, Lượng giác, Đặc biệt)
-        SettingBox(
-            title = "Thư viện hàm số theo nhóm (chạm để vẽ)",
-            titleColor = EmeraldAccent,
-            borderColor = EmeraldAccent.copy(alpha = 0.45f)
+        // 2. Collapsible Categorized Function Library (keeps UI neat & spacious)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(SlateSurface.copy(alpha = 0.65f))
+                .border(1.dp, EmeraldAccent.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    .clickable { libraryExpanded = !libraryExpanded }
+                    .testTag("geo2d_toggle_fn_library"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                FunctionCategory.entries.forEach { cat ->
-                    val isSelected = selectedCategory == cat
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(9.dp))
-                            .background(if (isSelected) EmeraldDark else SlateDeepest)
-                            .border(
-                                1.dp,
-                                if (isSelected) EmeraldAccent else SlateBorder,
-                                RoundedCornerShape(9.dp)
-                            )
-                            .clickable { selectedCategory = cat }
-                            .padding(horizontal = 10.dp, vertical = 7.dp)
-                            .testTag("geo2d_fn_cat_${cat.name.lowercase()}")
-                    ) {
-                        Text(
-                            text = cat.title,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isSelected) Color.White else SlateTextLight,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                        )
-                    }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Thư viện hàm số theo nhóm",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = EmeraldAccent,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Mũ & Loga • Đa thức • Phân thức • Lượng giác • Đặc biệt",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SlateTextSecondary,
+                        fontSize = 10.5.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
+                Icon(
+                    imageVector = if (libraryExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (libraryExpanded) "Thu gọn thư viện" else "Mở thư viện hàm mẫu",
+                    tint = EmeraldAccent,
+                    modifier = Modifier.size(20.dp)
+                )
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                categoryTemplates.chunked(2).forEach { pair ->
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        pair.forEach { tpl ->
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(9.dp))
-                                    .background(SlateDeepest)
-                                    .border(1.dp, SlateMuted.copy(alpha = 0.7f), RoundedCornerShape(9.dp))
-                                    .clickable { viewModel.addFunction(tpl.expr) }
-                                    .padding(horizontal = 9.dp, vertical = 7.dp),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Text(
-                                    text = "y = ${tpl.expr}",
-                                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily),
-                                    color = CyanAccent,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+            if (libraryExpanded) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FunctionCategory.entries.forEach { cat ->
+                        val isSelected = selectedCategory == cat
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) EmeraldDark else SlateDeepest)
+                                .border(
+                                    1.dp,
+                                    if (isSelected) EmeraldAccent else SlateBorder,
+                                    RoundedCornerShape(8.dp)
                                 )
-                                Text(
-                                    text = tpl.note,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = SlateTextSecondary,
-                                    fontSize = 10.5.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                                .clickable { selectedCategory = cat }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .testTag("geo2d_fn_cat_${cat.name.lowercase()}")
+                        ) {
+                            Text(
+                                text = cat.title,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isSelected) Color.White else SlateTextLight,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            )
                         }
-                        if (pair.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    categoryTemplates.chunked(2).forEach { pair ->
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            pair.forEach { tpl ->
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(SlateDeepest)
+                                        .border(1.dp, SlateMuted.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
+                                        .clickable { viewModel.addFunction(tpl.expr) }
+                                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(1.dp)
+                                ) {
+                                    Text(
+                                        text = "y = ${tpl.expr}",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily),
+                                        color = CyanAccent,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = tpl.note,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = SlateTextSecondary,
+                                        fontSize = 10.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            if (pair.size == 1) Spacer(Modifier.weight(1f))
+                        }
                     }
                 }
             }
@@ -565,25 +604,124 @@ fun Geo2DObjectsPane(
     val snap = uiState.snapshot
     val ptMap = remember(snap.points) { snap.points.associateBy { it.id } }
 
+    var mP1Id by remember(snap.points) {
+        mutableStateOf(snap.points.getOrNull(0)?.id ?: "")
+    }
+    var mP2Id by remember(snap.points) {
+        mutableStateOf(snap.points.getOrNull(1)?.id ?: snap.points.getOrNull(0)?.id ?: "")
+    }
+    var mP3Id by remember(snap.points) {
+        mutableStateOf(snap.points.getOrNull(2)?.id ?: "")
+    }
+
+    LaunchedEffect(snap.points) {
+        if (snap.points.none { it.id == mP1Id }) mP1Id = snap.points.getOrNull(0)?.id ?: ""
+        if (snap.points.none { it.id == mP2Id }) mP2Id = snap.points.getOrNull(1)?.id ?: snap.points.getOrNull(0)?.id ?: ""
+        if (snap.points.none { it.id == mP3Id }) mP3Id = snap.points.getOrNull(2)?.id ?: ""
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        // Points list
-        SettingBox(title = "Các điểm trên mặt phẳng (${snap.points.size})", titleColor = CyanAccent) {
-            if (snap.points.isEmpty()) {
-                Text("Chưa có điểm nào. Dùng công cụ Điểm hoặc Hình mẫu để thêm.", style = MaterialTheme.typography.bodySmall, color = SlateTextSecondary)
-            } else {
-                snap.points.forEach { pt ->
-                    ObjectRowItem(
-                        title = "Điểm ${pt.name}",
-                        detail = "(${Geo2DMathHelpers.formatNum(pt.x)}; ${Geo2DMathHelpers.formatNum(pt.y)})",
-                        accent = CyanAccent,
-                        onDelete = { viewModel.deletePoint(pt.id) }
-                    )
+        // 1. Quick Interactive Measurement Calculator (Distance, Midpoint, Vector, Line Eq, Angle)
+        if (snap.points.size >= 2) {
+            SettingBox(
+                title = "Đo nhanh khoảng cách & góc 2D",
+                titleColor = EmeraldAccent,
+                borderColor = EmeraldAccent.copy(alpha = 0.5f),
+                containerColor = EmeraldDark.copy(alpha = 0.1f)
+            ) {
+                PointSelectorChipRow("Điểm 1:", snap.points, mP1Id) { mP1Id = it }
+                PointSelectorChipRow("Điểm 2:", snap.points, mP2Id) { mP2Id = it }
+
+                val p1 = ptMap[mP1Id]
+                val p2 = ptMap[mP2Id]
+                if (p1 != null && p2 != null && p1.id != p2.id) {
+                    val v1 = Vec2(p1.x, p1.y)
+                    val v2 = Vec2(p2.x, p2.y)
+                    val d = Geo2DMathHelpers.distance(v1, v2)
+                    val mid = Geo2DMathHelpers.midpoint(v1, v2)
+                    val dx = p2.x.toDouble() - p1.x.toDouble()
+                    val dy = p2.y.toDouble() - p1.y.toDouble()
+                    val eq = Geo2DMathHelpers.lineEquationString(v1, v2)
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(SlateDeepest)
+                            .border(1.dp, SlateBorder, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        MeasureStatLine("Độ dài ${p1.name}${p2.name}", Geo2DMathHelpers.formatNum(d), CyanAccent)
+                        MeasureStatLine("Trung điểm I", "(${Geo2DMathHelpers.formatNum(mid.x)}; ${Geo2DMathHelpers.formatNum(mid.y)})", IndigoSoft)
+                        MeasureStatLine("Vectơ ${p1.name}${p2.name}→", "(${Geo2DMathHelpers.formatNum(dx)}; ${Geo2DMathHelpers.formatNum(dy)})", RoseLight)
+                        MeasureStatLine("Đường thẳng", eq, EmeraldAccent)
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = { viewModel.addSegmentBetween(p1.id, p2.id) },
+                            border = BorderStroke(1.dp, CyanAccent.copy(alpha = 0.7f)),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.weight(1f).heightIn(min = 38.dp)
+                        ) {
+                            Icon(Icons.Default.HorizontalRule, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Nối đoạn ${p1.name}${p2.name}", style = MaterialTheme.typography.labelSmall, color = CyanAccent)
+                        }
+                    }
+                }
+
+                if (snap.points.size >= 3) {
+                    HorizontalDivider(color = SlateBorder.copy(alpha = 0.6f))
+                    PointSelectorChipRow("Điểm 3:", snap.points, mP3Id) { mP3Id = it }
+                    val pA = ptMap[mP1Id]
+                    val pV = ptMap[mP2Id]
+                    val pC = ptMap[mP3Id]
+                    if (pA != null && pV != null && pC != null && pA.id != pV.id && pC.id != pV.id && pA.id != pC.id) {
+                        val deg = Geo2DMathHelpers.angleDegrees(Vec2(pA.x, pA.y), Vec2(pV.x, pV.y), Vec2(pC.x, pC.y))
+                        val rad = deg * PI / 180.0
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(SlateDeepest)
+                                .border(1.dp, AmberAccent.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Góc ∠${pA.name}${pV.name}${pC.name} (đỉnh ${pV.name})",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = SlateTextSecondary
+                                )
+                                Text(
+                                    text = "${Geo2DMathHelpers.formatNum(deg)}°  (${Geo2DMathHelpers.formatNum(rad)} rad)",
+                                    style = MaterialTheme.typography.labelLarge.copy(fontFamily = MonoFontFamily),
+                                    color = AmberAccent,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Button(
+                                onClick = { viewModel.addAngleMeasure(pA.id, pV.id, pC.id) },
+                                colors = ButtonDefaults.buttonColors(containerColor = AmberDeep),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                modifier = Modifier.heightIn(min = 36.dp)
+                            ) {
+                                Text("Ghim góc", style = MaterialTheme.typography.labelSmall, color = Color.White)
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // Objects list with live measurements & equations
-        SettingBox(title = "Hình vẽ & Đo đạc (${snap.objects.size})", titleColor = IndigoSoft) {
+        // 2. Objects list with complete live measurements & equations
+        SettingBox(title = "Hình vẽ & Số liệu đo (${snap.objects.size})", titleColor = IndigoSoft) {
             if (snap.objects.isEmpty()) {
                 Text("Chưa có đoạn thẳng, đường thẳng, đường tròn hay đa giác nào.", style = MaterialTheme.typography.bodySmall, color = SlateTextSecondary)
             } else {
@@ -591,8 +729,12 @@ fun Geo2DObjectsPane(
                     val (title, detail, accent) = when (obj) {
                         is Geo2DObject.Segment -> {
                             val a = ptMap[obj.p1Id]; val b = ptMap[obj.p2Id]
-                            val d = if (a != null && b != null) hypot(b.x - a.x, b.y - a.y) else 0f
-                            Triple("Đoạn ${a?.name ?: "?"}${b?.name ?: "?"}", "Độ dài = ${Geo2DMathHelpers.formatNum(d)}", SlateTextPrimary)
+                            val info = if (a != null && b != null) {
+                                val d = Geo2DMathHelpers.distance(Vec2(a.x, a.y), Vec2(b.x, b.y))
+                                val mid = Geo2DMathHelpers.midpoint(Vec2(a.x, a.y), Vec2(b.x, b.y))
+                                "d = ${Geo2DMathHelpers.formatNum(d)} • Trung điểm (${Geo2DMathHelpers.formatNum(mid.x)}; ${Geo2DMathHelpers.formatNum(mid.y)})"
+                            } else "—"
+                            Triple("Đoạn ${a?.name ?: "?"}${b?.name ?: "?"}", info, SlateTextPrimary)
                         }
                         is Geo2DObject.Line -> {
                             val a = ptMap[obj.p1Id]; val b = ptMap[obj.p2Id]
@@ -601,16 +743,18 @@ fun Geo2DObjectsPane(
                         }
                         is Geo2DObject.Ray -> {
                             val a = ptMap[obj.startId]; val b = ptMap[obj.throughId]
-                            Triple("Tia ${a?.name ?: "?"}${b?.name ?: "?"}", "Gốc ${a?.name ?: "?"}", IndigoSoft)
+                            val eq = if (a != null && b != null) Geo2DMathHelpers.lineEquationString(Vec2(a.x, a.y), Vec2(b.x, b.y)) else "—"
+                            Triple("Tia ${a?.name ?: "?"}${b?.name ?: "?"}", "Gốc ${a?.name ?: "?"} • $eq", IndigoSoft)
                         }
                         is Geo2DObject.VectorObj -> {
                             val a = ptMap[obj.fromId]; val b = ptMap[obj.toId]
-                            val dx = if (a != null && b != null) b.x - a.x else 0f
-                            val dy = if (a != null && b != null) b.y - a.y else 0f
+                            val dx = if (a != null && b != null) b.x.toDouble() - a.x.toDouble() else 0.0
+                            val dy = if (a != null && b != null) b.y.toDouble() - a.y.toDouble() else 0.0
                             val len = hypot(dx, dy)
+                            val deg = Math.toDegrees(kotlin.math.atan2(dy, dx))
                             Triple(
                                 "Vectơ ${a?.name ?: "?"}${b?.name ?: "?"}",
-                                "(${Geo2DMathHelpers.formatNum(dx)}; ${Geo2DMathHelpers.formatNum(dy)}) • |u| = ${Geo2DMathHelpers.formatNum(len)}",
+                                "(${Geo2DMathHelpers.formatNum(dx)}; ${Geo2DMathHelpers.formatNum(dy)}) • |u| = ${Geo2DMathHelpers.formatNum(len)} • θ = ${Geo2DMathHelpers.formatNum(deg)}°",
                                 RoseLight
                             )
                         }
@@ -618,15 +762,16 @@ fun Geo2DObjectsPane(
                             val c = ptMap[obj.centerId]
                             val e = obj.edgePointId?.let { ptMap[it] }
                             val r = when {
-                                c != null && e != null -> hypot(e.x - c.x, e.y - c.y)
-                                obj.fixedRadius != null -> obj.fixedRadius
-                                else -> 0f
+                                c != null && e != null -> Geo2DMathHelpers.distance(Vec2(c.x, c.y), Vec2(e.x, e.y))
+                                obj.fixedRadius != null -> obj.fixedRadius.toDouble()
+                                else -> 0.0
                             }
-                            val eq = if (c != null) Geo2DMathHelpers.circleEquationString(Vec2(c.x, c.y), r) else "—"
-                            val area = (PI * r * r).toFloat()
+                            val eq = if (c != null) Geo2DMathHelpers.circleEquationString(Vec2(c.x, c.y), r.toFloat()) else "—"
+                            val peri = 2.0 * PI * r
+                            val area = PI * r * r
                             Triple(
-                                "Đường tròn (${c?.name ?: "I"}, R=${Geo2DMathHelpers.formatNum(r)})",
-                                "$eq • S = ${Geo2DMathHelpers.formatNum(area)}",
+                                "Đường tròn (${c?.name ?: "I"}, R = ${Geo2DMathHelpers.formatNum(r)})",
+                                "C = ${Geo2DMathHelpers.formatNum(peri)} • S = ${Geo2DMathHelpers.formatNum(area)}\n$eq",
                                 EmeraldAccent
                             )
                         }
@@ -636,9 +781,16 @@ fun Geo2DObjectsPane(
                             val vecs = pts.map { Vec2(it.x, it.y) }
                             val p = Geo2DMathHelpers.polygonPerimeter(vecs)
                             val s = Geo2DMathHelpers.polygonArea(vecs)
+                            val sideStr = if (pts.size <= 5) {
+                                "\n" + pts.indices.joinToString(" | ") { idx ->
+                                    val nextIdx = (idx + 1) % pts.size
+                                    val sideLen = Geo2DMathHelpers.distance(vecs[idx], vecs[nextIdx])
+                                    "${pts[idx].name}${pts[nextIdx].name}=${Geo2DMathHelpers.formatNum(sideLen)}"
+                                }
+                            } else ""
                             Triple(
                                 "Đa giác $name",
-                                "Chu vi P = ${Geo2DMathHelpers.formatNum(p)} • Diện tích S = ${Geo2DMathHelpers.formatNum(s)}",
+                                "Chu vi P = ${Geo2DMathHelpers.formatNum(p)} • Diện tích S = ${Geo2DMathHelpers.formatNum(s)}$sideStr",
                                 IndigoSoft
                             )
                         }
@@ -647,13 +799,114 @@ fun Geo2DObjectsPane(
                             val deg = if (a != null && v != null && c != null) {
                                 Geo2DMathHelpers.angleDegrees(Vec2(a.x, a.y), Vec2(v.x, v.y), Vec2(c.x, c.y))
                             } else 0f
-                            Triple("Góc ∠${a?.name ?: "?"}${v?.name ?: "?"}${c?.name ?: "?"}", "${Geo2DMathHelpers.formatNum(deg)}°", AmberAccent)
+                            val rad = deg * PI / 180.0
+                            Triple(
+                                "Góc ∠${a?.name ?: "?"}${v?.name ?: "?"}${c?.name ?: "?"}",
+                                "${Geo2DMathHelpers.formatNum(deg)}°  (${Geo2DMathHelpers.formatNum(rad)} rad)",
+                                AmberAccent
+                            )
                         }
                     }
                     ObjectRowItem(title = title, detail = detail, accent = accent, onDelete = { viewModel.deleteObject(obj.id) })
                 }
             }
         }
+
+        // 3. Compact 2-Column Points Grid
+        SettingBox(title = "Tọa độ các điểm (${snap.points.size})", titleColor = CyanAccent) {
+            if (snap.points.isEmpty()) {
+                Text("Chưa có điểm nào. Dùng công cụ Điểm hoặc Hình mẫu để thêm.", style = MaterialTheme.typography.bodySmall, color = SlateTextSecondary)
+            } else {
+                snap.points.chunked(2).forEach { pair ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        pair.forEach { pt ->
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(SlateDeepest)
+                                    .border(1.dp, SlateBorder, RoundedCornerShape(8.dp))
+                                    .padding(start = 8.dp, end = 2.dp, top = 5.dp, bottom = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(pt.name, style = MaterialTheme.typography.labelMedium, color = CyanAccent, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        text = "(${Geo2DMathHelpers.formatNum(pt.x)}; ${Geo2DMathHelpers.formatNum(pt.y)})",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                                        color = SlateTextLight,
+                                        fontSize = 10.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                IconButton(onClick = { viewModel.deletePoint(pt.id) }, modifier = Modifier.size(28.dp)) {
+                                    Icon(Icons.Default.Close, contentDescription = "Xóa ${pt.name}", tint = RoseLight, modifier = Modifier.size(14.dp))
+                                }
+                            }
+                        }
+                        if (pair.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PointSelectorChipRow(
+    label: String,
+    points: List<Geo2DPoint>,
+    selectedId: String,
+    onSelect: (String) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = SlateTextSecondary, modifier = Modifier.width(50.dp))
+        Row(
+            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            points.forEach { pt ->
+                val active = pt.id == selectedId
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(if (active) EmeraldDark else SlateDeepest)
+                        .border(1.dp, if (active) EmeraldAccent else SlateBorder, RoundedCornerShape(7.dp))
+                        .clickable { onSelect(pt.id) }
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = pt.name,
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                        color = if (active) Color.White else SlateTextLight,
+                        fontWeight = if (active) FontWeight.Bold else FontWeight.Medium
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MeasureStatLine(label: String, value: String, color: Color) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = SlateTextSecondary)
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily),
+            color = color,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 

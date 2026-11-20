@@ -291,63 +291,70 @@ object Geo2DMathHelpers {
 
     fun formatNum(v: Float): String = formatNum(v.toDouble())
 
+    fun distance(a: Vec2, b: Vec2): Double = hypot((b.x - a.x).toDouble(), (b.y - a.y).toDouble())
+
+    fun midpoint(a: Vec2, b: Vec2): Vec2 = Vec2(((a.x.toDouble() + b.x.toDouble()) * 0.5).toFloat(), ((a.y.toDouble() + b.y.toDouble()) * 0.5).toFloat())
+
     fun polygonArea(pts: List<Vec2>): Float {
         if (pts.size < 3) return 0f
-        var sum = 0f
+        var sum = 0.0
         for (i in pts.indices) {
             val a = pts[i]
             val b = pts[(i + 1) % pts.size]
-            sum += (a.x * b.y - b.x * a.y)
+            sum += (a.x.toDouble() * b.y.toDouble() - b.x.toDouble() * a.y.toDouble())
         }
-        return kotlin.math.abs(sum) * 0.5f
+        return (kotlin.math.abs(sum) * 0.5).toFloat()
     }
 
     fun polygonPerimeter(pts: List<Vec2>): Float {
         if (pts.size < 2) return 0f
-        var p = 0f
+        var p = 0.0
         for (i in pts.indices) {
-            p += pts[i].distanceTo(pts[(i + 1) % pts.size])
+            p += distance(pts[i], pts[(i + 1) % pts.size])
         }
-        return p
+        return p.toFloat()
     }
 
     fun angleDegrees(a: Vec2, vertex: Vec2, c: Vec2): Float {
-        val v1 = a - vertex
-        val v2 = c - vertex
-        val len = v1.length() * v2.length()
-        if (len < 1e-5f) return 0f
-        val cosA = (v1.dot(v2) / len).coerceIn(-1f, 1f)
-        return Math.toDegrees(kotlin.math.acos(cosA.toDouble())).toFloat()
+        val v1x = a.x.toDouble() - vertex.x.toDouble()
+        val v1y = a.y.toDouble() - vertex.y.toDouble()
+        val v2x = c.x.toDouble() - vertex.x.toDouble()
+        val v2y = c.y.toDouble() - vertex.y.toDouble()
+        val len = hypot(v1x, v1y) * hypot(v2x, v2y)
+        if (len < 1e-9) return 0f
+        val cosA = ((v1x * v2x + v1y * v2y) / len).coerceIn(-1.0, 1.0)
+        return Math.toDegrees(kotlin.math.acos(cosA)).toFloat()
     }
 
     fun lineEquationString(p1: Vec2, p2: Vec2): String {
-        val dx = p2.x - p1.x
-        val dy = p2.y - p1.y
-        if (hypot(dx, dy) < 1e-5f) return "—"
-        if (kotlin.math.abs(dx) < 1e-4f) return "x = ${formatNum(p1.x)}"
+        val dx = p2.x.toDouble() - p1.x.toDouble()
+        val dy = p2.y.toDouble() - p1.y.toDouble()
+        if (hypot(dx, dy) < 1e-8) return "—"
+        if (kotlin.math.abs(dx) < 1e-7) return "x = ${formatNum(p1.x.toDouble())}"
         val m = dy / dx
-        val b = p1.y - m * p1.x
+        val b = p1.y.toDouble() - m * p1.x.toDouble()
         val mStr = when {
-            kotlin.math.abs(m) < 1e-4f -> ""
-            kotlin.math.abs(m - 1f) < 1e-4f -> "x"
-            kotlin.math.abs(m + 1f) < 1e-4f -> "-x"
+            kotlin.math.abs(m) < 1e-6 -> ""
+            kotlin.math.abs(m - 1.0) < 1e-6 -> "x"
+            kotlin.math.abs(m + 1.0) < 1e-6 -> "-x"
             else -> "${formatNum(m)}x"
         }
         val bStr = when {
-            kotlin.math.abs(b) < 1e-4f -> if (mStr.isEmpty()) "0" else ""
-            b > 0f -> if (mStr.isEmpty()) formatNum(b) else " + ${formatNum(b)}"
+            kotlin.math.abs(b) < 1e-6 -> if (mStr.isEmpty()) "0" else ""
+            b > 0.0 -> if (mStr.isEmpty()) formatNum(b) else " + ${formatNum(b)}"
             else -> if (mStr.isEmpty()) formatNum(b) else " - ${formatNum(-b)}"
         }
         return "y = $mStr$bStr"
     }
 
     fun circleEquationString(center: Vec2, radius: Float): String {
-        fun term(v: Float, axis: String): String = when {
-            kotlin.math.abs(v) < 1e-4f -> "$axis²"
-            v > 0f -> "($axis - ${formatNum(v)})²"
+        fun term(v: Double, axis: String): String = when {
+            kotlin.math.abs(v) < 1e-6 -> "$axis²"
+            v > 0.0 -> "($axis - ${formatNum(v)})²"
             else -> "($axis + ${formatNum(-v)})²"
         }
-        return "${term(center.x, "x")} + ${term(center.y, "y")} = ${formatNum(radius * radius)}"
+        val r2 = radius.toDouble() * radius.toDouble()
+        return "${term(center.x.toDouble(), "x")} + ${term(center.y.toDouble(), "y")} = ${formatNum(r2)}"
     }
 
     fun angleRad(from: Vec2, to: Vec2): Double = atan2((to.y - from.y).toDouble(), (to.x - from.x).toDouble())

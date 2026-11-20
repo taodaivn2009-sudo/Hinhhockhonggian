@@ -533,23 +533,23 @@ private fun Geo2DRightQuickControls(
     val s = uiState.snapshot
     Column(
         modifier = modifier
-            .padding(end = 10.dp)
+            .padding(end = 8.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(SlateDark.copy(alpha = 0.88f))
-            .border(1.dp, SlateBorder, RoundedCornerShape(14.dp))
-            .padding(vertical = 6.dp, horizontal = 4.dp),
+            .background(SlateDark.copy(alpha = 0.84f))
+            .border(1.dp, SlateBorder.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+            .padding(vertical = 5.dp, horizontal = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         QuickChip2D("Oxy", Icons.Default.GridOn, s.showAxes) { viewModel.toggleAxes() }
         QuickChip2D("Hút", Icons.Default.Straighten, s.snapToGrid) { viewModel.toggleSnap() }
-        QuickChip2D("Tọa độ", Icons.Default.Label, s.showPointCoords) { viewModel.togglePointCoords() }
-        HorizontalDivider(color = SlateBorder, modifier = Modifier.width(28.dp).padding(vertical = 2.dp))
-        IconButton(onClick = { viewModel.stepZoom(true) }, modifier = Modifier.size(38.dp)) {
-            Icon(Icons.Default.Add, contentDescription = "Phóng to", tint = SlateTextPrimary, modifier = Modifier.size(19.dp))
+        QuickChip2D("Đo", Icons.Default.SquareFoot, s.showMeasurements) { viewModel.toggleMeasurements() }
+        HorizontalDivider(color = SlateBorder.copy(alpha = 0.65f), modifier = Modifier.width(24.dp).padding(vertical = 2.dp))
+        IconButton(onClick = { viewModel.stepZoom(true) }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.Add, contentDescription = "Phóng to", tint = SlateTextPrimary, modifier = Modifier.size(18.dp))
         }
-        IconButton(onClick = { viewModel.stepZoom(false) }, modifier = Modifier.size(38.dp)) {
-            Icon(Icons.Default.Remove, contentDescription = "Thu nhỏ", tint = SlateTextPrimary, modifier = Modifier.size(19.dp))
+        IconButton(onClick = { viewModel.stepZoom(false) }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.Remove, contentDescription = "Thu nhỏ", tint = SlateTextPrimary, modifier = Modifier.size(18.dp))
         }
     }
 }
@@ -558,16 +558,16 @@ private fun Geo2DRightQuickControls(
 private fun QuickChip2D(label: String, icon: ImageVector, active: Boolean, onClick: () -> Unit) {
     Column(
         modifier = Modifier
-            .width(46.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (active) EmeraldDark.copy(alpha = 0.32f) else Color.Transparent)
-            .border(1.dp, if (active) EmeraldAccent.copy(alpha = 0.6f) else Color.Transparent, RoundedCornerShape(10.dp))
+            .width(42.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(if (active) EmeraldDark.copy(alpha = 0.36f) else Color.Transparent)
+            .border(1.dp, if (active) EmeraldAccent.copy(alpha = 0.65f) else Color.Transparent, RoundedCornerShape(9.dp))
             .clickable(onClick = onClick)
-            .padding(vertical = 5.dp),
+            .padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(icon, contentDescription = label, tint = if (active) EmeraldAccent else SlateTextSecondary, modifier = Modifier.size(17.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, color = if (active) SlateTextPrimary else SlateTextSecondary)
+        Icon(icon, contentDescription = label, tint = if (active) EmeraldAccent else SlateTextSecondary, modifier = Modifier.size(16.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, fontSize = 8.5.sp, color = if (active) SlateTextPrimary else SlateTextSecondary)
     }
 }
 
@@ -591,16 +591,19 @@ private fun Geo2DInspectorSheet(
         modifier = modifier
     ) {
         if (activeTab == null) return@AnimatedVisibility
-        val shape = if (isCompactWidth) RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp) else RoundedCornerShape(16.dp)
+        val shape = RoundedCornerShape(16.dp)
         val containerMod = if (isCompactWidth) {
             Modifier
                 .fillMaxWidth()
-                .padding(bottom = 114.dp)
-                .heightIn(min = 240.dp, max = maxSheetHeight)
+                .navigationBarsPadding()
+                .padding(start = 8.dp, end = 8.dp, bottom = 72.dp)
+                .heightIn(min = 220.dp, max = maxSheetHeight)
         } else {
             Modifier
-                .padding(start = 12.dp, top = 74.dp, bottom = 120.dp)
-                .width(350.dp)
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(start = 10.dp, top = 74.dp, bottom = 78.dp)
+                .width(356.dp)
                 .fillMaxHeight()
         }
 
@@ -608,25 +611,54 @@ private fun Geo2DInspectorSheet(
             modifier = containerMod
                 .clip(shape)
                 .background(SlateDark.copy(alpha = 0.96f))
-                .border(1.dp, SlateBorder, shape)
+                .border(1.dp, SlateBorder.copy(alpha = 0.85f), shape)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {}
         ) {
+            if (isCompactWidth) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(SlateDeepest)
+                        .clickable { viewModel.closeTab() }
+                        .padding(top = 7.dp, bottom = 2.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(36.dp)
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(SlateMuted)
+                    )
+                }
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SlateSurface)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .background(SlateDeepest)
+                    .padding(horizontal = 14.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(activeTab.title, style = MaterialTheme.typography.titleSmall, color = SlateTextPrimary)
-                IconButton(onClick = { viewModel.closeTab() }, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Thu gọn bảng", tint = SlateTextSecondary)
+                Text(activeTab.title, style = MaterialTheme.typography.titleSmall, color = EmeraldAccent)
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(SlateSurface)
+                        .border(1.dp, SlateBorder, RoundedCornerShape(8.dp))
+                        .clickable { viewModel.closeTab() }
+                        .padding(horizontal = 9.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = "Đóng bảng", tint = SlateTextLight, modifier = Modifier.size(14.dp))
+                    Text("Đóng", style = MaterialTheme.typography.labelSmall, color = SlateTextLight)
                 }
             }
+            HorizontalDivider(color = SlateSurface)
 
             Column(
                 modifier = Modifier
@@ -704,33 +736,28 @@ private fun Geo2DBottomDock(
             }
         }
 
-        // Main 2-Tier Dock Container
-        Column(
-            modifier = Modifier
-                .widthIn(max = 620.dp)
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(SlateDark.copy(alpha = 0.95f))
-                .border(1.dp, SlateBorder, RoundedCornerShape(18.dp))
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            // Tier 1: Scrollable 2D Tool Mode Strip
+        // Tier 1: Compact Scrollable 2D Tool Mode Strip (auto-hidden when an inspector tab is open to keep UI neat!)
+        AnimatedVisibility(visible = uiState.activeTab == null) {
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(SlateDark.copy(alpha = 0.9f))
+                    .border(1.dp, SlateBorder.copy(alpha = 0.75f), RoundedCornerShape(13.dp))
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 5.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Geo2DTool.entries.forEach { tool ->
                     val selected = uiState.activeTool == tool
                     Row(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (selected) EmeraldDark else SlateSurface.copy(alpha = 0.85f))
-                            .border(1.dp, if (selected) EmeraldAccent else SlateBorder, RoundedCornerShape(10.dp))
+                            .defaultMinSize(minHeight = 34.dp)
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(if (selected) EmeraldDark else Color.Transparent)
+                            .border(1.dp, if (selected) EmeraldAccent.copy(alpha = 0.8f) else Color.Transparent, RoundedCornerShape(9.dp))
                             .clickable { viewModel.setTool(tool) }
-                            .padding(horizontal = 10.dp, vertical = 7.dp)
+                            .padding(horizontal = 9.dp, vertical = 6.dp)
                             .testTag("geo2d_tool_${tool.name.lowercase()}"),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -738,53 +765,71 @@ private fun Geo2DBottomDock(
                         Icon(
                             imageVector = iconFor2DTool(tool),
                             contentDescription = null,
-                            tint = if (selected) Color.White else SlateTextLight,
+                            tint = if (selected) Color.White else SlateTextSecondary,
                             modifier = Modifier.size(15.dp)
                         )
                         Text(
                             text = tool.shortLabel,
                             style = MaterialTheme.typography.labelSmall,
                             color = if (selected) Color.White else SlateTextLight,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            fontSize = 11.sp
                         )
                     }
                 }
             }
+        }
 
-            HorizontalDivider(color = SlateBorder.copy(alpha = 0.6f))
-
-            // Tier 2: 4 Studio Navigation Tabs
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                Geo2DTab.entries.forEach { tab ->
-                    val selected = uiState.activeTab == tab
-                    Column(
+        // Tier 2: Sleek 4-Tab Navigation Bar (unified M3 pill style matching 3D Studio)
+        Row(
+            modifier = Modifier
+                .widthIn(max = 520.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(SlateDark.copy(alpha = 0.95f))
+                .border(1.dp, SlateBorder.copy(alpha = 0.8f), RoundedCornerShape(16.dp))
+                .padding(horizontal = 5.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Geo2DTab.entries.forEach { tab ->
+                val selected = uiState.activeTab == tab
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .defaultMinSize(minHeight = 48.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (selected) EmeraldDark.copy(alpha = 0.24f) else Color.Transparent)
+                        .clickable { viewModel.toggleTab(tab) }
+                        .padding(vertical = 4.dp, horizontal = 2.dp)
+                        .testTag("geo2d_tab_${tab.name.lowercase()}"),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Box(
                         modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (selected) EmeraldDark.copy(alpha = 0.25f) else Color.Transparent)
-                            .clickable { viewModel.toggleTab(tab) }
-                            .padding(vertical = 5.dp)
-                            .testTag("geo2d_tab_${tab.name.lowercase()}"),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                            .clip(CircleShape)
+                            .background(if (selected) EmeraldDark else Color.Transparent)
+                            .padding(horizontal = 10.dp, vertical = 2.dp),
+                        contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = iconFor2DTab(tab),
                             contentDescription = tab.shortLabel,
-                            tint = if (selected) EmeraldAccent else SlateTextSecondary,
-                            modifier = Modifier.size(19.dp)
-                        )
-                        Text(
-                            text = tab.shortLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontSize = 10.5.sp,
-                            color = if (selected) SlateTextPrimary else SlateTextSecondary,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                            tint = if (selected) Color.White else SlateTextSecondary,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = tab.shortLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 10.sp,
+                        color = if (selected) EmeraldAccent else SlateTextSecondary,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }

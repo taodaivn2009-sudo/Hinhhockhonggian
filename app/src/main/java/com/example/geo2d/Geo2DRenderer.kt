@@ -174,7 +174,7 @@ object Geo2DRenderer {
 
         // 6e. Angle Measurements
         snap.objects.filterIsInstance<Geo2DObject.AngleMeasure>().forEach { ang ->
-            drawAngleMeasure(canvas, width, height, density, cam, ang, ptMap)
+            drawAngleMeasure(canvas, width, height, density, cam, ang, ptMap, snap.showMeasurements)
         }
 
         // 7. Interactive Trace Crosshair & Tangent Line
@@ -570,7 +570,31 @@ object Geo2DRenderer {
             val area = Geo2DMathHelpers.polygonArea(worldPts)
             val cx = sPts.map { it.x }.average().toFloat()
             val cy = sPts.map { it.y }.average().toFloat()
-            drawSmallBadge(canvas, cx, cy, "S = ${Geo2DMathHelpers.formatNum(area)}", 0xFFA5B4FC.toInt(), density)
+
+            // Side length badges along each edge (when edge is long enough on screen to avoid overlap)
+            for (i in sPts.indices) {
+                val p1 = sPts[i]
+                val p2 = sPts[(i + 1) % sPts.size]
+                val screenLen = hypot(p2.x - p1.x, p2.y - p1.y)
+                if (screenLen >= 52f * density) {
+                    val worldLen = Geo2DMathHelpers.distance(worldPts[i], worldPts[(i + 1) % worldPts.size])
+                    val mx = (p1.x + p2.x) * 0.5f
+                    val my = (p1.y + p2.y) * 0.5f
+                    // Offset slightly outward from polygon centroid
+                    val ox = mx - cx
+                    val oy = my - cy
+                    val oLen = hypot(ox, oy).coerceAtLeast(1f)
+                    val bx = mx + (ox / oLen) * 12f * density
+                    val by = my + (oy / oLen) * 12f * density
+                    drawSmallBadge(canvas, bx, by, Geo2DMathHelpers.formatNum(worldLen), 0xFFCBD5E1.toInt(), density)
+                }
+            }
+
+            // Area badge at polygon centroid (only if polygon spans enough screen space)
+            val maxSpan = sPts.maxOf { hypot(it.x - cx, it.y - cy) }
+            if (maxSpan >= 28f * density) {
+                drawSmallBadge(canvas, cx, cy, "S = ${Geo2DMathHelpers.formatNum(area)}", 0xFFA5B4FC.toInt(), density)
+            }
         }
     }
 
@@ -609,7 +633,7 @@ object Geo2DRenderer {
         canvas.drawCircle(sc.x, sc.y, screenR, fill)
         canvas.drawCircle(sc.x, sc.y, screenR, stroke)
 
-        if (showMeasurements) {
+        if (showMeasurements && screenR >= 24f * density) {
             val radiusEnd = if (ePt != null) {
                 worldToScreen(ePt.x, ePt.y, cam, width, height)
             } else {
@@ -622,14 +646,16 @@ object Geo2DRenderer {
                 pathEffect = DashPathEffect(floatArrayOf(5f * density, 4f * density), 0f)
             }
             canvas.drawLine(sc.x, sc.y, radiusEnd.x, radiusEnd.y, rPaint)
-            drawSmallBadge(
-                canvas,
-                (sc.x + radiusEnd.x) * 0.5f,
-                (sc.y + radiusEnd.y) * 0.5f - 10f * density,
-                "R = ${Geo2DMathHelpers.formatNum(worldR)}",
-                baseColor,
-                density
-            )
+            if (screenR >= 44f * density) {
+                drawSmallBadge(
+                    canvas,
+                    (sc.x + radiusEnd.x) * 0.5f,
+                    (sc.y + radiusEnd.y) * 0.5f - 10f * density,
+                    "R = ${Geo2DMathHelpers.formatNum(worldR)}",
+                    baseColor,
+                    density
+                )
+            }
         }
     }
 
@@ -723,8 +749,8 @@ object Geo2DRenderer {
         }
         canvas.drawLine(s1.x, s1.y, s2.x, s2.y, paint)
 
-        if (showMeasurements) {
-            val d = hypot(p2.x - p1.x, p2.y - p1.y)
+        if (showMeasurements && hypot(s2.x - s1.x, s2.y - s1.y) >= 40f * density) {
+            val d = Geo2DMathHelpers.distance(Vec2(p1.x, p1.y), Vec2(p2.x, p2.y))
             drawSmallBadge(
                 canvas,
                 (s1.x + s2.x) * 0.5f,
@@ -760,9 +786,9 @@ object Geo2DRenderer {
         canvas.drawLine(s1.x, s1.y, s2.x, s2.y, paint)
         drawArrowHead(canvas, s1.x, s1.y, s2.x, s2.y, baseColor, 12f * density)
 
-        if (showMeasurements) {
-            val dx = p2.x - p1.x
-            val dy = p2.y - p1.y
+        if (showMeasurements && hypot(s2.x - s1.x, s2.y - s1.y) >= 44f * density) {
+            val dx = p2.x.toDouble() - p1.x.toDouble()
+            val dy = p2.y.toDouble() - p1.y.toDouble()
             drawSmallBadge(
                 canvas,
                 (s1.x + s2.x) * 0.5f,
@@ -781,7 +807,8 @@ object Geo2DRenderer {
         density: Float,
         cam: Geo2DCamera,
         ang: Geo2DObject.AngleMeasure,
-        ptMap: Map<String, Geo2DPoint>
+        ptMap: Map<String, Geo2DPoint>,
+        showMeasurements: Boolean
     ) {
         val pA = ptMap[ang.pAId] ?: return
         val pV = ptMap[ang.vertexId] ?: return
@@ -791,33 +818,72 @@ object Geo2DRenderer {
         val sV = worldToScreen(pV.x, pV.y, cam, width, height)
         val sC = worldToScreen(pC.x, pC.y, cam, width, height)
 
+        val lenVA = hypot(sA.x - sV.x, sA.y - sV.y)
+        val lenVC = hypot(sC.x - sV.x, sC.y - sV.y)
+        if (lenVA < 4f || lenVC < 4f) return
+
         val deg = Geo2DMathHelpers.angleDegrees(Vec2(pA.x, pA.y), Vec2(pV.x, pV.y), Vec2(pC.x, pC.y))
+        val baseColor = parseColor(ang.colorHex, 0xFFFBBF24.toInt())
+
+        // Draw subtle dashed arms V->A and V->C so standalone angle measurements clearly show both rays
+        val armPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.3f * density
+            color = Color.argb(135, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
+            pathEffect = DashPathEffect(floatArrayOf(5f * density, 4f * density), 0f)
+        }
+        canvas.drawLine(sV.x, sV.y, sA.x, sA.y, armPaint)
+        canvas.drawLine(sV.x, sV.y, sC.x, sC.y, armPaint)
+
         val a1 = Math.toDegrees(atan2((sA.y - sV.y).toDouble(), (sA.x - sV.x).toDouble())).toFloat()
         val a2 = Math.toDegrees(atan2((sC.y - sV.y).toDouble(), (sC.x - sV.x).toDouble())).toFloat()
         var sweep = a2 - a1
         while (sweep > 180f) sweep -= 360f
         while (sweep < -180f) sweep += 360f
 
-        val baseColor = parseColor(ang.colorHex, 0xFFFBBF24.toInt())
-        val arcR = 26f * density
-        val oval = RectF(sV.x - arcR, sV.y - arcR, sV.x + arcR, sV.y + arcR)
+        val arcR = min(24f * density, min(lenVA, lenVC) * 0.42f).coerceAtLeast(8f * density)
 
         val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
-            color = Color.argb(60, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
+            color = Color.argb(56, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
         }
         val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = 2f * density
+            strokeWidth = 1.9f * density
             color = baseColor
         }
-        canvas.drawArc(oval, a1, sweep, true, fillPaint)
-        canvas.drawArc(oval, a1, sweep, false, strokePaint)
 
-        val midRad = Math.toRadians((a1 + sweep * 0.5f).toDouble())
-        val lx = sV.x + (arcR + 18f * density) * cos(midRad).toFloat()
-        val ly = sV.y + (arcR + 18f * density) * sin(midRad).toFloat()
-        drawSmallBadge(canvas, lx, ly, "${Geo2DMathHelpers.formatNum(deg)}°", baseColor, density)
+        val isRightAngle = abs(deg - 90f) < 0.35f
+        if (isRightAngle) {
+            val sq = min(15f * density, min(lenVA, lenVC) * 0.35f)
+            val ux1 = (sA.x - sV.x) / lenVA
+            val uy1 = (sA.y - sV.y) / lenVA
+            val ux2 = (sC.x - sV.x) / lenVC
+            val uy2 = (sC.y - sV.y) / lenVC
+            val q1x = sV.x + ux1 * sq
+            val q1y = sV.y + uy1 * sq
+            val q2x = sV.x + ux2 * sq
+            val q2y = sV.y + uy2 * sq
+            val q3x = q1x + ux2 * sq
+            val q3y = q1y + uy2 * sq
+            val sqPath = Path().apply {
+                moveTo(sV.x, sV.y); lineTo(q1x, q1y); lineTo(q3x, q3y); lineTo(q2x, q2y); close()
+            }
+            canvas.drawPath(sqPath, fillPaint)
+            canvas.drawLine(q1x, q1y, q3x, q3y, strokePaint)
+            canvas.drawLine(q3x, q3y, q2x, q2y, strokePaint)
+        } else {
+            val oval = RectF(sV.x - arcR, sV.y - arcR, sV.x + arcR, sV.y + arcR)
+            canvas.drawArc(oval, a1, sweep, true, fillPaint)
+            canvas.drawArc(oval, a1, sweep, false, strokePaint)
+        }
+
+        if (showMeasurements) {
+            val midRad = Math.toRadians((a1 + sweep * 0.5f).toDouble())
+            val lx = sV.x + (arcR + 17f * density) * cos(midRad).toFloat()
+            val ly = sV.y + (arcR + 17f * density) * sin(midRad).toFloat()
+            drawSmallBadge(canvas, lx, ly, "${Geo2DMathHelpers.formatNum(deg)}°", baseColor, density)
+        }
     }
 
     private fun drawPoints(
