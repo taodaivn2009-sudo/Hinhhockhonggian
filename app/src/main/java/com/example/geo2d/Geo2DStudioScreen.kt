@@ -67,7 +67,7 @@ import kotlin.math.abs
 import kotlin.math.hypot
 
 /**
- * Shared compact segmented switch between the completely separated 3D Space and 2D Plane workspaces.
+ * Shared compact segmented switch between the 3D Space, 2D Plane, and Documents workspaces.
  */
 @Composable
 fun WorkspaceModeSwitch(
@@ -97,6 +97,13 @@ fun WorkspaceModeSwitch(
             testTag = "switch_workspace_2d",
             onClick = { onSelect(MathWorkspace.PLANE_2D) }
         )
+        WorkspaceTabChip(
+            label = "Tài liệu",
+            selected = current == MathWorkspace.DOCUMENTS,
+            activeColor = Color(0xFFD97706),
+            testTag = "switch_workspace_docs",
+            onClick = { onSelect(MathWorkspace.DOCUMENTS) }
+        )
     }
 }
 
@@ -113,7 +120,7 @@ private fun WorkspaceTabChip(
             .clip(RoundedCornerShape(8.dp))
             .background(if (selected) activeColor else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
             .testTag(testTag),
         contentAlignment = Alignment.Center
     ) {
@@ -121,7 +128,9 @@ private fun WorkspaceTabChip(
             text = label,
             style = MaterialTheme.typography.labelMedium,
             color = if (selected) Color.White else SlateTextSecondary,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            softWrap = false
         )
     }
 }
@@ -129,6 +138,8 @@ private fun WorkspaceTabChip(
 @Composable
 fun Geo2DStudioScreen(
     onSwitchWorkspace: (MathWorkspace) -> Unit,
+    pendingPlotExpr: String? = null,
+    onConsumePendingPlot: () -> Unit = {},
     viewModel: Geo2DViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -138,6 +149,24 @@ fun Geo2DStudioScreen(
 
     LaunchedEffect(Unit) {
         viewModel.refreshExportFolder()
+    }
+
+    LaunchedEffect(pendingPlotExpr) {
+        val expr = pendingPlotExpr?.trim()
+        if (!expr.isNullOrEmpty()) {
+            val existing = viewModel.uiState.value.snapshot.functions.firstOrNull {
+                it.expression.replace(" ", "").equals(expr.replace(" ", ""), ignoreCase = true)
+            }
+            if (existing == null) {
+                viewModel.addFunction(expr)
+            } else if (!existing.visible) {
+                viewModel.toggleFunctionVisibility(existing.id)
+                viewModel.showToast("Đã bật lại đồ thị y = ${existing.expression}")
+            } else {
+                viewModel.showToast("Đồ thị y = ${existing.expression} đang hiển thị")
+            }
+            onConsumePendingPlot()
+        }
     }
 
     BackHandler(enabled = uiState.replayStep != null) {

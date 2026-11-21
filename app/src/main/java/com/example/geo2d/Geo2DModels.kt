@@ -6,7 +6,8 @@ import kotlin.math.sqrt
 
 enum class MathWorkspace {
     SPACE_3D,
-    PLANE_2D
+    PLANE_2D,
+    DOCUMENTS
 }
 
 data class Vec2(val x: Float, val y: Float) {

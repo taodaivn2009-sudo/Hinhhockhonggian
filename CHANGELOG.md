@@ -2,6 +2,12 @@
 
 ## Bản cập nhật mới nhất
 
+### Mục mới: Tài liệu — Hàm Số Lượng Giác (Chương I)
+- **Thư viện công thức lượng giác đầy đủ:** Thêm tab **Tài liệu** ngay cạnh `3D | 2D`, tổng hợp trọn bộ công thức Chương I (6 công thức cơ bản & đổi Độ ↔ Radian, công thức cộng, nhân đôi & nhân ba, hạ bậc, biến đổi tổng ↔ tích và tích ↔ tổng).
+- **Đường tròn lượng giác tương tác & Bảng xét dấu 4 góc phần tư:** Chạm trực tiếp 16 góc đặc biệt trên đường tròn lượng giác để xem hình chiếu `cos α`, `sin α`, `tan α`, `cot α`; kèm bảng xét dấu góc phần tư `I, II, III, IV` và mẹo nhớ nhanh.
+- **4 nhóm cung liên kết kèm sơ đồ đối xứng trực quan:** Góc đối nhau (`-α`), góc bù nhau (`π - α`), góc phụ nhau (`π/2 - α`) và góc hơn kém `π` (`π + α`).
+- **Tiện ích học tập tích hợp:** Bộ chuyển đổi **Độ ↔ Radian** kèm rút gọn phân số theo `π`, thanh tìm kiếm & lọc nhanh theo sơ đồ tư duy, cùng nút vẽ nhanh `sin(x)`, `cos(x)`, `tan(x)`, `sin(2x)` sang không gian Đồ thị 2D.
+
 ### Sửa lỗi toàn diện & Ổn định hệ thống
 - **Bảng biến thiên (2D):** Khắc phục lỗi tràn số thực (`Infinity`) khi khảo sát hàm mũ (`e^x`, `2^x`) khiến tập xác định và giới hạn tại `+∞` hiển thị sai; chuẩn hóa tập xác định `D = (0; +∞)` và giới hạn `lim(x→0⁺) = -∞` cho hàm logarit (`ln(x)`, `log(x)`).
 - **Tua lại quy trình dựng (Replay 3D & 2D):** Ngăn lỗi ghi đè mất bài vẽ gốc khi xoay/zoom trong lúc đang phát lại; cho phép kéo/zoom mượt mà ngay trong lúc Replay 2D; tự dừng Replay và hoạt ảnh tham số `m` an toàn khi bấm Hoàn tác/Làm lại, Mở bài, Đặt lại hoặc nhấn nút Back hệ thống.

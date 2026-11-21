@@ -3,6 +3,8 @@ package com.example
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.GeometryPersistence
+import com.example.docs.TrigDocCategory
+import com.example.docs.TrigReferenceRepository
 import com.example.engine.*
 import com.example.geo2d.*
 import org.junit.Assert.assertEquals
@@ -416,5 +418,30 @@ class ExampleRobolectricTest {
         val svg2D = SvgExporter.export2DToSvg(1080, 1080, extremeUi2D, transparentBg = true)
         assertTrue(!svg2D.contains("NaN"))
         assertTrue(!svg2D.contains("Infinity"))
+    }
+
+    @Test
+    fun `trigonometry documents repository has complete poster formulas and accurate converters`() {
+        // 1. All 10 formula groups, 16 unit-circle angles, and 4 quadrant sign rows exist
+        assertEquals(10, TrigReferenceRepository.formulaGroups.size)
+        assertEquals(16, TrigReferenceRepository.specialCircleAngles.size)
+        assertEquals(4, TrigReferenceRepository.quadrantSignRows.size)
+
+        // 2. Category and search filtering work accurately
+        val specialOnly = TrigReferenceRepository.filterGroups(TrigDocCategory.SPECIAL_ANGLES, "")
+        assertEquals(4, specialOnly.size)
+
+        val searchDouble = TrigReferenceRepository.filterGroups(TrigDocCategory.ALL, "nhân đôi")
+        assertTrue("Search 'nhân đôi' should match double-angle group", searchDouble.any { it.id == "double_triple" })
+
+        val searchCosDiff = TrigReferenceRepository.filterGroups(TrigDocCategory.ALL, "cos u - cos v")
+        assertTrue("Search should match sum-to-product group", searchCosDiff.any { it.id == "sum_to_product" })
+
+        // 3. Degree <-> Radian conversion & exact pi-fraction formatting
+        assertEquals(PI, TrigReferenceRepository.degreesToRadians(180.0), 1e-9)
+        assertEquals(180.0, TrigReferenceRepository.radiansToDegrees(PI), 1e-9)
+        assertEquals("5π/6", TrigReferenceRepository.formatDegreesAsPiFraction(150.0))
+        assertEquals("π/2", TrigReferenceRepository.formatDegreesAsPiFraction(90.0))
+        assertEquals("0", TrigReferenceRepository.formatDegreesAsPiFraction(0.0))
     }
 }

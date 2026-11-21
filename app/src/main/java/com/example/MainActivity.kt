@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.docs.MathDocumentsScreen
 import com.example.geo2d.Geo2DPersistence
 import com.example.geo2d.Geo2DStudioScreen
 import com.example.geo2d.MathWorkspace
@@ -68,6 +69,7 @@ fun ToolToanRootScreen() {
     val context = LocalContext.current
     val workspacePrefs = remember(context) { Geo2DPersistence(context.applicationContext) }
     var activeWorkspace by remember { mutableStateOf(workspacePrefs.loadLastWorkspace()) }
+    var pending2DExpr by remember { mutableStateOf<String?>(null) }
 
     val onSelectWorkspace: (MathWorkspace) -> Unit = { target ->
         if (target != activeWorkspace) {
@@ -78,7 +80,18 @@ fun ToolToanRootScreen() {
 
     when (activeWorkspace) {
         MathWorkspace.SPACE_3D -> GeometryStudioScreen(onSwitchWorkspace = onSelectWorkspace)
-        MathWorkspace.PLANE_2D -> Geo2DStudioScreen(onSwitchWorkspace = onSelectWorkspace)
+        MathWorkspace.PLANE_2D -> Geo2DStudioScreen(
+            onSwitchWorkspace = onSelectWorkspace,
+            pendingPlotExpr = pending2DExpr,
+            onConsumePendingPlot = { pending2DExpr = null }
+        )
+        MathWorkspace.DOCUMENTS -> MathDocumentsScreen(
+            onSwitchWorkspace = onSelectWorkspace,
+            onPlotTrigIn2D = { expr ->
+                pending2DExpr = expr
+                onSelectWorkspace(MathWorkspace.PLANE_2D)
+            }
+        )
     }
 }
 
