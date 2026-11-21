@@ -3,10 +3,10 @@ package com.example.docs
 import com.example.engine.ShapeType
 
 /**
- * Complete Grade 11 Mathematics formula compendium aligned with Vietnam GDPT 2018
- * (9 chapters: Trigonometry + Interactive Tools, Sequences/AP/GP, Grouped Statistics,
- * Parallelism in 3D, Limits & Continuity, Exponentials & Logarithms, Perpendicularity &
- * Volumes in 3D, Probability Rules, and Derivatives).
+ * Exhaustive Grade 11 Mathematics formula compendium aligned with Vietnam GDPT 2018.
+ * Part 1: Chapters I – V (Trigonometry + Interactive Tools + Universal/Equation formulas,
+ * Sequences/AP/GP + Series & Compound Interest, Grouped Statistics, 3D Parallelism,
+ * and Limits & Continuity).
  */
 object Grade11CurriculumData {
 
@@ -32,7 +32,7 @@ object Grade11CurriculumData {
         }
     }
 
-    val chapters: List<MathChapter> by lazy {
+    private val part1Chapters: List<MathChapter> by lazy {
         listOf(
             // ==================== CHƯƠNG I ====================
             MathChapter(
@@ -40,7 +40,7 @@ object Grade11CurriculumData {
                 grade = MathGrade.GRADE_11,
                 chapterNumber = "Chương I",
                 title = "Hàm số lượng giác & Phương trình lượng giác",
-                summary = "Trọn bộ công thức lượng giác, Đường tròn LG tương tác, Bảng dấu & PT lượng giác cơ bản",
+                summary = "Đầy đủ mọi công thức lượng giác, công thức theo t = tan(a/2), Đường tròn LG tương tác & mọi dạng PT LG",
                 accentHex = 0xFFF59E0B,
                 hasTrigInteractiveTools = true,
                 quickActions = listOf(
@@ -51,6 +51,20 @@ object Grade11CurriculumData {
                 ),
                 groups = trigInheritedGroups + listOf(
                     MathFormulaGroup(
+                        id = "g11_c1_advanced",
+                        title = "Công thức nâng cao: Chia đôi, Theo t = tan(a/2), Hạ bậc 3 & Góc + π/2",
+                        subtitle = "Các biến đổi rút gọn thường xuất hiện trong đề thi đại học & tích phân",
+                        accentHex = 0xFFEAB308,
+                        formulas = listOf(
+                            MathFormulaItem("g11_c1_adv1", "Biểu diễn theo t = tan(a/2)", "sin a = 2t/(1+t²)  ;  cos a = (1−t²)/(1+t²)  ;  tan a = 2t/(1−t²)"),
+                            MathFormulaItem("g11_c1_adv2", "Công thức góc chia đôi", "tan(a/2) = sin a / (1 + cos a) = (1 − cos a) / sin a"),
+                            MathFormulaItem("g11_c1_adv3", "Hạ bậc ba", "sin³a = (3sin a − sin 3a) / 4   ;   cos³a = (3cos a + cos 3a) / 4"),
+                            MathFormulaItem("g11_c1_adv4", "Hằng đẳng thức bậc 4 & bậc 6", "sin⁴a + cos⁴a = 1 − ½sin²2a   ;   sin⁶a + cos⁶a = 1 − ¾sin²2a"),
+                            MathFormulaItem("g11_c1_adv5", "Hợp góc sin x ± cos x", "sin x ± cos x = √2·sin(x ± π/4) = ±√2·cos(x ∓ π/4)"),
+                            MathFormulaItem("g11_c1_adv6", "Cung hơn kém π/2 (α + π/2)", "sin(α+π/2) = cos α ; cos(α+π/2) = −sin α ; tan(α+π/2) = −cot α")
+                        )
+                    ),
+                    MathFormulaGroup(
                         id = "g11_c1_functions",
                         title = "Tính chất 4 hàm số lượng giác",
                         subtitle = "Tập xác định, tập giá trị, tính chẵn lẻ và chu kỳ tuần hoàn",
@@ -59,21 +73,24 @@ object Grade11CurriculumData {
                             MathFormulaItem("g11_c1_fn1", "y = sin x", "TXĐ: ℝ • TGT: [−1; 1] • Hàm lẻ • Chu kỳ T = 2π"),
                             MathFormulaItem("g11_c1_fn2", "y = cos x", "TXĐ: ℝ • TGT: [−1; 1] • Hàm chẵn • Chu kỳ T = 2π"),
                             MathFormulaItem("g11_c1_fn3", "y = tan x", "TXĐ: ℝ \\ {π/2 + kπ} • TGT: ℝ • Hàm lẻ • Chu kỳ T = π"),
-                            MathFormulaItem("g11_c1_fn4", "y = cot x", "TXĐ: ℝ \\ {kπ} • TGT: ℝ • Hàm lẻ • Chu kỳ T = π")
+                            MathFormulaItem("g11_c1_fn4", "y = cot x", "TXĐ: ℝ \\ {kπ} • TGT: ℝ • Hàm lẻ • Chu kỳ T = π"),
+                            MathFormulaItem("g11_c1_fn5", "Chu kỳ hàm hợp sin(ax+b), tan(ax+b)", "T = 2π/|a| (sin, cos)   ;   T = π/|a| (tan, cot)")
                         )
                     ),
                     MathFormulaGroup(
                         id = "g11_c1_equations",
-                        title = "Phương trình lượng giác cơ bản",
-                        subtitle = "Công thức nghiệm tổng quát (k ∈ ℤ) và các giá trị đặc biệt",
+                        title = "Phương trình lượng giác cơ bản & Thường gặp",
+                        subtitle = "Công thức nghiệm tổng quát (k ∈ ℤ), giá trị đặc biệt và phương trình cổ điển",
                         accentHex = 0xFFF97316,
                         formulas = listOf(
                             MathFormulaItem("g11_c1_eq1", "sin x = sin α", "x = α + k2π   hoặc   x = π − α + k2π"),
                             MathFormulaItem("g11_c1_eq2", "cos x = cos α", "x = α + k2π   hoặc   x = −α + k2π"),
-                            MathFormulaItem("g11_c1_eq3", "tan x = tan α", "x = α + kπ", condition = "cos x ≠ 0"),
-                            MathFormulaItem("g11_c1_eq4", "cot x = cot α", "x = α + kπ", condition = "sin x ≠ 0"),
-                            MathFormulaItem("g11_c1_eq5", "sin x = 0 / 1 / −1", "x = kπ   |   x = π/2 + k2π   |   x = −π/2 + k2π"),
-                            MathFormulaItem("g11_c1_eq6", "cos x = 0 / 1 / −1", "x = π/2 + kπ   |   x = k2π   |   x = π + k2π")
+                            MathFormulaItem("g11_c1_eq3", "tan x = tan α  |  cot x = cot α", "x = α + kπ", condition = "cos x ≠ 0 (tan) ; sin x ≠ 0 (cot)"),
+                            MathFormulaItem("g11_c1_eq4", "sin x = 0 / 1 / −1", "x = kπ   |   x = π/2 + k2π   |   x = −π/2 + k2π"),
+                            MathFormulaItem("g11_c1_eq5", "cos x = 0 / 1 / −1", "x = π/2 + kπ   |   x = k2π   |   x = π + k2π"),
+                            MathFormulaItem("g11_c1_eq6", "PT bậc nhất a·sin x + b·cos x = c", "Có nghiệm ⇔ a² + b² ≥ c²  •  Chia 2 vế cho √(a² + b²)"),
+                            MathFormulaItem("g11_c1_eq7", "PT đối xứng theo sin x ± cos x", "Đặt t = sin x ± cos x (|t| ≤ √2) ⇒ sin x·cos x = ±(t² − 1) / 2"),
+                            MathFormulaItem("g11_c1_eq8", "PT đẳng cấp a·sin²x + b·sin x cos x + c·cos²x = d", "Xét cos x = 0; với cos x ≠ 0 chia 2 vế cho cos²x đưa về tan x")
                         )
                     )
                 )
@@ -85,32 +102,47 @@ object Grade11CurriculumData {
                 grade = MathGrade.GRADE_11,
                 chapterNumber = "Chương II",
                 title = "Dãy số, Cấp số cộng và Cấp số nhân",
-                summary = "Số hạng tổng quát, tính chất trung bình, tổng n số hạng đầu & CSN lùi vô hạn",
+                summary = "Tính đơn điệu/bị chặn, CSC, CSN, tổng CSN lùi vô hạn, các tổng dãy đặc biệt & lãi kép",
                 accentHex = 0xFFF97316,
                 groups = listOf(
+                    MathFormulaGroup(
+                        id = "g11_c2_seq",
+                        title = "Đại cương dãy số & Các tổng dãy đặc biệt",
+                        subtitle = "Xét tăng/giảm, bị chặn và các công thức tổng hay dùng",
+                        accentHex = 0xFFFB923C,
+                        formulas = listOf(
+                            MathFormulaItem("g11_c2_f0a", "Dãy tăng / Dãy giảm", "u_{n+1} − u_n > 0 (tăng)  •  u_{n+1} − u_n < 0 (giảm)"),
+                            MathFormulaItem("g11_c2_f0b", "Dãy bị chặn", "∃m, M ∈ ℝ sao cho m ≤ u_n ≤ M, ∀n ∈ ℕ*"),
+                            MathFormulaItem("g11_c2_f0c", "Tổng 1 + 2 + … + n", "n(n + 1) / 2"),
+                            MathFormulaItem("g11_c2_f0d", "Tổng bình phương 1² + 2² + … + n²", "n(n + 1)(2n + 1) / 6"),
+                            MathFormulaItem("g11_c2_f0e", "Tổng lập phương 1³ + 2³ + … + n³", "[ n(n + 1) / 2 ]²"),
+                            MathFormulaItem("g11_c2_f0f", "Tổng sai phân ∑ 1/[k(k+1)]", "1/(1·2) + 1/(2·3) + … + 1/[n(n+1)] = n / (n + 1)")
+                        )
+                    ),
                     MathFormulaGroup(
                         id = "g11_c2_ap",
                         title = "Cấp số cộng (CSC — công sai d)",
                         subtitle = "Mỗi số hạng (từ thứ 2) bằng số hạng trước cộng thêm d",
                         accentHex = 0xFFF97316,
                         formulas = listOf(
-                            MathFormulaItem("g11_c2_f1", "Định nghĩa", "u_{n+1} = u_n + d", note = "d: công sai"),
+                            MathFormulaItem("g11_c2_f1", "Định nghĩa & Hiệu 2 số hạng bất kỳ", "u_{n+1} = u_n + d   ;   u_n − u_m = (n − m)d"),
                             MathFormulaItem("g11_c2_f2", "Số hạng tổng quát u_n", "u₁ + (n − 1)d", condition = "n ≥ 2"),
-                            MathFormulaItem("g11_c2_f3", "Tính chất 3 số hạng liên tiếp", "u_k = (u_{k−1} + u_{k+1}) / 2", condition = "k ≥ 2"),
+                            MathFormulaItem("g11_c2_f3", "Tính chất trung bình cộng", "u_k = (u_{k−1} + u_{k+1}) / 2   ;   u_k + u_{n−k+1} = u₁ + u_n"),
                             MathFormulaItem("g11_c2_f4", "Tổng n số hạng đầu S_n", "n(u₁ + u_n) / 2  =  n[2u₁ + (n − 1)d] / 2")
                         )
                     ),
                     MathFormulaGroup(
                         id = "g11_c2_gp",
                         title = "Cấp số nhân (CSN — công bội q)",
-                        subtitle = "Mỗi số hạng (từ thứ 2) bằng số hạng trước nhân với q",
+                        subtitle = "Tổng n số hạng, tích n số hạng, CSN lùi vô hạn & lãi kép",
                         accentHex = 0xFFF59E0B,
                         formulas = listOf(
-                            MathFormulaItem("g11_c2_f5", "Định nghĩa", "u_{n+1} = u_n · q", note = "q: công bội"),
+                            MathFormulaItem("g11_c2_f5", "Định nghĩa & Tỉ số 2 số hạng bất kỳ", "u_{n+1} = u_n · q   ;   u_n / u_m = q^{n−m}"),
                             MathFormulaItem("g11_c2_f6", "Số hạng tổng quát u_n", "u₁ · q^{n−1}", condition = "n ≥ 2"),
-                            MathFormulaItem("g11_c2_f7", "Tính chất 3 số hạng liên tiếp", "u_k² = u_{k−1} · u_{k+1}", condition = "k ≥ 2"),
+                            MathFormulaItem("g11_c2_f7", "Tính chất trung bình nhân", "u_k² = u_{k−1} · u_{k+1}", condition = "k ≥ 2"),
                             MathFormulaItem("g11_c2_f8", "Tổng n số hạng đầu S_n", "u₁ · (1 − qⁿ) / (1 − q)", condition = "q ≠ 1", note = "Nếu q = 1 thì S_n = n·u₁"),
-                            MathFormulaItem("g11_c2_f9", "Tổng CSN lùi vô hạn S", "u₁ / (1 − q)", condition = "|q| < 1")
+                            MathFormulaItem("g11_c2_f9", "Tổng CSN lùi vô hạn S", "u₁ / (1 − q)", condition = "|q| < 1"),
+                            MathFormulaItem("g11_c2_f10", "Tích n số hạng đầu & Lãi kép", "P_n = (u₁·u_n)^{n/2} (u_i > 0)   •   Lãi kép: A_n = A₀·(1 + r)ⁿ")
                         )
                     )
                 )
@@ -122,7 +154,7 @@ object Grade11CurriculumData {
                 grade = MathGrade.GRADE_11,
                 chapterNumber = "Chương III",
                 title = "Mẫu số liệu ghép nhóm (Xu thế trung tâm)",
-                summary = "Số trung bình ghép nhóm, nội suy Trung vị, Tứ phân vị Q₁, Q₂, Q₃ & Mốt",
+                summary = "Hiệu chỉnh đầu mút, tần số tích lũy, số trung bình, nội suy Trung vị, Tứ phân vị & Mốt",
                 accentHex = 0xFFEA580C,
                 groups = listOf(
                     MathFormulaGroup(
@@ -131,11 +163,13 @@ object Grade11CurriculumData {
                         subtitle = "Nhóm [u_m; u_{m+1}) có giá trị đại diện c_m = (u_m + u_{m+1})/2 và tần số n_m",
                         accentHex = 0xFFEA580C,
                         formulas = listOf(
-                            MathFormulaItem("g11_c3_f1", "Số trung bình x̄", "(m₁c₁ + m₂c₂ + … + m_k c_k) / n", note = "n = m₁ + … + m_k"),
-                            MathFormulaItem("g11_c3_f2", "Trung vị M_e (Q₂)", "u_m + [ (n/2 − C) / n_m ] · (u_{m+1} − u_m)", note = "C: tổng tần số các nhóm trước nhóm chứa M_e"),
-                            MathFormulaItem("g11_c3_f3", "Tứ phân vị Q₁", "u_p + [ (n/4 − C) / n_p ] · (u_{p+1} − u_p)", note = "Nhóm p chứa phần tử thứ n/4"),
-                            MathFormulaItem("g11_c3_f4", "Tứ phân vị Q₃", "u_q + [ (3n/4 − C) / n_q ] · (u_{q+1} − u_q)", note = "Nhóm q chứa phần tử thứ 3n/4"),
-                            MathFormulaItem("g11_c3_f5", "Mốt M_o", "u_m + [ (n_m − n_{m−1}) / ((n_m − n_{m−1}) + (n_m − n_{m+1})) ] · (u_{m+1} − u_m)", note = "Nhóm m có tần số lớn nhất")
+                            MathFormulaItem("g11_c3_f1", "Hiệu chỉnh đầu mút rời rạc", "Đổi [k₁; k₂] (số nguyên) thành [k₁ − 0,5; k₂ + 0,5)"),
+                            MathFormulaItem("g11_c3_f2", "Tần số tích lũy cf_k", "cf_k = n₁ + n₂ + … + n_k", note = "Dùng tìm nhóm đầu tiên có cf ≥ n/4, n/2, 3n/4"),
+                            MathFormulaItem("g11_c3_f3", "Số trung bình x̄", "(m₁c₁ + m₂c₂ + … + m_k c_k) / n  =  ∑ f_i · c_i", note = "n = ∑ m_i"),
+                            MathFormulaItem("g11_c3_f4", "Trung vị M_e (Q₂)", "u_m + [ (n/2 − C) / n_m ] · (u_{m+1} − u_m)", note = "C: tổng tần số các nhóm trước nhóm chứa M_e"),
+                            MathFormulaItem("g11_c3_f5", "Tứ phân vị Q₁", "u_p + [ (n/4 − C) / n_p ] · (u_{p+1} − u_p)", note = "Nhóm p chứa phần tử thứ n/4"),
+                            MathFormulaItem("g11_c3_f6", "Tứ phân vị Q₃", "u_q + [ (3n/4 − C) / n_q ] · (u_{q+1} − u_q)", note = "Nhóm q chứa phần tử thứ 3n/4"),
+                            MathFormulaItem("g11_c3_f7", "Mốt M_o", "u_m + [ (n_m − n_{m−1}) / ((n_m − n_{m−1}) + (n_m − n_{m+1})) ] · (u_{m+1} − u_m)", note = "Quy ước n₀ = 0 nếu m = 1, n_{k+1} = 0 nếu m = k")
                         )
                     )
                 )
@@ -147,7 +181,7 @@ object Grade11CurriculumData {
                 grade = MathGrade.GRADE_11,
                 chapterNumber = "Chương IV",
                 title = "Quan hệ song song trong không gian",
-                summary = "Giao tuyến, chứng minh đường // mặt, mặt // mặt, định lý Thales & phép chiếu song song",
+                summary = "Xác định mặt phẳng, giao tuyến, đường // mặt, mặt // mặt, Thales, hình lăng trụ/chóp cụt & phép chiếu",
                 accentHex = 0xFFD97706,
                 quickActions = listOf(
                     DocQuickAction.Open3D("Mở 3D Lăng trụ đứng", ShapeType.PRISM3, showAxes = false),
@@ -157,15 +191,28 @@ object Grade11CurriculumData {
                     MathFormulaGroup(
                         id = "g11_c4_parallel",
                         title = "Các định lý song song cốt lõi",
-                        subtitle = "Cơ sở dựng giao tuyến và thiết diện song song",
+                        subtitle = "Nền tảng dựng giao tuyến và thiết diện song song trong hình không gian",
                         accentHex = 0xFFD97706,
                         formulas = listOf(
-                            MathFormulaItem("g11_c4_f1", "Giao tuyến 3 mặt phẳng", "Ba giao tuyến đôi một song song hoặc đồng quy"),
-                            MathFormulaItem("g11_c4_f2", "Điều kiện d // (P)", "d ⊄ (P), d // d' và d' ⊂ (P)  ⇒  d // (P)"),
-                            MathFormulaItem("g11_c4_f3", "Giao tuyến khi d // (P)", "d // (P), d ⊂ (Q) và (P) ∩ (Q) = Δ  ⇒  Δ // d"),
-                            MathFormulaItem("g11_c4_f4", "Điều kiện (P) // (Q)", "a, b ⊂ (P) cắt nhau và a // (Q), b // (Q)  ⇒  (P) // (Q)"),
-                            MathFormulaItem("g11_c4_f5", "Mặt phẳng thứ 3 cắt (P)//(Q)", "(R) cắt (P), (Q) theo 2 giao tuyến a, b  ⇒  a // b"),
-                            MathFormulaItem("g11_c4_f6", "Định lý Thales không gian", "Ba mặt phẳng song song chắn trên 2 cát tuyến các đoạn thẳng tương ứng tỉ lệ")
+                            MathFormulaItem("g11_c4_f1", "4 cách xác định 1 mặt phẳng", "3 điểm không thẳng hàng • 1 điểm + 1 đường • 2 đường cắt nhau • 2 đường song song"),
+                            MathFormulaItem("g11_c4_f2", "Giao tuyến 3 mặt phẳng", "Ba giao tuyến đôi một song song hoặc đồng quy"),
+                            MathFormulaItem("g11_c4_f3", "Giao tuyến chứa 2 đường song song", "a ⊂ (P), b ⊂ (Q), a // b  ⇒  (P) ∩ (Q) = d song song a, b (hoặc trùng)"),
+                            MathFormulaItem("g11_c4_f4", "Điều kiện d // (P)", "d ⊄ (P), d // d' và d' ⊂ (P)  ⇒  d // (P)"),
+                            MathFormulaItem("g11_c4_f5", "Giao tuyến khi d // (P)", "d // (P), d ⊂ (Q) và (P) ∩ (Q) = Δ  ⇒  Δ // d"),
+                            MathFormulaItem("g11_c4_f6", "Điều kiện (P) // (Q)", "a, b ⊂ (P) cắt nhau và a // (Q), b // (Q)  ⇒  (P) // (Q)"),
+                            MathFormulaItem("g11_c4_f7", "Mặt phẳng thứ 3 cắt (P)//(Q)", "(R) cắt (P), (Q) theo 2 giao tuyến a, b  ⇒  a // b"),
+                            MathFormulaItem("g11_c4_f8", "Định lý Thales không gian", "3 mặt phẳng song song chắn trên 2 cát tuyến các đoạn tương ứng tỉ lệ")
+                        )
+                    ),
+                    MathFormulaGroup(
+                        id = "g11_c4_solids",
+                        title = "Hình lăng trụ, Hình hộp, Chóp cụt & Phép chiếu song song",
+                        subtitle = "Tính chất bảo toàn tỉ số của phép chiếu song song",
+                        accentHex = 0xFFF59E0B,
+                        formulas = listOf(
+                            MathFormulaItem("g11_c4_f9", "Hình lăng trụ & Hình hộp", "Các mặt bên là hình bình hành ; 4 đường chéo hình hộp cắt nhau tại trung điểm mỗi đường"),
+                            MathFormulaItem("g11_c4_f10", "Tỉ số diện tích 2 đáy chóp cụt", "S_đáy nhỏ / S_đáy lớn = k²", note = "k là tỉ số đồng dạng các cạnh tương ứng"),
+                            MathFormulaItem("g11_c4_f11", "Tính chất phép chiếu song song", "Bảo toàn thẳng hàng, thứ tự, song song và tỉ số đoạn thẳng A'B'/C'D' = AB/CD (khi AB // CD)")
                         )
                     )
                 )
@@ -177,7 +224,7 @@ object Grade11CurriculumData {
                 grade = MathGrade.GRADE_11,
                 chapterNumber = "Chương V",
                 title = "Giới hạn và Hàm số liên tục",
-                summary = "Giới hạn dãy số, giới hạn hàm số một bên / vô cực, khử dạng vô định & tính liên tục",
+                summary = "Giới hạn dãy số, định lý kẹp, giới hạn hàm số, các giới hạn chuẩn e & lượng giác, liên hợp & liên tục",
                 accentHex = 0xFFFB7185,
                 quickActions = listOf(
                     DocQuickAction.Plot2D("Vẽ hàm phân thức y = (2x+1)/(x−1)", "(2*x + 1)/(x - 1)")
@@ -186,199 +233,46 @@ object Grade11CurriculumData {
                     MathFormulaGroup(
                         id = "g11_c5_seq_lim",
                         title = "Giới hạn dãy số & Hàm số cơ bản",
-                        subtitle = "Các giới hạn chuẩn và quy tắc tìm giới hạn tại vô cực",
+                        subtitle = "Các giới hạn chuẩn, định lý kẹp và phân thức bậc p/q tại vô cực",
                         accentHex = 0xFFFB7185,
                         formulas = listOf(
-                            MathFormulaItem("g11_c5_f1", "lim (1 / n^k)", "0", condition = "k nguyên dương"),
-                            MathFormulaItem("g11_c5_f2", "lim qⁿ", "0  (nếu |q| < 1)   ;   +∞  (nếu q > 1)"),
-                            MathFormulaItem("g11_c5_f3", "lim_{x→±∞} (c / x^k)", "0", condition = "k nguyên dương, c là hằng số"),
-                            MathFormulaItem("g11_c5_f4", "Dạng vô định 0/0", "Phân tích nhân tử chung (x − x₀) hoặc nhân lượng liên hợp"),
-                            MathFormulaItem("g11_c5_f5", "Dạng vô định ∞/∞", "Chia cả tử và mẫu cho lũy thừa bậc cao nhất của n hoặc x"),
-                            MathFormulaItem("g11_c5_f6", "Giới hạn lượng giác đặc biệt", "lim_{x→0} (sin x / x) = 1")
+                            MathFormulaItem("g11_c5_f1", "lim (1 / n^k)  |  lim (c / x^k)", "0", condition = "k ∈ ℕ*, x → ±∞"),
+                            MathFormulaItem("g11_c5_f2", "lim qⁿ", "0  (khi |q| < 1)   ;   +∞  (khi q > 1)"),
+                            MathFormulaItem("g11_c5_f3", "Định lý kẹp (Sandwich)", "|u_n| ≤ v_n và lim v_n = 0  ⇒  lim u_n = 0"),
+                            MathFormulaItem("g11_c5_f4", "Phân thức P_p(x) / Q_q(x) (x → ±∞)", "p < q ⇒ 0  •  p = q ⇒ a_p / b_q  •  p > q ⇒ ±∞"),
+                            MathFormulaItem("g11_c5_f5", "Liên hợp bậc 2 & bậc 3", "√A − √B = (A−B)/(√A+√B)   ;   ∛A − ∛B = (A−B)/(∛A²+∛AB+∛B²)"),
+                            MathFormulaItem("g11_c5_f6", "Khử dạng 0/0 và ∞/∞", "0/0: phân tích nhân tử (x−x₀) / liên hợp  •  ∞/∞: chia lũy thừa bậc cao nhất")
+                        )
+                    ),
+                    MathFormulaGroup(
+                        id = "g11_c5_special_lim",
+                        title = "Các giới hạn đặc biệt (Lượng giác, Số e, Mũ – Log)",
+                        subtitle = "Rất hay dùng để tính nhanh giới hạn và chứng minh đạo hàm",
+                        accentHex = 0xFFF43F5E,
+                        formulas = listOf(
+                            MathFormulaItem("g11_c5_f7", "lim_{x→0} (sin x / x)  &  (tan x / x)", "1   (tổng quát: lim sin(ax)/(bx) = a/b)"),
+                            MathFormulaItem("g11_c5_f8", "lim_{x→0} ((1 − cos x) / x²)", "1 / 2"),
+                            MathFormulaItem("g11_c5_f9", "Giới hạn định nghĩa số e", "lim_{x→±∞} (1 + 1/x)^x = e   ;   lim_{x→0} (1 + x)^{1/x} = e"),
+                            MathFormulaItem("g11_c5_f10", "Giới hạn mũ & lôgarit tại 0", "lim_{x→0} ((e^x − 1) / x) = 1   ;   lim_{x→0} (ln(1 + x) / x) = 1")
                         )
                     ),
                     MathFormulaGroup(
                         id = "g11_c5_cont",
-                        title = "Hàm số liên tục & Chứng minh có nghiệm",
-                        subtitle = "Điều kiện liên tục tại điểm x₀ và hệ quả giá trị trung gian",
-                        accentHex = 0xFFF43F5E,
+                        title = "Hàm số liên tục & Chứng minh phương trình có nghiệm",
+                        subtitle = "Điều kiện liên tục tại điểm, trên khoảng và định lý giá trị trung gian",
+                        accentHex = 0xFFE11D48,
                         formulas = listOf(
-                            MathFormulaItem("g11_c5_f7", "Liên tục tại x₀", "lim_{x→x₀⁺} f(x) = lim_{x→x₀⁻} f(x) = f(x₀)"),
-                            MathFormulaItem("g11_c5_f8", "Định lý giá trị trung gian", "f liên tục trên [a; b] và f(a)·f(b) < 0  ⇒  ∃c ∈ (a; b): f(c) = 0")
-                        )
-                    )
-                )
-            ),
-
-            // ==================== CHƯƠNG VI ====================
-            MathChapter(
-                id = "g11_c6",
-                grade = MathGrade.GRADE_11,
-                chapterNumber = "Chương VI",
-                title = "Hàm số mũ và Hàm số lôgarit",
-                summary = "Phép tính lũy thừa, công thức lôgarit, đổi cơ số, PT & BPT mũ – lôgarit",
-                accentHex = 0xFFEC4899,
-                quickActions = listOf(
-                    DocQuickAction.Plot2D("Vẽ hàm mũ y = 2^x", "2^x"),
-                    DocQuickAction.Plot2D("Vẽ hàm lôgarit y = ln(x)", "ln(x)")
-                ),
-                groups = listOf(
-                    MathFormulaGroup(
-                        id = "g11_c6_pow",
-                        title = "Công thức Lũy thừa số mũ thực",
-                        subtitle = "Với a, b > 0 và α, β ∈ ℝ",
-                        accentHex = 0xFFEC4899,
-                        formulas = listOf(
-                            MathFormulaItem("g11_c6_f1", "a^α · a^β   |   a^α / a^β", "a^{α + β}   |   a^{α − β}"),
-                            MathFormulaItem("g11_c6_f2", "(a^α)^β", "a^{α · β}"),
-                            MathFormulaItem("g11_c6_f3", "(ab)^α   |   (a/b)^α", "a^α · b^α   |   a^α / b^α"),
-                            MathFormulaItem("g11_c6_f4", "a^{−n}   |   a^{m/n}", "1 / aⁿ   |   ⁿ√(a^m)", condition = "a > 0, n ≥ 2")
-                        )
-                    ),
-                    MathFormulaGroup(
-                        id = "g11_c6_log",
-                        title = "Công thức Lôgarit & Đổi cơ số",
-                        subtitle = "Điều kiện cơ số 0 < a ≠ 1 và biểu thức trong log dương",
-                        accentHex = 0xFFF472B6,
-                        mnemonic = "Log tích thành tổng • Log thương thành hiệu • Số mũ trên nhảy ra tử, mũ cơ số nhảy ra mẫu",
-                        formulas = listOf(
-                            MathFormulaItem("g11_c6_f5", "Định nghĩa", "log_a b = α   ⇔   a^α = b", condition = "0 < a ≠ 1, b > 0"),
-                            MathFormulaItem("g11_c6_f6", "Lôgarit tích & thương", "log_a(xy) = log_a x + log_a y   ;   log_a(x/y) = log_a x − log_a y"),
-                            MathFormulaItem("g11_c6_f7", "Lôgarit lũy thừa", "log_a(b^α) = α·log_a b   ;   log_{a^β} b = (1/β)·log_a b"),
-                            MathFormulaItem("g11_c6_f8", "Đổi cơ số", "log_a b = log_c b / log_c a = 1 / log_b a", condition = "0 < a, b, c ≠ 1"),
-                            MathFormulaItem("g11_c6_f9", "Đồng nhất thức mũ–log", "a^{log_a b} = b   ;   log_a(a^α) = α   ;   ln x = log_e x")
-                        )
-                    ),
-                    MathFormulaGroup(
-                        id = "g11_c6_eq",
-                        title = "Phương trình & Bất phương trình Mũ – Lôgarit",
-                        subtitle = "Chú ý đảo chiều bất đẳng thức khi 0 < a < 1",
-                        accentHex = 0xFFDB2777,
-                        formulas = listOf(
-                            MathFormulaItem("g11_c6_f10", "a^x = b  (b > 0)", "x = log_a b"),
-                            MathFormulaItem("g11_c6_f11", "log_a x = b", "x = a^b", condition = "x > 0"),
-                            MathFormulaItem("g11_c6_f12", "a^{f(x)} > a^{g(x)}", "f(x) > g(x) nếu a > 1  •  f(x) < g(x) nếu 0 < a < 1"),
-                            MathFormulaItem("g11_c6_f13", "log_a f(x) > log_a g(x)", "f(x) > g(x) > 0 nếu a > 1  •  0 < f(x) < g(x) nếu 0 < a < 1")
-                        )
-                    )
-                )
-            ),
-
-            // ==================== CHƯƠNG VII ====================
-            MathChapter(
-                id = "g11_c7",
-                grade = MathGrade.GRADE_11,
-                chapterNumber = "Chương VII",
-                title = "Quan hệ vuông góc & Thể tích không gian",
-                summary = "Đường ⊥ mặt, định lý 3 đường vuông góc, góc nhị diện, khoảng cách & công thức thể tích",
-                accentHex = 0xFFF59E0B,
-                quickActions = listOf(
-                    DocQuickAction.Open3D("Mở 3D Chóp SA ⊥ đáy", ShapeType.PYRAMID4_SA, showAxes = false),
-                    DocQuickAction.Open3D("Mở 3D Hình lập phương", ShapeType.CUBE, showAxes = false)
-                ),
-                groups = listOf(
-                    MathFormulaGroup(
-                        id = "g11_c7_perp",
-                        title = "Định lý vuông góc, Góc & Khoảng cách",
-                        subtitle = "Các quy tắc dựng góc và chân đường vuông góc",
-                        accentHex = 0xFFF59E0B,
-                        formulas = listOf(
-                            MathFormulaItem("g11_c7_f1", "Điều kiện d ⊥ (P)", "d ⊥ a, d ⊥ b với a, b cắt nhau trong (P)"),
-                            MathFormulaItem("g11_c7_f2", "Định lý 3 đường vuông góc", "a ⊂ (P), b' là hình chiếu của b lên (P): a ⊥ b  ⇔  a ⊥ b'"),
-                            MathFormulaItem("g11_c7_f3", "Góc giữa d và (P)", "Bằng góc giữa d và hình chiếu d' của d lên (P)  (0° ≤ φ ≤ 90°)"),
-                            MathFormulaItem("g11_c7_f4", "Góc phẳng nhị diện [P, d, Q]", "Góc giữa 2 tia Ox ⊂ (P), Oy ⊂ (Q) cùng vuông góc cạnh d tại O"),
-                            MathFormulaItem("g11_c7_f5", "Khoảng cách d(A; (P))", "AH với H là hình chiếu vuông góc của A lên (P)")
-                        )
-                    ),
-                    MathFormulaGroup(
-                        id = "g11_c7_vol",
-                        title = "Thể tích các khối đa diện & Khối tròn xoay cơ bản",
-                        subtitle = "B: diện tích đáy, h: chiều cao vuông góc đáy",
-                        accentHex = 0xFFEAB308,
-                        formulas = listOf(
-                            MathFormulaItem("g11_c7_f6", "Thể tích khối chóp", "V = ⅓ · B · h"),
-                            MathFormulaItem("g11_c7_f7", "Thể tích khối lăng trụ", "V = B · h"),
-                            MathFormulaItem("g11_c7_f8", "Thể tích khối chóp cụt đều", "V = ⅓ · h · (B + B' + √(B · B'))"),
-                            MathFormulaItem("g11_c7_f9", "Tỉ số thể tích chóp tam giác", "V_{S.A'B'C'} / V_{S.ABC} = (SA'/SA) · (SB'/SB) · (SC'/SC)"),
-                            MathFormulaItem("g11_c7_f10", "Thể tích Hình hộp / Lập phương", "V_hộp = a · b · c   ;   V_lập phương = a³")
-                        )
-                    )
-                )
-            ),
-
-            // ==================== CHƯƠNG VIII ====================
-            MathChapter(
-                id = "g11_c8",
-                grade = MathGrade.GRADE_11,
-                chapterNumber = "Chương VIII",
-                title = "Các quy tắc tính xác suất",
-                summary = "Biến cố hợp, biến cố giao, biến cố độc lập, quy tắc cộng tổng quát & quy tắc nhân",
-                accentHex = 0xFF14B8A6,
-                groups = listOf(
-                    MathFormulaGroup(
-                        id = "g11_c8_rules",
-                        title = "Quy tắc cộng & Quy tắc nhân xác suất",
-                        subtitle = "Áp dụng cho hai biến cố A và B bất kỳ",
-                        accentHex = 0xFF14B8A6,
-                        formulas = listOf(
-                            MathFormulaItem("g11_c8_f1", "Quy tắc cộng tổng quát", "P(A ∪ B) = P(A) + P(B) − P(A ∩ B)"),
-                            MathFormulaItem("g11_c8_f2", "A, B xung khắc", "P(A ∪ B) = P(A) + P(B)", condition = "A ∩ B = ∅"),
-                            MathFormulaItem("g11_c8_f3", "Quy tắc nhân (A, B độc lập)", "P(A ∩ B) = P(A) · P(B)"),
-                            MathFormulaItem("g11_c8_f4", "Biến cố đối khi độc lập", "A, B độc lập ⇒ (Ā, B), (A, B̄), (Ā, B̄) cũng độc lập")
-                        )
-                    )
-                )
-            ),
-
-            // ==================== CHƯƠNG IX ====================
-            MathChapter(
-                id = "g11_c9",
-                grade = MathGrade.GRADE_11,
-                chapterNumber = "Chương IX",
-                title = "Đạo hàm",
-                summary = "Quy tắc tính đạo hàm, bảng đạo hàm sơ cấp & hàm hợp, tiếp tuyến & đạo hàm cấp hai",
-                accentHex = 0xFFF97316,
-                quickActions = listOf(
-                    DocQuickAction.Plot2D("Khảo sát đạo hàm y = x³ − 3x", "x^3 - 3*x")
-                ),
-                groups = listOf(
-                    MathFormulaGroup(
-                        id = "g11_c9_rules",
-                        title = "Định nghĩa, Quy tắc tính & Tiếp tuyến",
-                        subtitle = "Các quy tắc đại số, hàm hợp và phương trình tiếp tuyến",
-                        accentHex = 0xFFF97316,
-                        formulas = listOf(
-                            MathFormulaItem("g11_c9_f1", "(u ± v)'", "u' ± v'"),
-                            MathFormulaItem("g11_c9_f2", "(u · v)'", "u'v + uv'"),
-                            MathFormulaItem("g11_c9_f3", "(u / v)'", "(u'v − uv') / v²", condition = "v ≠ 0"),
-                            MathFormulaItem("g11_c9_f4", "Đạo hàm hàm hợp [f(u)]'", "f'(u) · u'"),
-                            MathFormulaItem("g11_c9_f5", "PT tiếp tuyến tại M(x₀; y₀)", "y = f'(x₀)(x − x₀) + f(x₀)"),
-                            MathFormulaItem("g11_c9_f6", "Ý nghĩa cơ học (Đạo hàm cấp 2)", "Vận tốc v(t) = s'(t)   ;   Gia tốc a(t) = v'(t) = s''(t)")
-                        )
-                    ),
-                    MathFormulaGroup(
-                        id = "g11_c9_table",
-                        title = "Bảng đạo hàm đầy đủ (Sơ cấp & Hàm hợp u = u(x))",
-                        subtitle = "Tra nhanh mọi đạo hàm lũy thừa, lượng giác, mũ và lôgarit",
-                        accentHex = 0xFFF59E0B,
-                        mnemonic = "Đạo hàm hàm co- (cos, cot) luôn có dấu trừ (−); hàm hợp luôn nhân thêm u'",
-                        formulas = listOf(
-                            MathFormulaItem("g11_c9_f7", "(c)'  |  (x)'", "0   |   1", note = "c là hằng số"),
-                            MathFormulaItem("g11_c9_f8", "(xⁿ)'  |  (uⁿ)'", "n·x^{n−1}   |   n·u^{n−1}·u'"),
-                            MathFormulaItem("g11_c9_f9", "(√x)'  |  (√u)'", "1 / (2√x)   |   u' / (2√u)", condition = "x, u > 0"),
-                            MathFormulaItem("g11_c9_f10", "(1/x)'  |  (1/u)'", "−1 / x²   |   −u' / u²"),
-                            MathFormulaItem("g11_c9_f11", "(sin x)'  |  (sin u)'", "cos x   |   u' · cos u"),
-                            MathFormulaItem("g11_c9_f12", "(cos x)'  |  (cos u)'", "−sin x   |   −u' · sin u"),
-                            MathFormulaItem("g11_c9_f13", "(tan x)'  |  (tan u)'", "1 / cos²x   |   u' / cos²u"),
-                            MathFormulaItem("g11_c9_f14", "(cot x)'  |  (cot u)'", "−1 / sin²x   |   −u' / sin²u"),
-                            MathFormulaItem("g11_c9_f15", "(e^x)'  |  (e^u)'", "e^x   |   u' · e^u"),
-                            MathFormulaItem("g11_c9_f16", "(a^x)'  |  (a^u)'", "a^x · ln a   |   u' · a^u · ln a", condition = "0 < a ≠ 1"),
-                            MathFormulaItem("g11_c9_f17", "(ln x)'  |  (ln |u|)'", "1 / x   |   u' / u"),
-                            MathFormulaItem("g11_c9_f18", "(log_a x)'  |  (log_a u)'", "1 / (x·ln a)   |   u' / (u·ln a)")
+                            MathFormulaItem("g11_c5_f11", "Liên tục tại x₀", "lim_{x→x₀⁺} f(x) = lim_{x→x₀⁻} f(x) = f(x₀)"),
+                            MathFormulaItem("g11_c5_f12", "Hàm sơ cấp cơ bản", "Đa thức, phân thức hữu tỉ, lượng giác liên tục trên từng khoảng xác định"),
+                            MathFormulaItem("g11_c5_f13", "Định lý giá trị trung gian", "f liên tục trên [a; b] và f(a)·f(b) < 0  ⇒  ∃c ∈ (a; b): f(c) = 0")
                         )
                     )
                 )
             )
         )
+    }
+
+    val chapters: List<MathChapter> by lazy {
+        part1Chapters + Grade11CurriculumPart2.chapters
     }
 }

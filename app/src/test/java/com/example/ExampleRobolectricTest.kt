@@ -676,25 +676,43 @@ class ExampleRobolectricTest {
             c.groups.flatMap { g -> g.formulas.map { it.id } }
         }
         assertEquals("Formula IDs must be globally unique", allIds.size, allIds.toSet().size)
-        assertTrue("Should contain > 150 total formulas", allIds.size > 150)
+        assertTrue("Should contain > 280 total formulas (actual: ${allIds.size})", allIds.size > 280)
 
-        // 3. Grade 11 Chapter I preserves interactive Trigonometry tools & all trig formulas
+        // 3. Grade 11 Chapter I preserves interactive Trigonometry tools & all expanded trig formulas
         val g11Trig = HighSchoolMathRepository.chapterById("g11_c1")
         assertTrue(g11Trig != null && g11Trig.hasTrigInteractiveTools)
-        assertTrue(g11Trig!!.formulaCount >= 40)
+        assertTrue(g11Trig!!.formulaCount >= 50)
 
-        // 4. Accent-insensitive cross-grade search finds formulas in Grades 10, 11, and 12
+        // 4. Accent-insensitive cross-grade search finds core & newly added formulas in Grades 10, 11, and 12
         val vietHits = HighSchoolMathRepository.searchFormulas("vi-et")
         assertTrue("Should match Grade 10 Vieta", vietHits.any { it.chapter.grade == MathGrade.GRADE_10 })
+
+        val cauchyHits = HighSchoolMathRepository.searchFormulas("cauchy")
+        assertTrue("Should match Grade 10 AM-GM Cauchy inequality", cauchyHits.any { it.chapter.grade == MathGrade.GRADE_10 })
+
+        val heronHits = HighSchoolMathRepository.searchFormulas("heron")
+        assertTrue("Should match Grade 10 Heron formula", heronHits.any { it.chapter.grade == MathGrade.GRADE_10 })
 
         val logHits = HighSchoolMathRepository.searchFormulas("logarit")
         assertTrue("Should match Grade 11 Logarithms", logHits.any { it.chapter.grade == MathGrade.GRADE_11 })
 
+        val compoundHits = HighSchoolMathRepository.searchFormulas("lai kep")
+        assertTrue("Should match Grade 11 compound interest", compoundHits.any { it.chapter.grade == MathGrade.GRADE_11 })
+
+        val bernoulliHits = HighSchoolMathRepository.searchFormulas("bernoulli")
+        assertTrue("Should match Grade 11 Bernoulli trials", bernoulliHits.any { it.chapter.grade == MathGrade.GRADE_11 })
+
         val bayesHits = HighSchoolMathRepository.searchFormulas("bayes")
         assertTrue("Should match Grade 12 Bayes", bayesHits.any { it.chapter.grade == MathGrade.GRADE_12 })
 
-        val integralHits = HighSchoolMathRepository.searchFormulas("nguyen ham")
-        assertTrue("Should match Grade 12 Antiderivatives without diacritics", integralHits.any { it.chapter.id == "g12_c4" })
+        val integralHits = HighSchoolMathRepository.searchFormulas("tung phan")
+        assertTrue("Should match Grade 12 Integration by Parts without diacritics", integralHits.any { it.chapter.id == "g12_c4" })
+
+        val skewHits = HighSchoolMathRepository.searchFormulas("cheo nhau")
+        assertTrue("Should match Grade 12 skew lines distance", skewHits.any { it.chapter.id == "g12_c5" })
+
+        val obliqueHits = HighSchoolMathRepository.searchFormulas("tiem can xien")
+        assertTrue("Should match Grade 12 oblique asymptote", obliqueHits.any { it.chapter.id == "g12_c1" })
 
         // 5. All 2D Plot quick actions parse cleanly in MathExprParser
         val plotActions = HighSchoolMathRepository.allChapters
