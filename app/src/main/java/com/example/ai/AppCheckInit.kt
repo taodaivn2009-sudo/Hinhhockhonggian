@@ -18,9 +18,21 @@ private const val DEBUG_STORE_PREFIX = "com.google.firebase.appcheck.debug.store
 private const val DEBUG_SECRET_KEY = "com.google.firebase.appcheck.debug.DEBUG_SECRET"
 private const val RECAPTCHA_SITE_KEY_RES = "recaptcha_site_key"
 
+// Separate flag that records whether a real harness debug token was injected via Intent extra.
+// Prevents a random unregistered UUID generated on a real phone from masquerading as a harness token.
+private const val HARNESS_PREFS_NAME = "appcheck_harness_state"
+private const val KEY_HAS_HARNESS_TOKEN = "has_harness_debug_token"
+
 /**
  * Configures Firebase App Check before Compose setContent, ViewModels, or any Firebase operation.
  * Must be called from MainActivity.onCreate(savedInstanceState) with the Activity's launch intent.
+ *
+ * Provider selection:
+ * 1. Debug builds launched by the AI Studio emulator/test harness (carrying FIREBASE_APPCHECK_DEBUG_TOKEN
+ *    in the launch intent, or previously configured by the harness) -> DebugAppCheckProviderFactory.
+ * 2. Real Android devices (both sideloaded debug APKs built via GitHub Actions and release APKs) ->
+ *    RecaptchaAppCheckProviderFactory using `recaptcha_site_key` from firebase_applet_config.xml,
+ *    avoiding unregistered random debug UUIDs that cause "Firebase App Check token is invalid (403)".
  */
 @SuppressLint("ApplySharedPref", "DiscouragedApi")
 fun configureAppCheck(context: Context, intent: Intent?) {
@@ -29,45 +41,63 @@ fun configureAppCheck(context: Context, intent: Intent?) {
             FirebaseApp.initializeApp(context)
         }
 
-        if (BuildConfig.DEBUG) {
-            val debugToken = intent?.getStringExtra(DEBUG_TOKEN_EXTRA)
-            if (!debugToken.isNullOrEmpty()) {
-                val persistenceKey = FirebaseApp.getInstance().persistenceKey
-                val prefs = context.getSharedPreferences(
-                    "$DEBUG_STORE_PREFIX$persistenceKey",
-                    Context.MODE_PRIVATE
-                )
-                // CRITICAL: synchronous commit() ensures the secret is written before
-                // DebugAppCheckProviderFactory reads it.
-                prefs.edit()
-                    .putString(DEBUG_SECRET_KEY, debugToken)
-                    .commit()
-                Log.d(APP_CHECK_TAG, "App Check debug secret configured successfully.")
-            } else {
-                Log.w(APP_CHECK_TAG, "No debug token found in Intent extra.")
-            }
+        val harnessPrefs = context.getSharedPreferences(HARNESS_PREFS_NAME, Context.MODE_PRIVATE)
+        val debugTokenFromIntent = intent?.getStringExtra(DEBUG_TOKEN_EXTRA)?.trim()
+
+        if (BuildConfig.DEBUG && !debugTokenFromIntent.isNullOrEmpty()) {
+            val persistenceKey = FirebaseApp.getInstance().persistenceKey
+            val debugPrefs = context.getSharedPreferences(
+                "$DEBUG_STORE_PREFIX$persistenceKey",
+                Context.MODE_PRIVATE
+            )
+            // CRITICAL: synchronous commit() ensures the secret is written before
+            // DebugAppCheckProviderFactory reads it.
+            debugPrefs.edit()
+                .putString(DEBUG_SECRET_KEY, debugTokenFromIntent)
+                .commit()
+            harnessPrefs.edit()
+                .putBoolean(KEY_HAS_HARNESS_TOKEN, true)
+                .commit()
 
             FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
                 DebugAppCheckProviderFactory.getInstance()
             )
-            Log.d(APP_CHECK_TAG, "DebugAppCheckProviderFactory installed.")
+            Log.d(APP_CHECK_TAG, "DebugAppCheckProviderFactory installed with harness debug token.")
+            return
+        }
+
+        if (BuildConfig.DEBUG && harnessPrefs.getBoolean(KEY_HAS_HARNESS_TOKEN, false)) {
+            FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                DebugAppCheckProviderFactory.getInstance()
+            )
+            Log.d(APP_CHECK_TAG, "DebugAppCheckProviderFactory installed using persisted harness token.")
+            return
+        }
+
+        // Real device (including sideloaded GitHub debug APKs & release APKs):
+        // Use reCAPTCHA Enterprise App Check, which attests Android devices without requiring Play Store.
+        val siteKey = resolveRecaptchaSiteKey(context)
+        if (!siteKey.isNullOrBlank()) {
+            FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                RecaptchaAppCheckProviderFactory.getInstance(siteKey)
+            )
+            Log.d(APP_CHECK_TAG, "RecaptchaAppCheckProviderFactory installed for real device attestation.")
+        } else if (BuildConfig.DEBUG) {
+            Log.w(APP_CHECK_TAG, "recaptcha_site_key unavailable; falling back to DebugAppCheckProviderFactory.")
+            FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                DebugAppCheckProviderFactory.getInstance()
+            )
         } else {
-            val resId = context.resources.getIdentifier(RECAPTCHA_SITE_KEY_RES, "string", context.packageName)
-            if (resId != 0) {
-                val siteKey = context.getString(resId)
-                if (siteKey.isNotBlank()) {
-                    FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                        RecaptchaAppCheckProviderFactory.getInstance(siteKey)
-                    )
-                    Log.d(APP_CHECK_TAG, "RecaptchaAppCheckProviderFactory installed.")
-                } else {
-                    Log.e(APP_CHECK_TAG, "recaptcha_site_key resource string is blank.")
-                }
-            } else {
-                Log.e(APP_CHECK_TAG, "recaptcha_site_key string resource not found in package.")
-            }
+            Log.e(APP_CHECK_TAG, "recaptcha_site_key string resource not found or blank in release package.")
         }
     } catch (e: Exception) {
         Log.e(APP_CHECK_TAG, "Failed to initialize Firebase App Check", e)
     }
+}
+
+@SuppressLint("DiscouragedApi")
+private fun resolveRecaptchaSiteKey(context: Context): String? {
+    val resId = context.resources.getIdentifier(RECAPTCHA_SITE_KEY_RES, "string", context.packageName)
+    if (resId == 0) return null
+    return runCatching { context.getString(resId).trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
 }
