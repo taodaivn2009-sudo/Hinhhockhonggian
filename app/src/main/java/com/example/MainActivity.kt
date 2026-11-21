@@ -34,6 +34,7 @@ import com.example.ai.AiAssistantViewModel
 import com.example.ai.AiDrawTarget
 import com.example.ai.AiResponseParser
 import com.example.ai.AiWorkspaceScreen
+import com.example.ai.AuthToastBanner
 import com.example.ai.configureAppCheck
 import com.example.ai.findActivity
 import com.example.docs.MathDocumentsScreen
@@ -229,6 +230,13 @@ fun ToolToanRootScreen(
                 onSwitchWorkspace = onSelectWorkspace
             )
         }
+
+        // Global floating Google Sign-In / Sign-Out notification toast with user avatar
+        AuthToastBanner(
+            event = aiUiState.authToast,
+            onDismiss = { aiViewModel.dismissAuthToast() },
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
 
         // Global non-intrusive top notification banner when a newer GitHub Release is detected
         UpdateAvailableBanner(

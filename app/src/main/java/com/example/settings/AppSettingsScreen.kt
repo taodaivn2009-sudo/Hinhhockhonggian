@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ai.AiAssistantUiState
 import com.example.ai.AiKeySetupSection
+import com.example.ai.GoogleAccountAvatar
 import com.example.engine.SensitivityConfig
 import com.example.geo2d.Geo2DSensitivity
 import com.example.geo2d.Geo2DSensitivityControlsSection
@@ -179,6 +180,15 @@ fun AppSettingsScreen(
                             aiUiState.googleUser != null -> "Google: ${aiUiState.googleUser.email.ifBlank { aiUiState.googleUser.displayName }} • ${aiUiState.keyConfig.effectiveModelId}"
                             aiUiState.keyConfig.hasKey -> "API Key (${aiUiState.keyConfig.maskedKey}) • ${aiUiState.keyConfig.effectiveModelId}"
                             else -> "Đăng nhập Google để dùng Gemini không cần API Key"
+                        },
+                        leadingContent = aiUiState.googleUser?.let { user ->
+                            {
+                                GoogleAccountAvatar(
+                                    user = user,
+                                    size = 40.dp,
+                                    showVerifiedBadge = true
+                                )
+                            }
                         }
                     ) {
                         AiKeySetupSection(
@@ -562,6 +572,7 @@ private fun SettingsGroupCard(
     iconTint: Color,
     title: String,
     subtitle: String,
+    leadingContent: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Column(
@@ -580,14 +591,18 @@ private fun SettingsGroupCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(iconTint.copy(alpha = 0.16f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(19.dp))
+            if (leadingContent != null) {
+                leadingContent()
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(iconTint.copy(alpha = 0.16f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(19.dp))
+                }
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(

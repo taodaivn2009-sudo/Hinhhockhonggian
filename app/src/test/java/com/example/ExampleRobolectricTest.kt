@@ -819,21 +819,36 @@ class ExampleRobolectricTest {
         assertFalse(disconnected.isAiReady)
         assertTrue(disconnected.activeProviderLabel.contains("Chưa đăng nhập"))
 
-        // 2. Signed in with Google and NO API key -> ready immediately with keyless Google Gemini
+        // 2. Signed in with Google and NO API key -> ready immediately with keyless Google Gemini + avatar URL & toast
         val profile = GoogleUserProfile(
             uid = "uid_google_123",
             displayName = "Nguyen Van An",
-            email = "an.nguyen@gmail.com"
+            email = "an.nguyen@gmail.com",
+            photoUrl = "https://lh3.googleusercontent.com/a/example=s256-c"
         )
         assertEquals("NA", profile.initials)
+        assertTrue(profile.photoUrl?.contains("=s256-c") == true)
 
+        val toast = AuthToastEvent(
+            id = 1L,
+            title = "Đăng nhập Google thành công!",
+            subtitle = "Xin chào Nguyen Van An · Đã bật Google Gemini miễn phí không cần API Key",
+            user = profile,
+            isSuccess = true
+        )
         val googleReady = AiAssistantUiState(
             googleUser = profile,
-            keyConfig = AiKeyConfig(apiKey = "")
+            keyConfig = AiKeyConfig(apiKey = ""),
+            authToast = toast
         )
         assertTrue(googleReady.isSignedInWithGoogle)
         assertTrue(googleReady.isAiReady)
         assertTrue(googleReady.activeProviderLabel.contains("Không cần API Key"))
+        assertEquals(true, googleReady.authToast?.isSuccess)
+        assertEquals(profile.photoUrl, googleReady.authToast?.user?.photoUrl)
+
+        val cancelledWithHint = GoogleSignInOutcome.Cancelled("Kiểm tra SHA-1")
+        assertEquals("Kiểm tra SHA-1", cancelledWithHint.diagnosticHint)
 
         // 3. Fallback API key without Google Sign-In -> still ready
         val keyOnlyReady = AiAssistantUiState(

@@ -134,23 +134,23 @@ jobs:
             [ -f "$1" ] && [ -s "$1" ] && "${KEYTOOL_BIN}" -list -keystore "$1" -storepass android -alias androiddebugkey >/dev/null 2>&1
           }
 
-          # Priority 1: Existing debug.keystore (from repo or Actions cache)
-          if is_valid_keystore "${KEYSTORE_PATH}"; then
-            echo "Using existing valid persistent keystore at ${KEYSTORE_PATH}."
-          else
-            rm -f "${KEYSTORE_PATH}"
-          fi
-
-          # Priority 2: debug.keystore.base64 in repository
-          if ! is_valid_keystore "${KEYSTORE_PATH}" && [ -f "${KEYSTORE_B64_FILE}" ] && [ -s "${KEYSTORE_B64_FILE}" ]; then
-            echo "Restoring persistent signing keystore from ${KEYSTORE_B64_FILE}..."
+          # Priority 1: debug.keystore.base64 in repository (matches Firebase google-services.json SHA-1!)
+          if [ -f "${KEYSTORE_B64_FILE}" ] && [ -s "${KEYSTORE_B64_FILE}" ]; then
+            echo "Restoring authoritative signing keystore from ${KEYSTORE_B64_FILE}..."
             tr -d '\r\n ' < "${KEYSTORE_B64_FILE}" | base64 -d > "${KEYSTORE_PATH}" || rm -f "${KEYSTORE_PATH}"
           fi
 
-          # Priority 3: DEBUG_KEYSTORE_BASE64 GitHub Secret
+          # Priority 2: DEBUG_KEYSTORE_BASE64 GitHub Secret
           if ! is_valid_keystore "${KEYSTORE_PATH}" && [ -n "${SECRET_KEYSTORE_B64}" ]; then
             echo "Restoring persistent signing keystore from DEBUG_KEYSTORE_BASE64 secret..."
             printf '%s' "${SECRET_KEYSTORE_B64}" | tr -d '\r\n ' | base64 -d > "${KEYSTORE_PATH}" || rm -f "${KEYSTORE_PATH}"
+          fi
+
+          # Priority 3: Existing debug.keystore (from Actions cache fallback)
+          if is_valid_keystore "${KEYSTORE_PATH}"; then
+            echo "Using valid persistent keystore at ${KEYSTORE_PATH}."
+          else
+            rm -f "${KEYSTORE_PATH}"
           fi
 
           # Priority 4: Persistent orphan branch 'ci-debug-keystore' in this repo
@@ -201,8 +201,9 @@ jobs:
             echo "${CERT_INFO}"
             exit 1
           }
+          SHA1_FP="$(printf '%s\n' "${CERT_INFO}" | awk '/SHA1:/ { sub(/^[[:space:]]*SHA1:[[:space:]]*/, ""); print; exit }')"
           SHA256_FP="$(printf '%s\n' "${CERT_INFO}" | awk '/SHA256:/ { sub(/^[[:space:]]*SHA256:[[:space:]]*/, ""); print; exit }')"
-          echo "Persistent signing keystore verified (SHA256: ${SHA256_FP:-unknown})."
+          echo "Persistent signing keystore verified (SHA1: ${SHA1_FP:-unknown} | SHA256: ${SHA256_FP:-unknown})."
           echo "sha256=${SHA256_FP:-unknown}" >> "${GITHUB_OUTPUT}"
 
       - name: Ensure Android SDK licenses and platform 36.1

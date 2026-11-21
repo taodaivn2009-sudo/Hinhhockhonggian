@@ -14,7 +14,9 @@ import com.example.docs.PDF_TOTAL_PAGES
 import com.example.docs.PdfBookRenderer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,12 +27,21 @@ import kotlinx.coroutines.withTimeout
 
 private const val TAG = "AiAssistantViewModel"
 
+data class AuthToastEvent(
+    val id: Long,
+    val title: String,
+    val subtitle: String,
+    val user: GoogleUserProfile? = null,
+    val isSuccess: Boolean = true
+)
+
 data class AiAssistantUiState(
     // Google Sign-In + keyless Firebase AI Logic (Google Gemini)
     val googleUser: GoogleUserProfile? = null,
     val isSigningIn: Boolean = false,
     val authStatusMessage: String? = null,
     val authStatusSuccess: Boolean = false,
+    val authToast: AuthToastEvent? = null,
 
     // Optional manual API Key fallback (BYOK)
     val keyConfig: AiKeyConfig = AiKeyConfig(),
@@ -68,6 +79,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     private val keyPrefs = AiKeyPreferences(appContext)
     private var pdfRenderer: PdfBookRenderer? = null
     private var msgSeq = 1
+    private var toastSeq = 1L
+    private var toastAutoDismissJob: Job? = null
     private var attemptedSilentAuth = false
 
     private val _uiState = MutableStateFlow(createInitialState())
@@ -88,15 +101,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             GoogleAuthManager.observeUserProfile(appContext).collect { profile ->
                 _uiState.update { current ->
-                    val switchedToSignedIn = current.googleUser == null && profile != null
-                    current.copy(
-                        googleUser = profile,
-                        activeSubTab = if (switchedToSignedIn && current.activeSubTab == AiSubTab.API_KEY) {
-                            AiSubTab.DOCS_QA
-                        } else {
-                            current.activeSubTab
-                        }
-                    )
+                    current.copy(googleUser = profile)
                 }
             }
         }
@@ -104,12 +109,46 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
 
     override fun onCleared() {
         super.onCleared()
+        toastAutoDismissJob?.cancel()
         pdfRenderer?.close()
         pdfRenderer = null
     }
 
     fun selectSubTab(tab: AiSubTab) {
         _uiState.update { it.copy(activeSubTab = tab) }
+    }
+
+    fun dismissAuthToast() {
+        toastAutoDismissJob?.cancel()
+        _uiState.update { it.copy(authToast = null) }
+    }
+
+    private fun showAuthToast(
+        title: String,
+        subtitle: String,
+        user: GoogleUserProfile? = null,
+        isSuccess: Boolean = true,
+        durationMs: Long = 4200L
+    ) {
+        toastAutoDismissJob?.cancel()
+        val eventId = toastSeq++
+        _uiState.update {
+            it.copy(
+                authToast = AuthToastEvent(
+                    id = eventId,
+                    title = title,
+                    subtitle = subtitle,
+                    user = user,
+                    isSuccess = isSuccess
+                )
+            )
+        }
+        toastAutoDismissJob = viewModelScope.launch {
+            delay(durationMs)
+            _uiState.update { current ->
+                if (current.authToast?.id == eventId) current.copy(authToast = null) else current
+            }
+        }
     }
 
     // ================= GOOGLE SIGN-IN (KEYLESS GOOGLE GEMINI) =================
@@ -138,23 +177,39 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             when (val outcome = GoogleAuthManager.signInWithGoogle(activity)) {
                 is GoogleSignInOutcome.Success -> {
+                    val user = outcome.user
                     _uiState.update { current ->
                         current.copy(
-                            googleUser = outcome.user,
+                            googleUser = user,
                             isSigningIn = false,
-                            authStatusMessage = "Đã đăng nhập Google! Bạn có thể dùng Gemini ngay mà không cần API Key.",
+                            authStatusMessage = "Đăng nhập thành công! Xin chào ${user.displayName} — bạn có thể dùng Google Gemini ngay mà không cần API Key.",
                             authStatusSuccess = true,
                             keyStatusMessage = null
                         )
                     }
+                    showAuthToast(
+                        title = "Đăng nhập Google thành công!",
+                        subtitle = "Xin chào ${user.displayName} · Sẵn sàng dùng Google Gemini",
+                        user = user,
+                        isSuccess = true
+                    )
                 }
-                GoogleSignInOutcome.Cancelled -> {
+                is GoogleSignInOutcome.Cancelled -> {
+                    val hint = outcome.diagnosticHint ?: "Đã hủy đăng nhập Google."
                     _uiState.update {
                         it.copy(
                             isSigningIn = false,
-                            authStatusMessage = null
+                            authStatusMessage = hint,
+                            authStatusSuccess = false
                         )
                     }
+                    showAuthToast(
+                        title = "Chưa hoàn tất đăng nhập",
+                        subtitle = hint,
+                        user = null,
+                        isSuccess = false,
+                        durationMs = 5200L
+                    )
                 }
                 is GoogleSignInOutcome.Error -> {
                     _uiState.update {
@@ -164,6 +219,13 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                             authStatusSuccess = false
                         )
                     }
+                    showAuthToast(
+                        title = "Đăng nhập Google thất bại",
+                        subtitle = outcome.message,
+                        user = null,
+                        isSuccess = false,
+                        durationMs = 5500L
+                    )
                 }
             }
         }
@@ -180,6 +242,13 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     authStatusSuccess = false
                 )
             }
+            showAuthToast(
+                title = "Đã đăng xuất Google",
+                subtitle = "Bạn có thể đăng nhập lại bất kỳ lúc nào.",
+                user = null,
+                isSuccess = true,
+                durationMs = 3000L
+            )
         }
     }
 

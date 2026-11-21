@@ -5,6 +5,11 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,12 +22,14 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,6 +37,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.Dp
+import coil.compose.SubcomposeAsyncImage
+import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -410,41 +421,20 @@ fun GoogleGeminiAuthCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(EmeraldAccent.copy(alpha = 0.25f))
-                        .border(1.5.dp, EmeraldAccent, CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = googleUser.initials,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = EmeraldLight,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-                }
+                GoogleAccountAvatar(
+                    user = googleUser,
+                    size = 50.dp,
+                    showVerifiedBadge = true
+                )
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = EmeraldAccent,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = googleUser.displayName,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = SlateTextPrimary,
-                            fontWeight = FontWeight.ExtraBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                    Text(
+                        text = googleUser.displayName,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = SlateTextPrimary,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                     if (googleUser.email.isNotBlank()) {
                         Text(
                             text = googleUser.email,
@@ -558,6 +548,196 @@ fun GoogleGeminiAuthCard(
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.testTag("google_auth_status_message")
             )
+        }
+    }
+}
+
+/**
+ * Displays the signed-in Google account's profile photo via Coil with an automatic
+ * initials fallback and optional emerald verified checkmark badge.
+ */
+@Composable
+fun GoogleAccountAvatar(
+    user: GoogleUserProfile,
+    size: Dp = 46.dp,
+    showVerifiedBadge: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val badgeSize = (size * 0.36f).coerceIn(14.dp, 20.dp)
+
+    Box(
+        modifier = modifier
+            .size(size)
+            .testTag("google_account_avatar"),
+        contentAlignment = Alignment.Center
+    ) {
+        val avatarBoxModifier = Modifier
+            .fillMaxSize()
+            .clip(CircleShape)
+            .background(EmeraldAccent.copy(alpha = 0.22f))
+            .border(1.5.dp, EmeraldAccent, CircleShape)
+
+        val photoUrl = user.photoUrl
+        if (!photoUrl.isNullOrBlank()) {
+            SubcomposeAsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(photoUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "Ảnh đại diện ${user.displayName}",
+                contentScale = ContentScale.Crop,
+                modifier = avatarBoxModifier,
+                loading = {
+                    GoogleInitialsAvatarContent(user = user, size = size)
+                },
+                error = {
+                    GoogleInitialsAvatarContent(user = user, size = size)
+                }
+            )
+        } else {
+            Box(modifier = avatarBoxModifier, contentAlignment = Alignment.Center) {
+                GoogleInitialsAvatarContent(user = user, size = size)
+            }
+        }
+
+        if (showVerifiedBadge) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(badgeSize)
+                    .clip(CircleShape)
+                    .background(SlateDark)
+                    .padding(1.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = "Đã đăng nhập Google",
+                    tint = EmeraldAccent,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GoogleInitialsAvatarContent(user: GoogleUserProfile, size: Dp) {
+    val textSize = when {
+        size <= 30.dp -> 11.sp
+        size <= 40.dp -> 13.sp
+        else -> 16.sp
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        EmeraldAccent.copy(alpha = 0.32f),
+                        CyanAccent.copy(alpha = 0.28f)
+                    )
+                )
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = user.initials,
+            color = EmeraldLight,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = textSize
+        )
+    }
+}
+
+/**
+ * Floating Liquid Glass notification banner shown at the top of the app whenever
+ * Google Sign-In succeeds, fails, or signs out.
+ */
+@Composable
+fun AuthToastBanner(
+    event: AuthToastEvent?,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    AnimatedVisibility(
+        visible = event != null,
+        enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+        exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+        modifier = modifier
+            .statusBarsPadding()
+            .padding(top = 64.dp, start = 14.dp, end = 14.dp)
+            .widthIn(max = 540.dp)
+    ) {
+        if (event != null) {
+            val accent = if (event.isSuccess) EmeraldAccent else RoseAccent
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(SlateDark.copy(alpha = 0.96f))
+                    .border(1.2.dp, accent.copy(alpha = 0.8f), RoundedCornerShape(16.dp))
+                    .clickable(onClick = onDismiss)
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .testTag("google_auth_toast_banner"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (event.user != null) {
+                    GoogleAccountAvatar(
+                        user = event.user,
+                        size = 40.dp,
+                        showVerifiedBadge = true
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(accent.copy(alpha = 0.18f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (event.isSuccess) Icons.Default.CheckCircle else Icons.Default.WarningAmber,
+                            contentDescription = null,
+                            tint = accent,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = event.title,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (event.isSuccess) EmeraldLight else RoseAccent,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = event.subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = SlateTextPrimary,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        lineHeight = 16.sp
+                    )
+                }
+
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Đóng thông báo",
+                        tint = SlateTextSecondary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
         }
     }
 }

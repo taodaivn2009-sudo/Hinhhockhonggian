@@ -101,6 +101,53 @@ fun AiWorkspaceScreen(
                             .padding(horizontal = 12.dp, vertical = 6.dp)
                     )
 
+                    // Compact signed-in Google account strip with real avatar on Docs Q&A / Problem Draw tabs
+                    val signedInUser = uiState.googleUser
+                    if (signedInUser != null && uiState.activeSubTab != AiSubTab.API_KEY) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .widthIn(max = 720.dp)
+                                .padding(horizontal = 12.dp, vertical = 2.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(EmeraldAccent.copy(alpha = 0.12f))
+                                .border(1.dp, EmeraldAccent.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                                .clickable { aiViewModel.selectSubTab(AiSubTab.API_KEY) }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .testTag("ai_signed_in_account_strip"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            GoogleAccountAvatar(
+                                user = signedInUser,
+                                size = 30.dp,
+                                showVerifiedBadge = true
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = signedInUser.displayName,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = SlateTextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = "Google Gemini · ${uiState.keyConfig.effectiveModelId}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = EmeraldLight,
+                                    fontSize = 11.sp,
+                                    maxLines = 1
+                                )
+                            }
+                            Text(
+                                text = "Tài khoản",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = CyanAccent,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
                     when (uiState.activeSubTab) {
                         AiSubTab.DOCS_QA -> AiDocsQaTab(
                             uiState = uiState,
