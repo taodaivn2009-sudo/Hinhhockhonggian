@@ -2,6 +2,8 @@ package com.example.ai
 
 import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.util.Log
 import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
@@ -10,6 +12,7 @@ import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
+import com.example.BuildConfig
 import com.example.R
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
@@ -22,6 +25,7 @@ import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
+import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.awaitClose
@@ -50,6 +54,16 @@ data class GoogleUserProfile(
         }
 }
 
+data class SigningDiagnosticInfo(
+    val actualSha1: String?,
+    val expectedSha1s: List<String>
+) {
+    val isMismatch: Boolean
+        get() = !actualSha1.isNullOrBlank() &&
+            expectedSha1s.isNotEmpty() &&
+            expectedSha1s.none { it.equals(actualSha1, ignoreCase = true) }
+}
+
 sealed interface GoogleSignInOutcome {
     data class Success(val user: GoogleUserProfile) : GoogleSignInOutcome
     data class Cancelled(val diagnosticHint: String? = null) : GoogleSignInOutcome
@@ -63,6 +77,47 @@ sealed interface GoogleSignInOutcome {
  * - GetGoogleIdOption for silent auto sign-in on startup
  */
 object GoogleAuthManager {
+
+    /**
+     * Reads the SHA-1 signing certificate fingerprint of the currently installed APK
+     * and compares it against certificate_hash entries compiled from google-services.json.
+     */
+    fun inspectAppSigningSha1(context: Context): SigningDiagnosticInfo {
+        val expected = BuildConfig.FIREBASE_EXPECTED_SHA1S
+            .split(",")
+            .map { it.trim().uppercase() }
+            .filter { it.isNotEmpty() }
+        val actual = readInstalledApkSha1(context)
+        return SigningDiagnosticInfo(actualSha1 = actual, expectedSha1s = expected)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun readInstalledApkSha1(context: Context): String? {
+        return runCatching {
+            val pm = context.packageManager
+            val certBytes: ByteArray? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val pkgInfo = pm.getPackageInfo(
+                    context.packageName,
+                    PackageManager.GET_SIGNING_CERTIFICATES
+                )
+                val signingInfo = pkgInfo.signingInfo
+                val sigs = if (signingInfo != null) {
+                    if (signingInfo.hasMultipleSigners()) signingInfo.apkContentsSigners
+                    else signingInfo.signingCertificateHistory
+                } else null
+                sigs?.firstOrNull()?.toByteArray()
+            } else {
+                val pkgInfo = pm.getPackageInfo(
+                    context.packageName,
+                    PackageManager.GET_SIGNATURES
+                )
+                pkgInfo.signatures?.firstOrNull()?.toByteArray()
+            }
+            if (certBytes == null) return@runCatching null
+            val digest = MessageDigest.getInstance("SHA-1").digest(certBytes)
+            digest.joinToString(":") { b -> "%02X".format(b) }
+        }.getOrNull()
+    }
 
     private fun upgradeAvatarResolution(rawUrl: String?): String? {
         val url = rawUrl?.trim().orEmpty()
@@ -212,22 +267,33 @@ object GoogleAuthManager {
         } catch (e: GetCredentialCancellationException) {
             Log.w(AUTH_TAG, "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
             val rawMsg = e.message?.trim().orEmpty()
-            // On Android 14-16, Google Play Services often wraps SHA-1 / OAuth config mismatches
-            // as GetCredentialCancellationException after the user taps an account.
+            val signingDiag = inspectAppSigningSha1(activity)
+            // On Android 14-16, Google Play Services wraps SHA-1 / OAuth config mismatches
+            // (such as "[16] Account reauth failed.") inside GetCredentialCancellationException.
             val looksLikeConfigOrAuthIssue = rawMsg.contains("28436") ||
                 rawMsg.contains("28444") ||
                 rawMsg.contains("10:") ||
+                rawMsg.contains("[16]") ||
                 rawMsg.contains("DEVELOPER_ERROR", ignoreCase = true) ||
                 rawMsg.contains("caller", ignoreCase = true) ||
                 rawMsg.contains("reauth", ignoreCase = true)
             if (looksLikeConfigOrAuthIssue) {
-                GoogleSignInOutcome.Error(
-                    "Google từ chối xác thực ứng dụng (lỗi chữ ký SHA-1 hoặc OAuth). Hãy cập nhật bản APK mới nhất sau khi đồng bộ keystore! (${rawMsg.take(120)})"
-                )
+                val msg = when {
+                    signingDiag.isMismatch -> {
+                        "Lệch chữ ký SHA-1 giữa bản APK đang cài (${signingDiag.actualSha1}) và Firebase (${signingDiag.expectedSha1s.firstOrNull()}). Hãy thêm Secret DEBUG_KEYSTORE_BASE64 trên GitHub rồi build lại, hoặc sao chép SHA-1 bên dưới dán vào Firebase Console."
+                    }
+                    signingDiag.actualSha1 != null && signingDiag.expectedSha1s.isNotEmpty() -> {
+                        "Google từ chối xác thực tài khoản (${rawMsg.take(90)}). Chữ ký SHA-1 của APK đã khớp (${signingDiag.actualSha1}) — hãy kiểm tra Google Play Services, xóa bộ nhớ đệm ứng dụng hoặc đăng nhập lại tài khoản Google trong Cài đặt máy."
+                    }
+                    else -> {
+                        "Google từ chối xác thực ứng dụng (lỗi chữ ký SHA-1 hoặc OAuth). Hãy sao chép mã SHA-1 bên dưới để đối chiếu trên Firebase Console hoặc thêm Secret DEBUG_KEYSTORE_BASE64 trên GitHub! (${rawMsg.take(100)})"
+                    }
+                }
+                GoogleSignInOutcome.Error(msg)
             } else {
                 GoogleSignInOutcome.Cancelled(
                     diagnosticHint = if (rawMsg.isNotEmpty()) {
-                        "Chưa hoàn tất đăng nhập Google ($rawMsg). Nếu bạn vừa chọn tài khoản mà hộp thoại tự đóng, hãy cập nhật bản APK mới đồng bộ đúng chữ ký SHA-1."
+                        "Chưa hoàn tất đăng nhập Google ($rawMsg)."
                     } else {
                         "Đã hủy đăng nhập Google."
                     }

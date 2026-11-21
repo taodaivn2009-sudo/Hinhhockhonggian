@@ -1,6 +1,8 @@
 package com.example.ai
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -23,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -43,6 +46,7 @@ import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -548,6 +552,106 @@ fun GoogleGeminiAuthCard(
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.testTag("google_auth_status_message")
             )
+        }
+
+        if (googleUser == null) {
+            val context = LocalContext.current
+            val signingDiag = remember(context) { GoogleAuthManager.inspectAppSigningSha1(context) }
+            val showSha1Helper = signingDiag.isMismatch ||
+                (!authStatusSuccess && (
+                    authStatusMessage?.contains("SHA-1", ignoreCase = true) == true ||
+                        authStatusMessage?.contains("reauth", ignoreCase = true) == true ||
+                        authStatusMessage?.contains("[16]") == true
+                    ))
+
+            if (showSha1Helper && !signingDiag.actualSha1.isNullOrBlank()) {
+                var copiedSha1 by remember { mutableStateOf(false) }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(SlateDeepest.copy(alpha = 0.72f))
+                        .border(
+                            1.dp,
+                            if (signingDiag.isMismatch) AmberAccent.copy(alpha = 0.55f) else SlateBorder,
+                            RoundedCornerShape(12.dp)
+                        )
+                        .padding(10.dp)
+                        .testTag("google_sha1_diagnostic_card"),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = if (signingDiag.isMismatch) {
+                                "Phát hiện lệch chữ ký SHA-1 trên APK này"
+                            } else {
+                                "Chữ ký SHA-1 của bản APK đang cài"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (signingDiag.isMismatch) AmberAccent else SlateTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(CyanAccent.copy(alpha = 0.16f))
+                                .border(1.dp, CyanAccent.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                                .clickable {
+                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                    cm?.setPrimaryClip(ClipData.newPlainText("APK SHA-1", signingDiag.actualSha1))
+                                    copiedSha1 = true
+                                }
+                                .padding(horizontal = 8.dp, vertical = 5.dp)
+                                .testTag("copy_apk_sha1_button"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Sao chép SHA-1",
+                                tint = CyanAccent,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = if (copiedSha1) "Đã chép!" else "Chép SHA-1",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = CyanAccent,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "APK hiện tại: ${signingDiag.actualSha1}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = SlateTextPrimary,
+                        fontSize = 11.sp
+                    )
+                    if (signingDiag.isMismatch && signingDiag.expectedSha1s.isNotEmpty()) {
+                        Text(
+                            text = "Firebase đăng ký: ${signingDiag.expectedSha1s.first()}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = EmeraldLight,
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            text = "Cách sửa (chọn 1 trong 2):\n• Cách 1: Thêm GitHub Secret DEBUG_KEYSTORE_BASE64 (copy từ debug.keystore.base64) rồi build lại APK.\n• Cách 2: Dán mã SHA-1 'APK hiện tại' vào Firebase Console → Project Settings → Add fingerprint.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SlateTextSecondary,
+                            lineHeight = 16.sp,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            }
         }
     }
 }

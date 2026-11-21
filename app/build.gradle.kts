@@ -36,11 +36,20 @@ android {
     // Provide an empty fallback ONLY when app/google-services.json is absent (e.g. GitHub Actions
     // without GOOGLE_SERVICES_JSON secret) so R.string.default_web_client_id always compiles
     // without causing duplicate resource conflicts when google-services.json is present.
-    val hasGoogleServicesJson = providers.fileContents(layout.projectDirectory.file("google-services.json"))
-      .asText.orNull?.isNotBlank() == true
+    val googleServicesText = providers.fileContents(layout.projectDirectory.file("google-services.json"))
+      .asText.orNull.orEmpty()
+    val hasGoogleServicesJson = googleServicesText.isNotBlank()
     if (!hasGoogleServicesJson) {
       resValue("string", "default_web_client_id", "")
     }
+    val expectedFirebaseSha1s = Regex(""""certificate_hash"\s*:\s*"([0-9a-fA-F]{40})"""")
+      .findAll(googleServicesText)
+      .map { match ->
+        match.groupValues[1].uppercase().chunked(2).joinToString(":")
+      }
+      .distinct()
+      .joinToString(",")
+    buildConfigField("String", "FIREBASE_EXPECTED_SHA1S", "\"$expectedFirebaseSha1s\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

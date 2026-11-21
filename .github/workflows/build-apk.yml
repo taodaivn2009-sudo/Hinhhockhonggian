@@ -134,19 +134,33 @@ jobs:
             [ -f "$1" ] && [ -s "$1" ] && "${KEYTOOL_BIN}" -list -keystore "$1" -storepass android -alias androiddebugkey >/dev/null 2>&1
           }
 
+          # Preserve any Actions-cache keystore aside so Priority 1 (repo file)
+          # and Priority 2 (DEBUG_KEYSTORE_BASE64 secret) ALWAYS override stale cache.
+          CACHED_KEYSTORE_PATH="./.cached-debug.keystore"
+          rm -f "${CACHED_KEYSTORE_PATH}"
+          if [ -f "${KEYSTORE_PATH}" ] && [ -s "${KEYSTORE_PATH}" ]; then
+            mv "${KEYSTORE_PATH}" "${CACHED_KEYSTORE_PATH}"
+          fi
+
           # Priority 1: debug.keystore.base64 in repository (matches Firebase google-services.json SHA-1!)
           if [ -f "${KEYSTORE_B64_FILE}" ] && [ -s "${KEYSTORE_B64_FILE}" ]; then
             echo "Restoring authoritative signing keystore from ${KEYSTORE_B64_FILE}..."
             tr -d '\r\n ' < "${KEYSTORE_B64_FILE}" | base64 -d > "${KEYSTORE_PATH}" || rm -f "${KEYSTORE_PATH}"
           fi
 
-          # Priority 2: DEBUG_KEYSTORE_BASE64 GitHub Secret
+          # Priority 2: DEBUG_KEYSTORE_BASE64 GitHub Secret (overrides stale cache & orphan branch!)
           if ! is_valid_keystore "${KEYSTORE_PATH}" && [ -n "${SECRET_KEYSTORE_B64}" ]; then
             echo "Restoring persistent signing keystore from DEBUG_KEYSTORE_BASE64 secret..."
             printf '%s' "${SECRET_KEYSTORE_B64}" | tr -d '\r\n ' | base64 -d > "${KEYSTORE_PATH}" || rm -f "${KEYSTORE_PATH}"
           fi
 
-          # Priority 3: Existing debug.keystore (from Actions cache fallback)
+          # Priority 3: Cached debug.keystore (from Actions cache fallback)
+          if ! is_valid_keystore "${KEYSTORE_PATH}" && is_valid_keystore "${CACHED_KEYSTORE_PATH}"; then
+            echo "Falling back to cached signing keystore from GitHub Actions cache..."
+            mv "${CACHED_KEYSTORE_PATH}" "${KEYSTORE_PATH}"
+          fi
+          rm -f "${CACHED_KEYSTORE_PATH}"
+
           if is_valid_keystore "${KEYSTORE_PATH}"; then
             echo "Using valid persistent keystore at ${KEYSTORE_PATH}."
           else
@@ -204,6 +218,7 @@ jobs:
           SHA1_FP="$(printf '%s\n' "${CERT_INFO}" | awk '/SHA1:/ { sub(/^[[:space:]]*SHA1:[[:space:]]*/, ""); print; exit }')"
           SHA256_FP="$(printf '%s\n' "${CERT_INFO}" | awk '/SHA256:/ { sub(/^[[:space:]]*SHA256:[[:space:]]*/, ""); print; exit }')"
           echo "Persistent signing keystore verified (SHA1: ${SHA1_FP:-unknown} | SHA256: ${SHA256_FP:-unknown})."
+          echo "sha1=${SHA1_FP:-unknown}" >> "${GITHUB_OUTPUT}"
           echo "sha256=${SHA256_FP:-unknown}" >> "${GITHUB_OUTPUT}"
 
       - name: Ensure Android SDK licenses and platform 36.1
@@ -230,10 +245,12 @@ jobs:
           fi
 
       - name: Restore Firebase google-services.json (optional secret)
+        id: firebase_cfg
         shell: bash
         env:
           GOOGLE_SERVICES_JSON_RAW: ${{ secrets.GOOGLE_SERVICES_JSON }}
           GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+          ACTIVE_SHA1: ${{ steps.keystore.outputs.sha1 }}
         run: |
           set -euo pipefail
           TARGET="app/google-services.json"
@@ -248,6 +265,22 @@ jobs:
           else
             echo "::warning::${TARGET} not found in repository or GitHub Secrets; building with fallback resource (add GOOGLE_SERVICES_JSON secret to enable Google Sign-In in CI APKs)."
           fi
+
+          SHA1_STATUS="Chưa kiểm tra"
+          if [ -f "${TARGET}" ] && [ -s "${TARGET}" ]; then
+            ACTIVE_HEX="$(printf '%s' "${ACTIVE_SHA1}" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+            REGISTERED_HASHES="$(grep -oE '"certificate_hash"[[:space:]]*:[[:space:]]*"[0-9a-fA-F]+"' "${TARGET}" | sed -E 's/.*"([0-9a-fA-F]+)"/\1/' | tr '[:upper:]' '[:lower:]' || true)"
+            if [ -n "${REGISTERED_HASHES}" ]; then
+              if printf '%s\n' "${REGISTERED_HASHES}" | grep -qx "${ACTIVE_HEX}"; then
+                echo "Google Sign-In SHA-1 check PASSED: APK SHA-1 (${ACTIVE_SHA1}) matches ${TARGET}."
+                SHA1_STATUS="Khớp Firebase SHA-1 (Google Sign-In sẵn sàng)"
+              else
+                echo "::warning::SHA-1 MISMATCH! APK keystore SHA-1 is ${ACTIVE_SHA1}, which is NOT registered in ${TARGET} (${REGISTERED_HASHES}). Add GitHub Secret DEBUG_KEYSTORE_BASE64 (copied from debug.keystore.base64) OR add SHA-1 ${ACTIVE_SHA1} in Firebase Console so Google Sign-In does not fail with [16] Account reauth failed."
+                SHA1_STATUS="Lệch SHA-1 Firebase (thêm Secret DEBUG_KEYSTORE_BASE64 hoặc đăng ký SHA-1 ${ACTIVE_SHA1} trên Firebase Console)"
+              fi
+            fi
+          fi
+          echo "sha1_status=${SHA1_STATUS}" >> "${GITHUB_OUTPUT}"
 
       - name: Build debug APK
         shell: bash
@@ -346,7 +379,9 @@ jobs:
           VERSION_NUM: ${{ steps.app_version.outputs.version_num }}
           VERSION_TAG: ${{ steps.app_version.outputs.version_tag }}
           RELEASE_TITLE: ${{ steps.app_version.outputs.release_title }}
+          SIGNING_SHA1: ${{ steps.keystore.outputs.sha1 }}
           SIGNING_SHA256: ${{ steps.keystore.outputs.sha256 }}
+          FIREBASE_SHA1_STATUS: ${{ steps.firebase_cfg.outputs.sha1_status }}
         run: |
           set -euo pipefail
 
@@ -398,7 +433,9 @@ jobs:
           RELEASE_NOTES+="### Thông tin bản dựng"$'\n'
           RELEASE_NOTES+="- **Phiên bản ứng dụng:** \`${VERSION_TAG}\` (versionCode: \`${VERSION_NUM}\`)"$'\n'
           RELEASE_NOTES+="- **File APK:** \`${ASSET_NAME}\`"$'\n'
-          RELEASE_NOTES+="- **Chữ ký cố định (cập nhật đè không cần gỡ app):** \`${SIGNING_SHA256}\`"$'\n'
+          RELEASE_NOTES+="- **Chữ ký SHA-1 (Google Sign-In / Firebase):** \`${SIGNING_SHA1}\`"$'\n'
+          RELEASE_NOTES+="- **Trạng thái Google Sign-In:** ${FIREBASE_SHA1_STATUS}"$'\n'
+          RELEASE_NOTES+="- **Chữ ký SHA-256 cố định:** \`${SIGNING_SHA256}\`"$'\n'
           RELEASE_NOTES+="- **Workflow Run:** #${GITHUB_RUN_NUMBER}"$'\n'
           RELEASE_NOTES+="- **Commit SHA:** \`${GITHUB_SHA}\`"$'\n'
 

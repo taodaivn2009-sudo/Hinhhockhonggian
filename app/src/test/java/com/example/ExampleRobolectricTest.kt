@@ -850,6 +850,21 @@ class ExampleRobolectricTest {
         val cancelledWithHint = GoogleSignInOutcome.Cancelled("Kiểm tra SHA-1")
         assertEquals("Kiểm tra SHA-1", cancelledWithHint.diagnosticHint)
 
+        // SigningDiagnosticInfo detects mismatch vs exact match cleanly
+        val matched = SigningDiagnosticInfo(
+            actualSha1 = "4A:92:E1:EE:C7:2B:90:D5:05:C8:10:C9:11:F0:3F:B7:94:94:FD:AC",
+            expectedSha1s = listOf("4A:92:E1:EE:C7:2B:90:D5:05:C8:10:C9:11:F0:3F:B7:94:94:FD:AC")
+        )
+        assertFalse(matched.isMismatch)
+        val mismatched = SigningDiagnosticInfo(
+            actualSha1 = "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44",
+            expectedSha1s = listOf("4A:92:E1:EE:C7:2B:90:D5:05:C8:10:C9:11:F0:3F:B7:94:94:FD:AC")
+        )
+        assertTrue(mismatched.isMismatch)
+        assertTrue(
+            BuildConfig.FIREBASE_EXPECTED_SHA1S.contains("4A:92:E1:EE:C7:2B:90:D5:05:C8:10:C9:11:F0:3F:B7:94:94:FD:AC")
+        )
+
         // 3. Fallback API key without Google Sign-In -> still ready
         val keyOnlyReady = AiAssistantUiState(
             googleUser = null,
