@@ -44,7 +44,8 @@ fun MathDocumentsScreen(
     onSwitchWorkspace: (MathWorkspace) -> Unit,
     onPlotTrigIn2D: (String) -> Unit,
     updateUiState: AppUpdateUiState = AppUpdateUiState(),
-    onOpenUpdateDialog: () -> Unit = {}
+    onOpenUpdateDialog: () -> Unit = {},
+    onOpenThemeDialog: () -> Unit = {}
 ) {
     var selectedCategory by remember { mutableStateOf(TrigDocCategory.ALL) }
     var searchQuery by remember { mutableStateOf("") }
@@ -86,7 +87,7 @@ fun MathDocumentsScreen(
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(Color(0xFF0F172A), Color(0xFF090D16))
+                    colors = listOf(SlateDark, SlateDeepest)
                 )
             )
             .testTag("math_documents_screen")
@@ -137,6 +138,8 @@ fun MathDocumentsScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+
+                    ThemePickerButton(onClick = onOpenThemeDialog)
 
                     UpdateVersionPill(
                         uiState = updateUiState,

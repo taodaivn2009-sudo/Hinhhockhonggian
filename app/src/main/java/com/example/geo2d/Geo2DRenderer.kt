@@ -1,6 +1,7 @@
 package com.example.geo2d
 
 import android.graphics.*
+import com.example.ui.theme.ActiveThemeState
 import kotlin.math.*
 
 /**
@@ -96,13 +97,18 @@ object Geo2DRenderer {
             }
         }
 
-        fun ensureBackground(width: Float, height: Float) {
-            if (cachedBgW != width || cachedBgH != height) {
+        var cachedBgInner = 0
+        var cachedBgOuter = 0
+
+        fun ensureBackground(width: Float, height: Float, bgInner: Int, bgOuter: Int) {
+            if (cachedBgW != width || cachedBgH != height || cachedBgInner != bgInner || cachedBgOuter != bgOuter) {
                 cachedBgW = width
                 cachedBgH = height
+                cachedBgInner = bgInner
+                cachedBgOuter = bgOuter
                 bgPaint.shader = RadialGradient(
                     width * 0.5f, height * 0.5f, max(width, height) * 0.75f,
-                    intArrayOf(0xFF162033.toInt(), 0xFF090D16.toInt()),
+                    intArrayOf(bgInner, bgOuter),
                     floatArrayOf(0f, 1f),
                     Shader.TileMode.CLAMP
                 )
@@ -163,17 +169,19 @@ object Geo2DRenderer {
         transparentBackground: Boolean = false
     ) {
         if (width <= 2f || height <= 2f) return
+        val canvasTheme = ActiveThemeState.current.canvas
+        val useDarkInk = transparentBackground || canvasTheme.isLight
         val scratch = scratchLocal.get()!!
         scratch.ensureDensity(density)
         if (!transparentBackground) {
-            scratch.ensureBackground(width, height)
+            scratch.ensureBackground(width, height, canvasTheme.bgInnerArgb, canvasTheme.bgOuterArgb)
         }
 
         val snap = uiState.snapshot
         val cam = snap.camera
         val paramM = snap.paramM
 
-        // 1. Deep Observatory Background (skipped when transparent)
+        // 1. Dynamic Canvas Background (skipped when transparent)
         if (!transparentBackground) {
             canvas.drawRect(0f, 0f, width, height, scratch.bgPaint)
         }
@@ -184,12 +192,12 @@ object Geo2DRenderer {
 
         // 2. Adaptive Coordinate Grid (skipped when transparent)
         if (snap.showGrid && !transparentBackground) {
-            drawGrid(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, majorStep, scratch)
+            drawGrid(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, majorStep, canvasTheme.gridMinorArgb, canvasTheme.gridMajorArgb, scratch)
         }
 
         // 3. Oxy Coordinate Axes & Tick Labels
         if (snap.showAxes) {
-            drawAxes(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, majorStep, transparentBackground, scratch)
+            drawAxes(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, majorStep, useDarkInk, scratch)
         }
 
         // 4. Compile (LRU-cached) & Draw Arbitrary Mathematical Function Graphs y = f(x, m) and optional Derivative y = f'(x, m)
@@ -289,7 +297,7 @@ object Geo2DRenderer {
         // 6d. Segments & Vectors
         for (obj in snap.objects) {
             when (obj) {
-                is Geo2DObject.Segment -> drawSegment(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, transparentBackground, scratch)
+                is Geo2DObject.Segment -> drawSegment(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, useDarkInk, scratch)
                 is Geo2DObject.VectorObj -> drawVector(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, scratch)
                 else -> Unit
             }
@@ -476,17 +484,19 @@ object Geo2DRenderer {
         yMin: Double,
         yMax: Double,
         majorStep: Double,
+        minorColor: Int,
+        majorColor: Int,
         scratch: RenderScratch
     ) {
         val minorStep = majorStep / 4.0
         val halfW = width * 0.5
         val halfH = height * 0.5
         val minorPaint = scratch.minorGridPaint.apply {
-            color = 0xFF152034.toInt()
+            color = minorColor
             strokeWidth = 1f * density
         }
         val majorPaint = scratch.majorGridPaint.apply {
-            color = 0xFF23324C.toInt()
+            color = majorColor
             strokeWidth = 1.25f * density
         }
 
@@ -1228,7 +1238,9 @@ object Geo2DRenderer {
                 spy - 16f * density + boxH * 0.5f
             )
 
-            bgPaint.color = if (isDragging) 0xF0DB2777.toInt() else if (isPending) 0xF0059669.toInt() else 0xE60F172A.toInt()
+            val canvasTheme = ActiveThemeState.current.canvas
+            bgPaint.color = if (isDragging) 0xF0DB2777.toInt() else if (isPending) 0xF0059669.toInt() else canvasTheme.labelPillBgArgb
+            textPaint.color = if (isDragging || isPending) Color.WHITE else canvasTheme.labelTextArgb
             borderPaint.color = baseColor
             canvas.drawRoundRect(rect, 5f * density, 5f * density, bgPaint)
             canvas.drawRoundRect(rect, 5f * density, 5f * density, borderPaint)

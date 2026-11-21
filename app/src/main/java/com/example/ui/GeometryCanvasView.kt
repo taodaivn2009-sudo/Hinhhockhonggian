@@ -158,6 +158,9 @@ fun GeometryCanvasView(
                     }
                 }
         ) {
+            // Observe active theme palette so Light/Dark/Preset/Accent changes redraw 3D immediately
+            @Suppress("UNUSED_VARIABLE")
+            val themeVersion = ActiveThemeState.current
             drawIntoCanvas { canvas ->
                 GeometryRenderer.renderScene(
                     canvas = canvas.nativeCanvas,

@@ -52,6 +52,7 @@ fun TopStudioHeader(
     onSwitchWorkspace: (MathWorkspace) -> Unit,
     updateUiState: AppUpdateUiState = AppUpdateUiState(),
     onOpenUpdateDialog: () -> Unit = {},
+    onOpenThemeDialog: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val m = uiState.scene.metrics
@@ -239,6 +240,8 @@ fun TopStudioHeader(
                         )
                     }
                 }
+
+                ThemePickerButton(onClick = onOpenThemeDialog)
 
                 UpdateVersionPill(
                     uiState = updateUiState,

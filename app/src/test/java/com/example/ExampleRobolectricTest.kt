@@ -7,6 +7,7 @@ import com.example.docs.TrigDocCategory
 import com.example.docs.TrigReferenceRepository
 import com.example.engine.*
 import com.example.geo2d.*
+import com.example.ui.theme.*
 import com.example.update.GitHubUpdateChecker
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -492,5 +493,52 @@ class ExampleRobolectricTest {
         assertEquals("https://github.com/demo/tool-toan/releases/download/v5/tool-toan-v5.apk", parsed.preferredInstallUrl)
         assertEquals("15.0 MB", GitHubUpdateChecker.formatFileSize(parsed.apkSizeBytes))
         assertEquals("20/11/2026", GitHubUpdateChecker.formatPublishedDate(parsed.publishedAt))
+    }
+
+    @Test
+    fun `theme palette resolver presets custom accent and preferences persistence work cleanly`() {
+        // 1. All 6 curated presets resolve cleanly with matching Light/Dark canvas contrast
+        assertEquals(6, AppThemePreset.entries.size)
+        AppThemePreset.entries.forEach { preset ->
+            val mode = if (preset.isDark) AppThemeMode.DARK else AppThemeMode.LIGHT
+            val palette = ThemePaletteResolver.resolve(AppThemeConfig(mode = mode, preset = preset), systemDark = true)
+            assertEquals(preset.isDark, palette.isDark)
+            assertEquals(!preset.isDark, palette.canvas.isLight)
+        }
+
+        // 2. System mode follows OS brightness
+        val sysLight = ThemePaletteResolver.resolve(AppThemeConfig(mode = AppThemeMode.SYSTEM), systemDark = false)
+        assertFalse(sysLight.isDark)
+        assertTrue(sysLight.canvas.isLight)
+        val sysDark = ThemePaletteResolver.resolve(AppThemeConfig(mode = AppThemeMode.SYSTEM), systemDark = true)
+        assertTrue(sysDark.isDark)
+        assertFalse(sysDark.canvas.isLight)
+
+        // 3. Custom accent color & freeform Hue override primary and 3D face tint
+        val roseAccent = 0xFFE11D48L
+        val customPalette = ThemePaletteResolver.resolve(
+            AppThemeConfig(mode = AppThemeMode.DARK, preset = AppThemePreset.MIDNIGHT_OBSERVATORY, customAccentArgb = roseAccent),
+            systemDark = true
+        )
+        assertEquals(roseAccent.toInt(), customPalette.primary.hashCode().let { android.graphics.Color.argb(
+            (customPalette.primary.alpha * 255).toInt(),
+            (customPalette.primary.red * 255).toInt(),
+            (customPalette.primary.green * 255).toInt(),
+            (customPalette.primary.blue * 255).toInt()
+        ) })
+
+        // 4. SharedPreferences round-trip preserves theme mode, preset, and custom accent
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = ThemePreferences(context)
+        val savedCfg = AppThemeConfig(
+            mode = AppThemeMode.LIGHT,
+            preset = AppThemePreset.WARM_SAND_LIGHT,
+            customAccentArgb = roseAccent
+        )
+        prefs.save(savedCfg)
+        val loadedCfg = prefs.load()
+        assertEquals(AppThemeMode.LIGHT, loadedCfg.mode)
+        assertEquals(AppThemePreset.WARM_SAND_LIGHT, loadedCfg.preset)
+        assertEquals(roseAccent, loadedCfg.customAccentArgb)
     }
 }

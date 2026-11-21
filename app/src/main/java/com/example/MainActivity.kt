@@ -43,12 +43,17 @@ import com.example.ui.StudioInspectorSheet
 import com.example.ui.ToastBanner
 import com.example.ui.TopStudioHeader
 import com.example.ui.panes.SaveExportModal
+import com.example.ui.theme.AppThemeUiState
+import com.example.ui.theme.AppThemeViewModel
 import com.example.ui.theme.Geo3DTheme
+import com.example.ui.theme.ThemePaletteResolver
+import com.example.ui.theme.ThemeStudioDialog
 import com.example.update.AppUpdateUiState
 import com.example.update.AppUpdateViewModel
 import com.example.update.UpdateAvailableBanner
 import com.example.update.UpdateDetailsDialog
 import com.example.viewmodel.GeometryViewModel
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import java.io.OutputStreamWriter
@@ -61,8 +66,32 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT)
         )
         setContent {
-            Geo3DTheme {
-                ToolToanRootScreen()
+            val themeViewModel: AppThemeViewModel = viewModel()
+            val themeUiState by themeViewModel.uiState.collectAsStateWithLifecycle()
+            val systemDark = isSystemInDarkTheme()
+            val useDark = ThemePaletteResolver.resolveIsDark(themeUiState.config, systemDark)
+
+            DisposableEffect(useDark) {
+                enableEdgeToEdge(
+                    statusBarStyle = if (useDark) {
+                        SystemBarStyle.dark(Color.TRANSPARENT)
+                    } else {
+                        SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+                    },
+                    navigationBarStyle = if (useDark) {
+                        SystemBarStyle.dark(Color.TRANSPARENT)
+                    } else {
+                        SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+                    }
+                )
+                onDispose {}
+            }
+
+            Geo3DTheme(config = themeUiState.config) {
+                ToolToanRootScreen(
+                    themeViewModel = themeViewModel,
+                    themeUiState = themeUiState
+                )
             }
         }
     }
@@ -70,6 +99,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun ToolToanRootScreen(
+    themeViewModel: AppThemeViewModel,
+    themeUiState: AppThemeUiState,
     updateViewModel: AppUpdateViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -90,14 +121,16 @@ fun ToolToanRootScreen(
             MathWorkspace.SPACE_3D -> GeometryStudioScreen(
                 onSwitchWorkspace = onSelectWorkspace,
                 updateUiState = updateUiState,
-                onOpenUpdateDialog = { updateViewModel.openUpdateDialog() }
+                onOpenUpdateDialog = { updateViewModel.openUpdateDialog() },
+                onOpenThemeDialog = { themeViewModel.openDialog() }
             )
             MathWorkspace.PLANE_2D -> Geo2DStudioScreen(
                 onSwitchWorkspace = onSelectWorkspace,
                 pendingPlotExpr = pending2DExpr,
                 onConsumePendingPlot = { pending2DExpr = null },
                 updateUiState = updateUiState,
-                onOpenUpdateDialog = { updateViewModel.openUpdateDialog() }
+                onOpenUpdateDialog = { updateViewModel.openUpdateDialog() },
+                onOpenThemeDialog = { themeViewModel.openDialog() }
             )
             MathWorkspace.DOCUMENTS -> MathDocumentsScreen(
                 onSwitchWorkspace = onSelectWorkspace,
@@ -106,7 +139,8 @@ fun ToolToanRootScreen(
                     onSelectWorkspace(MathWorkspace.PLANE_2D)
                 },
                 updateUiState = updateUiState,
-                onOpenUpdateDialog = { updateViewModel.openUpdateDialog() }
+                onOpenUpdateDialog = { updateViewModel.openUpdateDialog() },
+                onOpenThemeDialog = { themeViewModel.openDialog() }
             )
         }
 
@@ -126,6 +160,16 @@ fun ToolToanRootScreen(
             onSkipVersion = { updateViewModel.skipCurrentAvailableVersion() },
             onDismiss = { updateViewModel.closeUpdateDialog() }
         )
+
+        // Theme & Color Studio Modal
+        ThemeStudioDialog(
+            uiState = themeUiState,
+            onSelectMode = { themeViewModel.setThemeMode(it) },
+            onSelectPreset = { themeViewModel.selectPreset(it) },
+            onSelectAccentColor = { themeViewModel.selectAccentColor(it) },
+            onResetDefault = { themeViewModel.resetToDefault() },
+            onDismiss = { themeViewModel.closeDialog() }
+        )
     }
 }
 
@@ -134,6 +178,7 @@ fun GeometryStudioScreen(
     onSwitchWorkspace: (MathWorkspace) -> Unit,
     updateUiState: AppUpdateUiState = AppUpdateUiState(),
     onOpenUpdateDialog: () -> Unit = {},
+    onOpenThemeDialog: () -> Unit = {},
     viewModel: GeometryViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -322,6 +367,7 @@ fun GeometryStudioScreen(
             onSwitchWorkspace = onSwitchWorkspace,
             updateUiState = updateUiState,
             onOpenUpdateDialog = onOpenUpdateDialog,
+            onOpenThemeDialog = onOpenThemeDialog,
             modifier = Modifier.align(Alignment.TopCenter)
         )
 

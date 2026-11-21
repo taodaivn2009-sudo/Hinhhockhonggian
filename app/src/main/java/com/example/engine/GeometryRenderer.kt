@@ -10,6 +10,7 @@ import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import com.example.ui.theme.ActiveThemeState
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -88,13 +89,18 @@ object GeometryRenderer {
             }
         }
 
-        fun ensureBackground(width: Float, height: Float) {
-            if (cachedBgW != width || cachedBgH != height) {
+        var cachedBgInner = 0
+        var cachedBgOuter = 0
+
+        fun ensureBackground(width: Float, height: Float, bgInner: Int, bgOuter: Int) {
+            if (cachedBgW != width || cachedBgH != height || cachedBgInner != bgInner || cachedBgOuter != bgOuter) {
                 cachedBgW = width
                 cachedBgH = height
+                cachedBgInner = bgInner
+                cachedBgOuter = bgOuter
                 bgPaint.shader = RadialGradient(
                     width * 0.5f, height * 0.5f, max(width, height) * 0.72f,
-                    intArrayOf(0xFF1E293B.toInt(), 0xFF090D16.toInt()),
+                    intArrayOf(bgInner, bgOuter),
                     floatArrayOf(0f, 1f),
                     Shader.TileMode.CLAMP
                 )
@@ -115,10 +121,12 @@ object GeometryRenderer {
         transparentBackground: Boolean = false
     ) {
         if (width <= 2f || height <= 2f) return
+        val canvasTheme = ActiveThemeState.current.canvas
+        val useDarkInk = transparentBackground || canvasTheme.isLight
         val scratch = scratchLocal.get()!!
         scratch.ensureDensity(density)
         if (!transparentBackground) {
-            scratch.ensureBackground(width, height)
+            scratch.ensureBackground(width, height, canvasTheme.bgInnerArgb, canvasTheme.bgOuterArgb)
         }
 
         val snap = uiState.snapshot
@@ -126,14 +134,14 @@ object GeometryRenderer {
         val camPos = snap.camera.cameraPosition()
         val proj = CameraProjection(camPos, snap.camera.target, width, height)
 
-        // 1. Deep Observatory radial background gradient (skipped for transparent export)
+        // 1. Dynamic radial background gradient (skipped for transparent export)
         if (!transparentBackground) {
             canvas.drawRect(0f, 0f, width, height, scratch.bgPaint)
         }
 
         // 2. Ground Grid (14x14 at y = -0.01) — skipped for transparent export
         if (snap.showGrid && !transparentBackground) {
-            drawGrid(canvas, proj, density, scratch)
+            drawGrid(canvas, proj, density, canvasTheme.gridMinorArgb, canvasTheme.gridMajorArgb, scratch)
         }
 
         // 3. Translucent 3D Surfaces: Polyhedra, Curved Meshes (Cylinder/Cone/Sphere), Sections & Custom Planes
@@ -197,9 +205,12 @@ object GeometryRenderer {
                 val ndl = ((face.normal.dot(lightDir) + 1f) * 0.5f).coerceIn(0f, 1f)
                 val shade = (0.54f + 0.46f * ndl).coerceIn(0.45f, 1f)
                 val baseA = ((if (isFront) 62f else 36f) * (0.85f + 0.25f * shade)).toInt().coerceIn(24, 92)
-                val r = (99 * shade).toInt().coerceIn(0, 255)
-                val g = (102 * shade).toInt().coerceIn(0, 255)
-                val b = (241 * shade).toInt().coerceIn(0, 255)
+                val tintR = Color.red(canvasTheme.faceTintArgb)
+                val tintG = Color.green(canvasTheme.faceTintArgb)
+                val tintB = Color.blue(canvasTheme.faceTintArgb)
+                val r = (tintR * shade).toInt().coerceIn(0, 255)
+                val g = (tintG * shade).toInt().coerceIn(0, 255)
+                val b = (tintB * shade).toInt().coerceIn(0, 255)
                 facePaint.color = Color.argb(baseA, r, g, b)
                 canvas.drawPath(path, facePaint)
             }
@@ -209,11 +220,11 @@ object GeometryRenderer {
         // 5. Smart Hidden-Edge Dashing for Solid Edges
         val solidEdgePaint = scratch.solidEdgePaint.apply {
             strokeWidth = 1.7f * density
-            color = if (transparentBackground) 0xFF0F172A.toInt() else 0xFFF8FAFC.toInt()
+            color = if (useDarkInk) 0xFF0F172A.toInt() else canvasTheme.edgeSolidArgb
         }
         val dashedEdgePaint = scratch.dashedEdgePaint.apply {
             strokeWidth = 1.35f * density
-            color = if (transparentBackground) 0xFF475569.toInt() else 0xFF94A3B8.toInt()
+            color = if (useDarkInk) 0xFF64748B.toInt() else canvasTheme.edgeDashedArgb
             pathEffect = scratch.dash75
         }
 
@@ -355,7 +366,7 @@ object GeometryRenderer {
                 isOrigin -> 0xFFEF4444.toInt()
                 isMoved -> 0xFFF472B6.toInt()
                 isCustom -> 0xFFFBBF24.toInt()
-                transparentBackground -> 0xFF0F172A.toInt()
+                useDarkInk -> 0xFF0F172A.toInt()
                 else -> 0xFFCBD5E1.toInt()
             }
             canvas.drawCircle(p.x, p.y, radius, dotPaint)
@@ -363,7 +374,7 @@ object GeometryRenderer {
 
         // 14. Vertex Pill Labels
         if (snap.labels) {
-            drawVertexLabels(canvas, proj, uiState, density, scratch)
+            drawVertexLabels(canvas, proj, uiState, density, canvasTheme.labelPillBgArgb, canvasTheme.labelTextArgb, scratch)
         }
 
         // 15. Optional Export Metrics Card (Bottom-Left for opaque PNG Export)
@@ -372,9 +383,16 @@ object GeometryRenderer {
         }
     }
 
-    private fun drawGrid(canvas: Canvas, proj: CameraProjection, density: Float, scratch: RenderScratch3D) {
-        val minorPaint = scratch.minorGridPaint.apply { strokeWidth = 1f * density }
-        val majorPaint = scratch.majorGridPaint.apply { strokeWidth = 1.3f * density }
+    private fun drawGrid(
+        canvas: Canvas,
+        proj: CameraProjection,
+        density: Float,
+        minorColor: Int,
+        majorColor: Int,
+        scratch: RenderScratch3D
+    ) {
+        val minorPaint = scratch.minorGridPaint.apply { color = minorColor; strokeWidth = 1f * density }
+        val majorPaint = scratch.majorGridPaint.apply { color = majorColor; strokeWidth = 1.3f * density }
         val half = 7
         val y = -0.01f
         for (i in -half..half) {
@@ -750,6 +768,8 @@ object GeometryRenderer {
         proj: CameraProjection,
         uiState: GeometryUiState,
         density: Float,
+        defaultPillBg: Int,
+        defaultPillText: Int,
         scratch: RenderScratch3D
     ) {
         val snap = uiState.snapshot
@@ -809,7 +829,7 @@ object GeometryRenderer {
                     bgPaint.color = 0xEBB45309.toInt(); borderPaint.color = 0xFFFBBF24.toInt(); textPaint.color = 0xFFFEF3C7.toInt()
                 }
                 else -> {
-                    bgPaint.color = 0xE00F172A.toInt(); borderPaint.color = 0xFF64748B.toInt(); textPaint.color = Color.WHITE
+                    bgPaint.color = defaultPillBg; borderPaint.color = 0xFF64748B.toInt(); textPaint.color = defaultPillText
                 }
             }
 

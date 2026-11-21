@@ -144,6 +144,7 @@ fun Geo2DStudioScreen(
     onConsumePendingPlot: () -> Unit = {},
     updateUiState: AppUpdateUiState = AppUpdateUiState(),
     onOpenUpdateDialog: () -> Unit = {},
+    onOpenThemeDialog: () -> Unit = {},
     viewModel: Geo2DViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -312,6 +313,7 @@ fun Geo2DStudioScreen(
             onSwitchWorkspace = onSwitchWorkspace,
             updateUiState = updateUiState,
             onOpenUpdateDialog = onOpenUpdateDialog,
+            onOpenThemeDialog = onOpenThemeDialog,
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
@@ -515,6 +517,9 @@ private fun Geo2DCanvasViewport(
             }
             .testTag("geo2d_canvas")
     ) {
+        // Observe active theme palette so Light/Dark/Preset/Accent changes redraw 2D canvas immediately
+        @Suppress("UNUSED_VARIABLE")
+        val themeVersion = ActiveThemeState.current
         Geo2DRenderer.renderScene(
             canvas = drawContext.canvas.nativeCanvas,
             width = size.width,
@@ -532,6 +537,7 @@ private fun Geo2DTopHeader(
     onSwitchWorkspace: (MathWorkspace) -> Unit,
     updateUiState: AppUpdateUiState = AppUpdateUiState(),
     onOpenUpdateDialog: () -> Unit = {},
+    onOpenThemeDialog: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -594,12 +600,14 @@ private fun Geo2DTopHeader(
             }
         }
 
-        // Compact GitHub version / update pill aligned neatly to the right below header
+        // Compact Theme & GitHub version pills aligned neatly to the right below header
         if (uiState.traceX == null || uiState.traceResults.isEmpty()) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
+                horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                ThemePickerButton(onClick = onOpenThemeDialog)
                 UpdateVersionPill(
                     uiState = updateUiState,
                     onClick = onOpenUpdateDialog

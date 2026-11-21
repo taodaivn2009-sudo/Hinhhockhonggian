@@ -2,6 +2,11 @@
 
 ## Bản cập nhật mới nhất
 
+### Mục mới: Chủ đề & Tùy chỉnh màu sắc giao diện (Sáng / Tối / Tự chọn màu)
+- **3 chế độ hiển thị:** Hỗ trợ chuyển nhanh giữa chế độ **Tối**, **Sáng** và **Theo hệ thống**, tự động đổi cả giao diện điều khiển, thanh trạng thái Android lẫn nền lưới 3D/2D và nét vẽ tương phản cao.
+- **6 chủ đề gợi ý thiết kế sẵn:** *Thiên Văn Tối*, *Giấy Trắng Học Tập* (như vở toán in), *Bảng Xanh Lớp Học*, *Giấy Kem Nắng Ấm*, *Ngân Hà Tím* và *Bầu Trời Sáng*.
+- **Tự chọn màu nhấn chủ đạo:** 8 bảng màu nhanh cùng **thanh trượt pha sắc màu tự do (Hue 0°–360°)** kèm khung xem trước đồ thị trực tiếp, tự động lưu lại cho các lần mở app sau.
+
 ### Tự động thông báo & gợi ý cài đặt bản mới từ GitHub
 - **Kiểm tra phiên bản tự động khi mở ứng dụng:** Tự động kết nối GitHub Releases của kho dự án (được gắn tự động khi đóng gói APK bằng GitHub Actions, hoặc có thể nhập/đổi kho `owner/repo` trực tiếp trong app).
 - **Thông báo nổi & Hộp thoại chi tiết bản cập nhật:** Khi phát hiện phiên bản mới hơn (`v2`, `v3`...), ứng dụng hiển thị banner thông báo nổi cùng bảng nhật ký thay đổi, dung lượng tệp `.apk` và nút **Tải & Cài đặt APK** mở nhanh liên kết tải để cài đè trực tiếp mà vẫn giữ nguyên toàn bộ bài vẽ.
