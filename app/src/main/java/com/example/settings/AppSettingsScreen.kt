@@ -478,7 +478,7 @@ fun AppSettingsScreen(
                         subtitle = "Tool Toán ${updateUiState.currentVersionName}"
                     ) {
                         Text(
-                            text = "Bộ công cụ học tập Toán học toàn diện: Hình học không gian 3D & Oxyz, Khảo sát đồ thị hàm số & Bảng biến thiên 2D, Tài liệu Hàm số Lượng giác Chương I.",
+                            text = "Bộ công cụ học tập Toán học toàn diện: Hình học không gian 3D & Oxyz, Khảo sát đồ thị hàm số & Bảng biến thiên 2D, và Kho công thức Toán THPT Lớp 10 – 11 – 12 (GDPT 2018).",
                             style = MaterialTheme.typography.bodySmall,
                             color = SlateTextSecondary,
                             lineHeight = 19.sp

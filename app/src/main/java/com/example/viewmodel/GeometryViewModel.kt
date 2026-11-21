@@ -350,6 +350,13 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         updateViewSnapshot { it.copy(showAxes = !it.showAxes) }
     }
 
+    fun openShapePreset(shape: ShapeType, showAxes: Boolean) {
+        selectShape(shape)
+        if (showAxes && !_uiState.value.snapshot.showAxes) {
+            updateViewSnapshot { it.copy(showAxes = true) }
+        }
+    }
+
     fun changeOrigin(pointName: String) {
         updateSnapshot(recordHistory = true) {
             it.copy(originPoint = pointName, showAxes = true)

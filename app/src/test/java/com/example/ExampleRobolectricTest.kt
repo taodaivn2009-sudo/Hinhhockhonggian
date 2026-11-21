@@ -3,8 +3,7 @@ package com.example
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.GeometryPersistence
-import com.example.docs.TrigDocCategory
-import com.example.docs.TrigReferenceRepository
+import com.example.docs.*
 import com.example.engine.*
 import com.example.geo2d.*
 import com.example.ui.theme.*
@@ -658,5 +657,68 @@ class ExampleRobolectricTest {
         vm.toggleLiquidGlass(true)
         assertTrue(vm.uiState.value.config.liquidGlass.enabled)
     }
+
+    @Test
+    fun `high school grade 10 11 12 curriculum chapters search favorites and quick actions are valid`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+
+        // 1. Complete GDPT 2018 chapter counts: 9 (Grade 10) + 9 (Grade 11) + 6 (Grade 12) = 24
+        val g10 = HighSchoolMathRepository.chaptersFor(MathGrade.GRADE_10)
+        val g11 = HighSchoolMathRepository.chaptersFor(MathGrade.GRADE_11)
+        val g12 = HighSchoolMathRepository.chaptersFor(MathGrade.GRADE_12)
+        assertEquals(9, g10.size)
+        assertEquals(9, g11.size)
+        assertEquals(6, g12.size)
+        assertEquals(24, HighSchoolMathRepository.allChapters.size)
+
+        // 2. Every formula ID across all 3 grades is unique and non-blank
+        val allIds = HighSchoolMathRepository.allChapters.flatMap { c ->
+            c.groups.flatMap { g -> g.formulas.map { it.id } }
+        }
+        assertEquals("Formula IDs must be globally unique", allIds.size, allIds.toSet().size)
+        assertTrue("Should contain > 150 total formulas", allIds.size > 150)
+
+        // 3. Grade 11 Chapter I preserves interactive Trigonometry tools & all trig formulas
+        val g11Trig = HighSchoolMathRepository.chapterById("g11_c1")
+        assertTrue(g11Trig != null && g11Trig.hasTrigInteractiveTools)
+        assertTrue(g11Trig!!.formulaCount >= 40)
+
+        // 4. Accent-insensitive cross-grade search finds formulas in Grades 10, 11, and 12
+        val vietHits = HighSchoolMathRepository.searchFormulas("vi-et")
+        assertTrue("Should match Grade 10 Vieta", vietHits.any { it.chapter.grade == MathGrade.GRADE_10 })
+
+        val logHits = HighSchoolMathRepository.searchFormulas("logarit")
+        assertTrue("Should match Grade 11 Logarithms", logHits.any { it.chapter.grade == MathGrade.GRADE_11 })
+
+        val bayesHits = HighSchoolMathRepository.searchFormulas("bayes")
+        assertTrue("Should match Grade 12 Bayes", bayesHits.any { it.chapter.grade == MathGrade.GRADE_12 })
+
+        val integralHits = HighSchoolMathRepository.searchFormulas("nguyen ham")
+        assertTrue("Should match Grade 12 Antiderivatives without diacritics", integralHits.any { it.chapter.id == "g12_c4" })
+
+        // 5. All 2D Plot quick actions parse cleanly in MathExprParser
+        val plotActions = HighSchoolMathRepository.allChapters
+            .flatMap { it.quickActions }
+            .filterIsInstance<DocQuickAction.Plot2D>()
+        assertTrue("Should provide 2D quick plot actions", plotActions.isNotEmpty())
+        plotActions.forEach { action ->
+            val parsed = MathExprParser.parse(action.expression)
+            assertTrue("2D expression '${action.expression}' must parse cleanly", parsed is MathExprParser.ParseResult.Ok)
+        }
+
+        // 6. Favorites & last tab persist cleanly via MathDocsPreferences
+        val prefs = MathDocsPreferences(context)
+        prefs.saveFavoriteIds(emptySet())
+        val afterAdd = prefs.toggleFavorite("g12_c6_f4")
+        assertTrue("g12_c6_f4" in afterAdd)
+        assertEquals(1, HighSchoolMathRepository.favoriteHits(prefs.loadFavoriteIds()).size)
+
+        val afterRemove = prefs.toggleFavorite("g12_c6_f4")
+        assertFalse("g12_c6_f4" in afterRemove)
+
+        prefs.saveLastTab(DocsOverviewTab.GRADE_12)
+        assertEquals(DocsOverviewTab.GRADE_12, prefs.loadLastTab())
+    }
 }
+
 

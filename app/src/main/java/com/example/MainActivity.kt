@@ -142,6 +142,10 @@ fun ToolToanRootScreen(
                     pending2DExpr = expr
                     onSelectWorkspace(MathWorkspace.PLANE_2D)
                 },
+                onOpen3DShape = { shape, showAxes ->
+                    geometryViewModel.openShapePreset(shape, showAxes)
+                    onSelectWorkspace(MathWorkspace.SPACE_3D)
+                },
                 hasUpdateBadge = updateUiState.hasUpdate
             )
             MathWorkspace.SETTINGS -> AppSettingsScreen(

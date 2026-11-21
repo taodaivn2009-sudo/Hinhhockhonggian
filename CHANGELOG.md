@@ -2,6 +2,13 @@
 
 ## Bản cập nhật mới nhất
 
+### Kho Tài liệu Công thức Toán THPT trọn bộ Lớp 10 – 11 – 12 (GDPT 2018)
+- **Đầy đủ 24 chương chuẩn GDPT 2018 chia rõ từng Lớp và từng Chương:**
+  - **Lớp 10 (9 chương):** Mệnh đề & Tập hợp, BPT & Hệ BPT bậc nhất 2 ẩn, Hệ thức lượng trong tam giác, Vectơ, Thống kê mẫu không ghép nhóm, Hàm số bậc hai & Tam thức bậc hai, Phương pháp tọa độ `Oxy` & 3 đường Conic, Đại số tổ hợp & Nhị thức Newton, Xác suất cổ điển.
+  - **Lớp 11 (9 chương):** Hàm số lượng giác & PT lượng giác *(tích hợp trọn vẹn Đường tròn lượng giác tương tác, Bảng dấu 4 góc phần tư, Bộ đổi Độ ↔ Radian & 4 sơ đồ cung liên kết)*, Dãy số – CSC – CSN, Mẫu số liệu ghép nhóm, Quan hệ song song không gian, Giới hạn & Liên tục, Mũ & Lôgarit, Quan hệ vuông góc & Thể tích không gian, Quy tắc tính xác suất, Đạo hàm.
+  - **Lớp 12 (6 chương):** Ứng dụng đạo hàm khảo sát hàm số & 3 tiệm cận, Vectơ & Hệ trục `Oxyz`, Độ phân tán mẫu ghép nhóm, Nguyên hàm & Tích phân, Phương trình Mặt phẳng – Đường thẳng – Mặt cầu, Xác suất có điều kiện & Công thức Bayes.
+- **Điều hướng 2 cấp trực quan + Tìm kiếm & Yêu thích:** Chọn **Lớp 10 | Lớp 11 | Lớp 12 | Yêu thích ★** ở trên, chạm vào từng thẻ Chương để xem toàn bộ nhóm công thức và mẹo nhớ; hỗ trợ tìm kiếm không dấu xuyên suốt cả 3 lớp, lưu công thức **Yêu thích** bền vững và mở nhanh sang đồ thị **2D** hoặc mô hình **3D + Oxyz** chỉ với 1 chạm.
+
 ### Chủ đề Liquid Glass thật (Làm mờ nền GPU & Khúc xạ viền thấu kính AGSL)
 - **Làm mờ nền & khúc xạ quang học thời gian thực 60fps:** Các thanh nổi dạng viên nang (*capsule*) trên 3D, 2D, Tài liệu và Cài đặt trực tiếp lấy mẫu nội dung bên dưới (khối 3D đang xoay, đồ thị 2D, thẻ công thức đang cuộn) để **làm mờ nền GPU (`RenderEffect`)**, **uốn cong khúc xạ ánh sáng quanh viền kính cong** và **tán sắc quang phổ nhẹ** bằng shader `AGSL` (Android 13+, tự hạ cấp mượt mà trên Android 12 trở xuống).
 - **Thanh viên nang nổi & bong bóng giọt nước tab đang chọn:** Nâng cấp thanh điều hướng trên/dưới thành dạng viên nang bo tròn nổi có viền sáng Fresnel pha lê, còn tab đang chọn phát sáng dạng **bong bóng kính lỏng trong suốt** chuẩn phong cách Liquid Glass.
