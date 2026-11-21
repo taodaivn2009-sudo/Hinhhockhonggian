@@ -928,7 +928,35 @@ class ExampleRobolectricTest {
             svg3D.contains("""stroke="#38BDF8" stroke-width="3.2" stroke-linecap="round"/>""")
         )
 
-        // 2. Cube space diagonal A->C' is occluded while front top edge A'->B' is visible
+        // 2. Exhaustive parity check: across ALL 12 polyhedra and multiple camera angles,
+        // isSegmentOccludedBySolid MUST match SmartEdge visibility with ZERO false positives on visible edges!
+        val testCameras = listOf(
+            CameraOrbitState.DEFAULT.cameraPosition(),
+            CameraOrbitState.DEFAULT.copy(theta = -1.2f, phi = 1.1f).cameraPosition(),
+            CameraOrbitState.DEFAULT.copy(theta = 2.6f, phi = 1.3f).cameraPosition(),
+            CameraOrbitState.DEFAULT.copy(theta = 0.4f, phi = 2.1f).cameraPosition() // looking from underneath
+        )
+        ShapeType.entries.filter { !it.isRound }.forEach { polyShape ->
+            val built = ShapeBuilder.build(GeometrySnapshot(shape = polyShape, a = 4f, b = 3f, h = 5f, faces = false))
+            for (cPos in testCameras) {
+                for (edge in built.edges) {
+                    if (edge.forceStyle != EdgeRenderStyle.SMART) continue
+                    val expectedDashed = edge.normals.indices.none { i ->
+                        edge.normals[i].dot(cPos - edge.centers[i]) > 0f
+                    }
+                    val actualDashed = Geo3DMathHelpers.isSegmentOccludedBySolid(
+                        edge.p1, edge.p2, cPos, built.occluderFaces, built.roundBodyHint
+                    )
+                    assertEquals(
+                        "Shape ${polyShape.key} edge visibility mismatch at cam $cPos",
+                        expectedDashed,
+                        actualDashed
+                    )
+                }
+            }
+        }
+
+        // Cube space diagonal A->C' is occluded while front face diagonal A->B' and front edge A'->B' are visible
         val cubeBuilt = ShapeBuilder.build(GeometrySnapshot(shape = ShapeType.CUBE, a = 4f))
         val cReg = cubeBuilt.pointRegistry
         assertTrue(
@@ -939,14 +967,19 @@ class ExampleRobolectricTest {
             "Cube front top edge A'B' must be visible",
             Geo3DMathHelpers.isSegmentOccludedBySolid(cReg["A'"]!!, cReg["B'"]!!, camPos, cubeBuilt.occluderFaces, cubeBuilt.roundBodyHint)
         )
+        assertFalse(
+            "Cube front face diagonal A->B' must be visible (not occluded)",
+            Geo3DMathHelpers.isSegmentOccludedBySolid(cReg["A"]!!, cReg["B'"]!!, camPos, cubeBuilt.occluderFaces, cubeBuilt.roundBodyHint)
+        )
 
-        // 3. AI 3D parser only colors highlighted lines/vectors and disables unrequested altitude
+        // 3. AI 3D parser normalizes vector_dashed to smart VECTOR_SOLID (so unoccluded vectors stay solid!),
+        // only colors highlighted lines/vectors, and disables unrequested altitude
         val selective3DJson = """
             {
               "target": "3D",
-              "title": "Góc giữa vectơ AM và SB",
-              "problemText": "Cho chóp S.ABCD. Tính góc giữa vectơ AM và vectơ SB.",
-              "drawingSummary": "Tô màu vectơ AM (nét đứt) và vectơ SB (nét liền).",
+              "title": "Góc giữa vectơ AM và SC",
+              "problemText": "Cho chóp S.ABCD. Tính góc giữa vectơ AM và vectơ SC.",
+              "drawingSummary": "Tô màu vectơ AM và vectơ SC.",
               "solutionHint": "Dùng tích vô hướng.",
               "scene3D": {
                 "shapeKey": "pyramid4_sa",
@@ -956,7 +989,7 @@ class ExampleRobolectricTest {
                 "edgePoints": [{"name": "M", "from": "S", "to": "C", "ratio": 0.5}],
                 "lines": [
                   {"p1": "A", "p2": "M", "style": "vector_dashed", "highlighted": true, "colorHex": "#F43F5E"},
-                  {"p1": "S", "p2": "B", "style": "vector_solid", "highlighted": true, "colorHex": "#38BDF8"},
+                  {"p1": "S", "p2": "C", "style": "vector_dashed", "highlighted": true, "colorHex": "#38BDF8"},
                   {"p1": "A", "p2": "C", "style": "dashed", "highlighted": false, "colorHex": "#10B981"}
                 ],
                 "planes": []
@@ -968,9 +1001,22 @@ class ExampleRobolectricTest {
         assertFalse("Unrequested altitude must stay off by default", snap3D.altitude)
         assertEquals(3, snap3D.customLines.size)
         assertEquals("#F43F5E", snap3D.customLines[0].colorHex)
-        assertEquals(LineStyle.VECTOR_DASHED, snap3D.customLines[0].style)
+        assertEquals(LineStyle.VECTOR_SOLID, snap3D.customLines[0].style)
         assertEquals("#38BDF8", snap3D.customLines[1].colorHex)
+        assertEquals(LineStyle.VECTOR_SOLID, snap3D.customLines[1].style)
         assertEquals("", snap3D.customLines[2].colorHex) // unhighlighted helper line stays neutral
+
+        // Even though AI guessed vector_dashed for front vector SC, SVG export MUST render SC as SOLID and interior AM as DASHED!
+        val builtAi3D = ShapeBuilder.build(snap3D)
+        val svgAi3D = SvgExporter.export3DToSvg(1080, 1080, GeometryUiState(snap3D, builtAi3D), transparentBg = false)
+        assertTrue(
+            "AI interior vector AM (#F43F5E) must render dashed",
+            svgAi3D.contains("""stroke="#F43F5E" stroke-width="3.2" stroke-linecap="round" stroke-dasharray="10,7"""")
+        )
+        assertTrue(
+            "AI visible front vector SC (#38BDF8) must render SOLID even if AI returned vector_dashed",
+            svgAi3D.contains("""stroke="#38BDF8" stroke-width="3.2" stroke-linecap="round"/>""")
+        )
 
         // 4. AI 2D parser supports dashed vectors, keeps base polygon neutral, and persists dashed VectorObj cleanly
         val selective2DJson = """

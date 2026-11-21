@@ -128,7 +128,7 @@ data class Ai3DXyzPointSpec(
 data class Ai3DLineSpec(
     val p1: String,
     val p2: String,
-    val style: LineStyle = LineStyle.DASHED,
+    val style: LineStyle = LineStyle.SOLID,
     val colorHex: String = "",
     val highlighted: Boolean = false
 )
@@ -301,11 +301,14 @@ object AiResponseParser {
                 } else {
                     ""
                 }
+                // In 3D, always delegate dashed vs solid visibility to the real 3D occlusion engine
+                // so unoccluded vectors/segments never stay falsely dashed when AI misguesses camera angle or user orbits.
+                val autoVisibilityStyle = if (ln.style.isVector) LineStyle.VECTOR_SOLID else LineStyle.SOLID
                 CustomLine(
                     id = "ai_ln_$idx",
                     p1 = p1,
                     p2 = p2,
-                    style = ln.style,
+                    style = autoVisibilityStyle,
                     colorHex = resolvedColor
                 )
             }
@@ -541,11 +544,17 @@ object AiResponseParser {
                     } else {
                         isValidHex(rawColor)
                     }
+                    val rawStyle = l.optString("style", "solid").trim().lowercase()
+                    val parsedStyle = if (rawStyle.contains("vector") || rawStyle.contains("vec")) {
+                        LineStyle.VECTOR_SOLID
+                    } else {
+                        LineStyle.SOLID
+                    }
                     add(
                         Ai3DLineSpec(
                             p1 = l.optString("p1"),
                             p2 = l.optString("p2"),
-                            style = LineStyle.fromKey(l.optString("style", "dashed")),
+                            style = parsedStyle,
                             colorHex = rawColor,
                             highlighted = highlighted
                         )

@@ -324,9 +324,8 @@ Trong 3D:
 
 === 2. QUY TẮC BẮT BUỘC VỀ NÉT ĐỨT & TÔ MÀU (TUÂN THỦ TUYỆT ĐỐI) ===
 1. NÉT ĐỨT CHO ĐƯỜNG KHUẤT & VECTƠ KHUẤT:
-   - Trong 3D: Mọi đoạn thẳng HOẶC VECTƠ đi bên trong khối hình (vd: đường chéo không gian `AC'`, `BD'`, đường chéo đáy `AC`, `BD`, đoạn/vectơ nối từ đỉnh tới trung điểm/trọng tâm bên trong như `AM`, `AG`, `SO`, `MN`) hoặc nằm trên cạnh/mặt khuất phía sau PHẢI dùng `style: "dashed"` (cho đoạn thẳng) hoặc `style: "vector_dashed"` (cho vectơ).
-   - Chỉ dùng `"solid"` / `"vector_solid"` khi đoạn thẳng hoặc vectơ nằm hoàn toàn trên cạnh/mặt thấy phía trước (lưu ý: bộ dựng 3D cũng sẽ tự động vẽ nét đứt khi đoạn/vectơ bị che khuất theo góc nhìn).
-   - Trong 2D: Mọi đường khuất, đường gióng phụ hoặc vectơ khuất PHẢI đặt `"dashed": true`.
+   - Trong 3D: Dùng `style: "vector_solid"` cho mọi vectơ và `style: "solid"` cho mọi đoạn thẳng — bộ dựng hình 3D sẽ TỰ ĐỘNG kiểm tra che khuất theo đúng tọa độ không gian & góc nhìn camera để vẽ **nét đứt** khi đoạn/vectơ nằm bên trong khối hoặc bị mặt trước che khuất, và vẽ **nét liền** khi lộ ra phía trước (tự cập nhật khi xoay hình). KHÔNG ép cứng nét đứt cho vectơ/đoạn không bị che.
+   - Trong 2D (Oxy): Các vectơ và đoạn thẳng chính của đề bài đặt `"dashed": false` (nét liền); chỉ đặt `"dashed": true` cho đường gióng vuông góc, đường phụ hoặc nét đứt mà đề bài ghi rõ.
 2. CHỈ TÔ MÀU CÁC ĐOẠN THẲNG HOẶC VECTƠ ĐỀ BÀI NHẮC TRỰC TIẾP:
    - CHỈ đặt `"highlighted": true` và chọn màu nổi bật (`"#F43F5E"`, `"#38BDF8"`, `"#10B981"`, `"#FBBF24"`, `"#A78BFA"`) cho ĐÚNG các đoạn thẳng hoặc vectơ được đề bài nhắc trực tiếp / yêu cầu tính toán (vd: đề hỏi tính góc giữa hai vectơ `AB` và `SC`, độ dài `AM`, tổng hiệu vectơ `AB + AD + AA'`...).
    - Các đường phụ dựng thêm, đa giác/đường tròn cơ sở trong 2D, hoặc các cạnh có sẵn của khối 3D KHÔNG được đề bài nhấn mạnh: đặt `"highlighted": false` và `"colorHex": ""` (giữ nét mực trung tính đồng bộ với hình gốc, TUYỆT ĐỐI không tô màu lòe loẹt).
@@ -350,7 +349,7 @@ BẮT BUỘC TRẢ VỀ JSON HỢP LỆ DUY NHẤT (không bọc markdown):
   "target": "3D" hoặc "2D",
   "title": "Tên ngắn gọn hình vẽ (vd: Chóp S.ABCD có SA ⊥ đáy & vectơ AM, SB)",
   "problemText": "Nội dung đề bài đã đọc được từ ảnh/văn bản",
-  "drawingSummary": "Liệt kê rõ các hình khối, điểm phụ, đoạn thẳng/vectơ được tô màu nhấn mạnh và đường khuất nét đứt",
+  "drawingSummary": "Liệt kê rõ các hình khối, điểm phụ, đoạn thẳng/vectơ được tô màu nhấn mạnh",
   "solutionHint": "Gợi ý ngắn gọn hướng giải & công thức áp dụng",
   "scene3D": {
     "shapeKey": "pyramid4_sa",
@@ -363,7 +362,7 @@ BẮT BUỘC TRẢ VỀ JSON HỢP LỆ DUY NHẤT (không bọc markdown):
     "edgePoints": [{"name":"M","from":"S","to":"C","ratio":0.5}],
     "xyzPoints": [],
     "lines": [
-      {"p1":"A","p2":"M","style":"vector_dashed","highlighted":true,"colorHex":"#F43F5E"},
+      {"p1":"A","p2":"M","style":"vector_solid","highlighted":true,"colorHex":"#F43F5E"},
       {"p1":"S","p2":"B","style":"vector_solid","highlighted":true,"colorHex":"#38BDF8"}
     ],
     "planes": [],

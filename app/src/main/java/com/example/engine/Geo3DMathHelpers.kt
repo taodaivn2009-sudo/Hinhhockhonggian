@@ -265,27 +265,29 @@ object Geo3DMathHelpers {
             for (face in occluderFaces) {
                 if (face.points.size < 3) continue
                 val planeDist = abs((q - face.points[0]).dot(face.normal))
-                if (planeDist < 1.5e-3f && isPointInConvexPolygon3D(q, face.points, face.normal)) {
-                    if (face.normal.dot(camPos - face.center) > 1e-4f) {
+                if (planeDist < 1.5e-2f && isPointInConvexPolygon3D(q, face.points, face.normal, edgeTolFactor = 1e-2f)) {
+                    if (face.normal.dot(camPos - face.center) > 0f) {
                         onFrontFace = true
                     } else {
                         onBackFace = true
                     }
                 }
             }
-            if (onBackFace && !onFrontFace) return true
+            // On any convex polyhedron, a point lying on a front-facing face or silhouette edge is always visible
+            if (onFrontFace) return false
+            if (onBackFace) return true
 
             val dir = q - camPos
             for (face in occluderFaces) {
                 if (face.points.size < 3) continue
-                // Only front-facing faces can occlude points behind them
-                if (face.normal.dot(camPos - face.center) <= 1e-4f) continue
+                // Only front-facing faces can occlude points strictly behind them
+                if (face.normal.dot(camPos - face.center) <= 0f) continue
                 val denom = dir.dot(face.normal)
                 if (denom >= -1e-5f) continue
                 val u = (face.points[0] - camPos).dot(face.normal) / denom
                 if (u > 0.005f && u < 0.985f) {
                     val hit = camPos + dir * u
-                    if (isPointInConvexPolygon3D(hit, face.points, face.normal)) {
+                    if (isPointInConvexPolygon3D(hit, face.points, face.normal, edgeTolFactor = 2e-3f)) {
                         return true
                     }
                 }
@@ -298,16 +300,25 @@ object Geo3DMathHelpers {
         return false
     }
 
-    private fun isPointInConvexPolygon3D(pt: Vec3, poly: List<Vec3>, normal: Vec3): Boolean {
+    private fun isPointInConvexPolygon3D(
+        pt: Vec3,
+        poly: List<Vec3>,
+        normal: Vec3,
+        edgeTolFactor: Float
+    ): Boolean {
         var hasPos = false
         var hasNeg = false
         val n = poly.size
         for (i in 0 until n) {
             val a = poly[i]
             val b = poly[(i + 1) % n]
-            val d = (b - a).cross(pt - a).dot(normal)
-            if (d > 1.5e-4f) hasPos = true
-            else if (d < -1.5e-4f) hasNeg = true
+            val edge = b - a
+            val edgeLen = edge.length()
+            if (edgeLen < 1e-5f) continue
+            val tol = edgeLen * edgeTolFactor
+            val d = edge.cross(pt - a).dot(normal)
+            if (d > tol) hasPos = true
+            else if (d < -tol) hasNeg = true
             if (hasPos && hasNeg) return false
         }
         return true
@@ -316,9 +327,15 @@ object Geo3DMathHelpers {
     private fun isPointOccludedByRoundBody(q: Vec3, camPos: Vec3, hint: RoundBodyHint): Boolean {
         val dir = q - camPos
         val uMin = 0.005f
-        val uMax = 0.985f
+        val uMax = 0.98f
         return when (hint) {
             is RoundBodyHint.Sphere -> {
+                // If q lies on the front-facing hemisphere surface, it is visible
+                val fromCenter = q - hint.center
+                val distC = fromCenter.length()
+                if (abs(distC - hint.radius) < 0.03f && fromCenter.dot(camPos - q) >= -0.02f) {
+                    return false
+                }
                 val oc = camPos - hint.center
                 val a = dir.dot(dir)
                 if (a < 1e-6f) return false
@@ -337,6 +354,14 @@ object Geo3DMathHelpers {
                 val yMin = kotlin.math.min(hint.centerBottom.y, hint.centerTop.y)
                 val yMax = kotlin.math.max(hint.centerBottom.y, hint.centerTop.y)
                 val rSq = hint.radius * hint.radius
+                // If q lies on a front-facing cap or front lateral surface, it is visible
+                val qRad = kotlin.math.hypot(q.x - cx, q.z - cz)
+                if (abs(q.y - yMax) < 0.03f && qRad <= hint.radius + 0.03f && camPos.y > yMax) return false
+                if (abs(q.y - yMin) < 0.03f && qRad <= hint.radius + 0.03f && camPos.y < yMin) return false
+                if (q.y in (yMin - 0.03f)..(yMax + 0.03f) && abs(qRad - hint.radius) < 0.03f) {
+                    val outN = Vec3(q.x - cx, 0f, q.z - cz)
+                    if (outN.dot(camPos - q) >= -0.02f) return false
+                }
                 // Check caps
                 if (abs(dir.y) > 1e-5f) {
                     val uTop = (yMax - camPos.y) / dir.y
@@ -384,6 +409,14 @@ object Geo3DMathHelpers {
                 val h = yApex - yBase
                 if (abs(h) < 1e-4f) return false
                 val rSq = hint.radius * hint.radius
+                // If q lies on the front-facing base or front lateral surface of the cone, it is visible
+                val qRad = kotlin.math.hypot(q.x - cx, q.z - cz)
+                if (abs(q.y - yBase) < 0.03f && qRad <= hint.radius + 0.03f && camPos.y < yBase) return false
+                val expectedR = hint.radius * ((yApex - q.y) / h)
+                if (expectedR >= -0.02f && abs(qRad - expectedR) < 0.03f && qRad > 1e-4f) {
+                    val outN = Vec3((q.x - cx) / qRad, hint.radius / h, (q.z - cz) / qRad)
+                    if (outN.dot(camPos - q) >= -0.02f) return false
+                }
                 // Check base disk
                 if (abs(dir.y) > 1e-5f) {
                     val uBot = (yBase - camPos.y) / dir.y
