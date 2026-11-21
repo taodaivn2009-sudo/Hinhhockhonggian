@@ -78,34 +78,34 @@ fun MathDocumentsScreen(
         }
     }
 
+    val bgOnlyBackdrop = rememberLiquidGlassBackdropState()
+    val scrollBackdrop = rememberLiquidGlassBackdropState()
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .testTag("math_documents_screen")
     ) {
-        LiquidGlassBackdrop(modifier = Modifier.fillMaxSize())
-
-        Column(
+        // Layer 1 (captured by floating top capsule bar): Aurora backdrop + scrolling formula sheets
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .statusBarsPadding()
+                .liquidGlassBackdropSource(scrollBackdrop)
         ) {
-            // Unified Top Navigation Bar (3D | 2D | Tài liệu | Cài đặt)
-            Box(
+            LiquidGlassBackdrop(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                WorkspaceModeSwitch(
-                    current = MathWorkspace.DOCUMENTS,
-                    hasUpdateBadge = hasUpdateBadge,
-                    onSelect = onSwitchWorkspace,
-                    modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp)
-                )
-            }
+                    .fillMaxSize()
+                    .liquidGlassBackdropSource(bgOnlyBackdrop)
+            )
 
-            // Search Bar
+            CompositionLocalProvider(LocalLiquidGlassBackdrop provides bgOnlyBackdrop) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .padding(top = 60.dp)
+                ) {
+                    // Search Bar
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
@@ -246,6 +246,27 @@ fun MathDocumentsScreen(
                         }
                     }
                 }
+            }
+                }
+            }
+        }
+
+        // Layer 2: Floating Liquid Glass Top Capsule Bar (blurs & refracts scrolling document content underneath!)
+        CompositionLocalProvider(LocalLiquidGlassBackdrop provides scrollBackdrop) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                WorkspaceModeSwitch(
+                    current = MathWorkspace.DOCUMENTS,
+                    hasUpdateBadge = hasUpdateBadge,
+                    onSelect = onSwitchWorkspace,
+                    modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp)
+                )
             }
         }
     }

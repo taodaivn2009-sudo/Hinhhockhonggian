@@ -80,11 +80,12 @@ fun WorkspaceModeSwitch(
         modifier = modifier
             .liquidGlassSurface(
                 shape = RoundedCornerShape(14.dp),
-                elevated = false,
+                pillShape = CircleShape,
+                elevated = true,
                 fallbackBg = SlateDeepest.copy(alpha = 0.95f),
                 fallbackBorder = SlateBorder.copy(alpha = 0.9f)
             )
-            .padding(3.dp),
+            .padding(horizontal = 4.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(3.dp)
     ) {
@@ -139,11 +140,24 @@ private fun WorkspaceTabChip(
     showBadge: Boolean = false,
     onClick: () -> Unit
 ) {
+    val palette = ActiveThemeState.current
+    val isGlass = palette.liquidGlass.enabled
+    val chipShape = if (isGlass) CircleShape else RoundedCornerShape(10.dp)
+    val contentTint = when {
+        selected && isGlass && !palette.isDark -> SlateTextPrimary
+        selected -> Color.White
+        isGlass && palette.isDark -> Color.White.copy(alpha = 0.80f)
+        else -> SlateTextSecondary
+    }
+
     Box(
         modifier = modifier
             .defaultMinSize(minHeight = 36.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (selected) activeColor else Color.Transparent)
+            .liquidGlassActiveBubble(
+                active = selected,
+                shape = chipShape,
+                fallbackActiveColor = activeColor
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 6.dp, vertical = 6.dp)
             .testTag(testTag),
@@ -156,13 +170,13 @@ private fun WorkspaceTabChip(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = if (selected) Color.White else SlateTextSecondary,
+                tint = contentTint,
                 modifier = Modifier.size(14.dp)
             )
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelMedium,
-                color = if (selected) Color.White else SlateTextSecondary,
+                color = contentTint,
                 fontWeight = FontWeight.Bold,
                 fontSize = 11.5.sp,
                 maxLines = 1,
@@ -336,16 +350,21 @@ fun Geo2DStudioScreen(
         launchPicker(fileName)
     }
 
+    val backdropState = rememberLiquidGlassBackdropState()
+
+    CompositionLocalProvider(LocalLiquidGlassBackdrop provides backdropState) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isCompactWidth = maxWidth < 600.dp
         val maxSheetHeight = (maxHeight * 0.56f).coerceIn(280.dp, 480.dp)
 
-        // 1. Interactive 2D Oxy + Function Graph Canvas
+        // 1. Interactive 2D Oxy + Function Graph Canvas (live GPU backdrop source for Liquid Glass!)
         Geo2DCanvasViewport(
             uiState = uiState,
             viewModel = viewModel,
             onSizeChanged = { canvasSize = it },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .liquidGlassBackdropSource(backdropState)
         )
 
         // 2. Top 2D Studio Header with Unified 4-Tab Switcher
@@ -473,6 +492,7 @@ fun Geo2DStudioScreen(
                 )
             }
         }
+    }
     }
 }
 
@@ -606,6 +626,7 @@ private fun Geo2DTopHeader(
                     .weight(1f)
                     .liquidGlassSurface(
                         shape = RoundedCornerShape(12.dp),
+                        pillShape = CircleShape,
                         fallbackBg = SlateDark.copy(alpha = 0.90f),
                         fallbackBorder = SlateBorder.copy(alpha = 0.8f),
                         accentBorder = if (uiState.activeTab == Geo2DTab.FUNCTIONS) EmeraldAccent else null
@@ -632,10 +653,11 @@ private fun Geo2DTopHeader(
                 modifier = Modifier
                     .liquidGlassSurface(
                         shape = RoundedCornerShape(12.dp),
+                        pillShape = CircleShape,
                         fallbackBg = SlateDark.copy(alpha = 0.90f),
                         fallbackBorder = SlateBorder.copy(alpha = 0.8f)
                     )
-                    .padding(horizontal = 3.dp, vertical = 2.dp),
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TopIconBtn(Icons.AutoMirrored.Filled.Undo, "Hoàn tác", enabled = uiState.canUndo) { viewModel.undo() }
@@ -726,10 +748,11 @@ private fun Geo2DRightQuickControls(
             .padding(end = 8.dp)
             .liquidGlassSurface(
                 shape = RoundedCornerShape(14.dp),
+                pillShape = RoundedCornerShape(26.dp),
                 fallbackBg = SlateDark.copy(alpha = 0.84f),
                 fallbackBorder = SlateBorder.copy(alpha = 0.7f)
             )
-            .padding(vertical = 5.dp, horizontal = 3.dp),
+            .padding(vertical = 6.dp, horizontal = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
@@ -935,29 +958,42 @@ private fun Geo2DBottomDock(
         }
 
         // Tier 1: Compact Scrollable 2D Tool Mode Strip (auto-hidden when an inspector tab is open to keep UI neat!)
+        val palette = ActiveThemeState.current
+        val isGlass = palette.liquidGlass.enabled
+
         AnimatedVisibility(visible = uiState.activeTab == null) {
             Row(
                 modifier = Modifier
                     .liquidGlassSurface(
                         shape = RoundedCornerShape(13.dp),
+                        pillShape = CircleShape,
                         fallbackBg = SlateDark.copy(alpha = 0.9f),
                         fallbackBorder = SlateBorder.copy(alpha = 0.75f)
                     )
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 5.dp, vertical = 4.dp),
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Geo2DTool.entries.forEach { tool ->
                     val selected = uiState.activeTool == tool
+                    val chipShape = if (isGlass) CircleShape else RoundedCornerShape(9.dp)
+                    val tint = when {
+                        selected && isGlass && !palette.isDark -> SlateTextPrimary
+                        selected -> Color.White
+                        isGlass && palette.isDark -> Color.White.copy(alpha = 0.82f)
+                        else -> SlateTextLight
+                    }
                     Row(
                         modifier = Modifier
                             .defaultMinSize(minHeight = 34.dp)
-                            .clip(RoundedCornerShape(9.dp))
-                            .background(if (selected) EmeraldDark else Color.Transparent)
-                            .border(1.dp, if (selected) EmeraldAccent.copy(alpha = 0.8f) else Color.Transparent, RoundedCornerShape(9.dp))
+                            .liquidGlassActiveBubble(
+                                active = selected,
+                                shape = chipShape,
+                                fallbackActiveColor = EmeraldDark
+                            )
                             .clickable { viewModel.setTool(tool) }
-                            .padding(horizontal = 9.dp, vertical = 6.dp)
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
                             .testTag("geo2d_tool_${tool.name.lowercase()}"),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -965,13 +1001,13 @@ private fun Geo2DBottomDock(
                         Icon(
                             imageVector = iconFor2DTool(tool),
                             contentDescription = null,
-                            tint = if (selected) Color.White else SlateTextSecondary,
+                            tint = tint,
                             modifier = Modifier.size(15.dp)
                         )
                         Text(
                             text = tool.shortLabel,
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (selected) Color.White else SlateTextLight,
+                            color = tint,
                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                             fontSize = 11.sp
                         )
@@ -980,31 +1016,49 @@ private fun Geo2DBottomDock(
             }
         }
 
-        // Tier 2: Sleek 4-Tab Navigation Bar (unified M3 pill style matching 3D Studio)
+        // Tier 2: Floating Capsule 4-Tab Navigation Bar with Liquid Droplet Active Bubble
         Row(
             modifier = Modifier
                 .widthIn(max = 520.dp)
                 .fillMaxWidth()
                 .liquidGlassSurface(
                     shape = RoundedCornerShape(16.dp),
+                    pillShape = CircleShape,
                     elevated = true,
                     fallbackBg = SlateDark.copy(alpha = 0.95f),
                     fallbackBorder = SlateBorder.copy(alpha = 0.8f)
                 )
-                .padding(horizontal = 5.dp, vertical = 4.dp),
+                .padding(horizontal = 6.dp, vertical = 5.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Geo2DTab.entries.forEach { tab ->
                 val selected = uiState.activeTab == tab
+                val tabShape = if (isGlass) CircleShape else RoundedCornerShape(12.dp)
+                val iconTint = when {
+                    selected && isGlass && !palette.isDark -> SlateTextPrimary
+                    selected -> Color.White
+                    isGlass && palette.isDark -> Color.White.copy(alpha = 0.82f)
+                    else -> SlateTextSecondary
+                }
+                val labelTint = when {
+                    selected && isGlass && !palette.isDark -> SlateTextPrimary
+                    selected && isGlass -> Color.White
+                    selected -> EmeraldAccent
+                    isGlass && palette.isDark -> Color.White.copy(alpha = 0.78f)
+                    else -> SlateTextSecondary
+                }
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .defaultMinSize(minHeight = 48.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (selected) EmeraldDark.copy(alpha = 0.24f) else Color.Transparent)
+                        .liquidGlassActiveBubble(
+                            active = selected,
+                            shape = tabShape,
+                            fallbackActiveColor = EmeraldDark.copy(alpha = 0.24f)
+                        )
                         .clickable { viewModel.toggleTab(tab) }
-                        .padding(vertical = 4.dp, horizontal = 2.dp)
+                        .padding(vertical = 5.dp, horizontal = 3.dp)
                         .testTag("geo2d_tab_${tab.name.lowercase()}"),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
@@ -1012,24 +1066,24 @@ private fun Geo2DBottomDock(
                     Box(
                         modifier = Modifier
                             .clip(CircleShape)
-                            .background(if (selected) EmeraldDark else Color.Transparent)
+                            .background(if (selected && !isGlass) EmeraldDark else Color.Transparent)
                             .padding(horizontal = 10.dp, vertical = 2.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = iconFor2DTab(tab),
                             contentDescription = tab.shortLabel,
-                            tint = if (selected) Color.White else SlateTextSecondary,
+                            tint = iconTint,
                             modifier = Modifier.size(18.dp)
                         )
                     }
-                    Spacer(Modifier.height(2.dp))
+                    Spacer(Modifier.height(1.dp))
                     Text(
                         text = tab.shortLabel,
                         style = MaterialTheme.typography.labelSmall,
                         fontSize = 10.sp,
-                        color = if (selected) EmeraldAccent else SlateTextSecondary,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        color = labelTint,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )

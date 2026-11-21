@@ -2,13 +2,10 @@
 
 ## Bản cập nhật mới nhất
 
-### Chủ đề Liquid Glass & Bộ cài đặt chất liệu kính lỏng
-- **2 chủ đề Liquid Glass thiết kế riêng:** Thêm **Liquid Glass Tối** (*kính lỏng trong suốt phản quang*) và **Liquid Glass Sáng** (*pha lê băng trong trẻo*), tự động chuyển đổi đồng bộ giữa chế độ Sáng/Tối kèm nền cực quang chiều sâu phía sau các thẻ kính.
-- **Bộ cài đặt Liquid Glass chuyên sâu trong Tab Cài đặt:**
-  - Công tắc bật/tắt **Liquid Glass** (dùng được độc lập cho mọi chủ đề màu sắc khác nhau).
-  - 3 kiểu chất liệu nhanh 1 chạm: **Pha lê trong**, **Kính mờ chuẩn**, **Kính dịu mắt**.
-  - 4 thanh trượt quang học thời gian thực: **Độ trong suốt kính**, **Ánh phản quang bề mặt**, **Tán sắc màu & nền cực quang**, và **Độ sáng viền pha lê**.
-  - 2 tùy chọn nâng cao: **Ánh sáng lướt động (Liquid Shimmer)** và **Tăng tương phản chữ trên kính**, lưu tự động vào bộ nhớ máy.
+### Chủ đề Liquid Glass thật (Làm mờ nền GPU & Khúc xạ viền thấu kính AGSL)
+- **Làm mờ nền & khúc xạ quang học thời gian thực 60fps:** Các thanh nổi dạng viên nang (*capsule*) trên 3D, 2D, Tài liệu và Cài đặt trực tiếp lấy mẫu nội dung bên dưới (khối 3D đang xoay, đồ thị 2D, thẻ công thức đang cuộn) để **làm mờ nền GPU (`RenderEffect`)**, **uốn cong khúc xạ ánh sáng quanh viền kính cong** và **tán sắc quang phổ nhẹ** bằng shader `AGSL` (Android 13+, tự hạ cấp mượt mà trên Android 12 trở xuống).
+- **Thanh viên nang nổi & bong bóng giọt nước tab đang chọn:** Nâng cấp thanh điều hướng trên/dưới thành dạng viên nang bo tròn nổi có viền sáng Fresnel pha lê, còn tab đang chọn phát sáng dạng **bong bóng kính lỏng trong suốt** chuẩn phong cách Liquid Glass.
+- **2 chủ đề Liquid Glass thiết kế sẵn & bộ cài đặt quang học chi tiết:** Hỗ trợ **Liquid Glass Tối** và **Liquid Glass Sáng**, kèm khung xem trước thanh viên nang tương tác trực tiếp cùng 3 kiểu nhanh (*Pha lê chuẩn*, *Kính mờ sương*, *Kính dịu mắt*) và 7 thanh trượt quang học: **Độ mờ kính nền (Blur)**, **Độ khúc xạ viền kính (Refraction)**, **Tán sắc ánh sáng viền (Dispersion)**, **Độ trong suốt kính**, **Ánh phản quang bề mặt**, **Sắc màu pha kính & cực quang**, **Độ sáng viền pha lê**, cùng **Liquid Shimmer** và **Tăng tương phản chữ**.
 
 ### Viết lại giao diện gọn gàng & Tách riêng Cài đặt ứng dụng / Cài đặt hình
 - **Thanh điều hướng 4 không gian thống nhất:** Làm mới toàn bộ đầu trang trên **3D | 2D | Tài liệu | Cài đặt** với giao diện đồng bộ, gọn thoáng, loại bỏ hoàn toàn các nút nổi chồng chéo trên màn hình vẽ.

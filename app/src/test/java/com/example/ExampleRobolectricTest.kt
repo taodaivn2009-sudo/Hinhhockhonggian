@@ -616,8 +616,11 @@ class ExampleRobolectricTest {
         val softAlpha = LiquidGlassMath.coreAlpha(LiquidGlassPresetStyle.SOFT.config, isDark = true, elevated = false)
         assertTrue("Crystal preset should be more transparent than Soft Frost", crystalAlpha < softAlpha)
 
-        // 3. Updating Liquid Glass sliders clamps safely and persists across ThemePreferences reload
+        // 3. Updating Liquid Glass GPU optical sliders clamps safely and persists across ThemePreferences reload
         vm.updateLiquidGlass(
+            blurRadius = 24f,
+            refraction = 0.86f,
+            chromaticDispersion = 0.64f,
             translucency = 0.85f,
             specularGlow = 0.90f,
             refractionTint = 0.72f,
@@ -627,12 +630,27 @@ class ExampleRobolectricTest {
         )
         val reloaded = ThemePreferences(app).load()
         assertTrue(reloaded.liquidGlass.enabled)
+        assertEquals(24f, reloaded.liquidGlass.blurRadius, 1e-2f)
+        assertEquals(0.86f, reloaded.liquidGlass.refraction, 1e-3f)
+        assertEquals(0.64f, reloaded.liquidGlass.chromaticDispersion, 1e-3f)
         assertEquals(0.85f, reloaded.liquidGlass.translucency, 1e-3f)
         assertEquals(0.90f, reloaded.liquidGlass.specularGlow, 1e-3f)
         assertEquals(0.72f, reloaded.liquidGlass.refractionTint, 1e-3f)
         assertEquals(0.88f, reloaded.liquidGlass.borderIntensity, 1e-3f)
         assertFalse(reloaded.liquidGlass.dynamicShimmer)
         assertTrue(reloaded.liquidGlass.highContrastText)
+
+        // Clamping out-of-range optical values stays safe
+        val clamped = LiquidGlassConfig(
+            enabled = true,
+            blurRadius = 999f,
+            refraction = -2f,
+            chromaticDispersion = 5f
+        ).sanitized()
+        assertEquals(36f, clamped.blurRadius, 1e-3f)
+        assertEquals(0f, clamped.refraction, 1e-3f)
+        assertEquals(1f, clamped.chromaticDispersion, 1e-3f)
+        assertTrue(LiquidGlassMath.LIQUID_GLASS_AGSL_SRC.contains("sdRoundedBox"))
 
         // 4. Liquid Glass can also be toggled cleanly on non-glass themes
         vm.selectPreset(AppThemePreset.VIOLET_NEBULA)

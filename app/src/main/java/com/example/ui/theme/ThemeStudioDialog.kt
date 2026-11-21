@@ -299,6 +299,9 @@ fun LiquidGlassSettingsSection(
     config: LiquidGlassConfig,
     onToggleEnabled: (Boolean) -> Unit,
     onApplyPresetStyle: (LiquidGlassPresetStyle) -> Unit,
+    onUpdateBlurRadius: (Float) -> Unit,
+    onUpdateRefraction: (Float) -> Unit,
+    onUpdateChromaticDispersion: (Float) -> Unit,
     onUpdateTranslucency: (Float) -> Unit,
     onUpdateSpecularGlow: (Float) -> Unit,
     onUpdateRefractionTint: (Float) -> Unit,
@@ -342,9 +345,9 @@ fun LiquidGlassSettingsSection(
                 )
                 Text(
                     text = if (config.enabled) {
-                        "Đang bật kính lỏng trong suốt cho thanh nổi, bảng & thẻ"
+                        "Đang bật kính lỏng làm mờ & khúc xạ thời gian thực (GPU)"
                     } else {
-                        "Có thể bật kết hợp cùng bất kỳ chủ đề sáng/tối nào"
+                        "Bật kính lỏng trong suốt dạng viên nang cho mọi chủ đề"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = SlateTextSecondary,
@@ -376,8 +379,9 @@ fun LiquidGlassSettingsSection(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         LiquidGlassPresetStyle.entries.forEach { style ->
-                            val isActive = abs(config.translucency - style.config.translucency) < 0.04f &&
-                                abs(config.specularGlow - style.config.specularGlow) < 0.05f &&
+                            val isActive = abs(config.blurRadius - style.config.blurRadius) < 1.5f &&
+                                abs(config.refraction - style.config.refraction) < 0.06f &&
+                                abs(config.translucency - style.config.translucency) < 0.05f &&
                                 config.highContrastText == style.config.highContrastText
                             Box(
                                 modifier = Modifier
@@ -408,12 +412,37 @@ fun LiquidGlassSettingsSection(
                     }
                 }
 
-                // 4 Real-Time Optical Sliders
+                // Real-Time GPU Optical Sliders
+                LiquidGlassSliderRow(
+                    label = "Độ mờ kính nền (Blur)",
+                    value = config.blurRadius,
+                    range = 4f..36f,
+                    valueLabel = "${config.blurRadius.roundToInt()} dp",
+                    accent = SkyBlue,
+                    testTag = "lg_slider_blur",
+                    onValueChange = onUpdateBlurRadius
+                )
+                LiquidGlassSliderRow(
+                    label = "Độ khúc xạ viền kính (Refraction)",
+                    value = config.refraction,
+                    range = 0f..1f,
+                    accent = CyanAccent,
+                    testTag = "lg_slider_lens_refraction",
+                    onValueChange = onUpdateRefraction
+                )
+                LiquidGlassSliderRow(
+                    label = "Tán sắc ánh sáng viền (Dispersion)",
+                    value = config.chromaticDispersion,
+                    range = 0f..1f,
+                    accent = PinkAccent,
+                    testTag = "lg_slider_dispersion",
+                    onValueChange = onUpdateChromaticDispersion
+                )
                 LiquidGlassSliderRow(
                     label = "Độ trong suốt kính",
                     value = config.translucency,
                     range = 0.25f..0.90f,
-                    accent = CyanAccent,
+                    accent = EmeraldAccent,
                     testTag = "lg_slider_translucency",
                     onValueChange = onUpdateTranslucency
                 )
@@ -426,7 +455,7 @@ fun LiquidGlassSettingsSection(
                     onValueChange = onUpdateSpecularGlow
                 )
                 LiquidGlassSliderRow(
-                    label = "Tán sắc màu & nền cực quang",
+                    label = "Sắc màu pha kính & cực quang",
                     value = config.refractionTint,
                     range = 0f..1f,
                     accent = PurpleAccent,
@@ -437,7 +466,7 @@ fun LiquidGlassSettingsSection(
                     label = "Độ sáng viền pha lê",
                     value = config.borderIntensity,
                     range = 0.2f..1f,
-                    accent = EmeraldAccent,
+                    accent = AmberAccent,
                     testTag = "lg_slider_border",
                     onValueChange = onUpdateBorderIntensity
                 )
@@ -471,6 +500,7 @@ private fun LiquidGlassSliderRow(
     range: ClosedFloatingPointRange<Float>,
     accent: Color,
     testTag: String,
+    valueLabel: String = "${(value * 100f).roundToInt()}%",
     onValueChange: (Float) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -485,7 +515,7 @@ private fun LiquidGlassSliderRow(
                 color = SlateTextPrimary
             )
             Text(
-                text = "${(value * 100f).roundToInt()}%",
+                text = valueLabel,
                 style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily),
                 color = accent,
                 fontWeight = FontWeight.Bold
@@ -559,94 +589,167 @@ fun ThemeLivePreviewCard(palette: AppThemePalette) {
     val bgTop = Color(palette.canvas.bgInnerArgb)
     val bgBottom = Color(palette.canvas.bgOuterArgb)
     val lg = palette.liquidGlass
+    val previewBackdrop = rememberLiquidGlassBackdropState()
+    var previewActiveTab by remember { mutableIntStateOf(0) }
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(106.dp)
-            .clip(RoundedCornerShape(15.dp))
-            .background(Brush.verticalGradient(listOf(bgTop, bgBottom)))
-            .border(1.dp, palette.border, RoundedCornerShape(15.dp))
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            // Luminous aurora spheres behind preview when Liquid Glass is active
-            if (lg.enabled) {
-                val glow = 0.32f + lg.refractionTint * 0.45f
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(palette.primaryBright.copy(alpha = glow), Color.Transparent),
-                        center = Offset(size.width * 0.22f, size.height * 0.25f),
-                        radius = size.width * 0.42f
-                    ),
-                    radius = size.width * 0.42f,
-                    center = Offset(size.width * 0.22f, size.height * 0.25f)
-                )
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(palette.cyanAccent.copy(alpha = glow * 0.85f), Color.Transparent),
-                        center = Offset(size.width * 0.78f, size.height * 0.72f),
-                        radius = size.width * 0.40f
-                    ),
-                    radius = size.width * 0.40f,
-                    center = Offset(size.width * 0.78f, size.height * 0.72f)
-                )
-            }
+    val previewTabs = remember {
+        listOf(
+            "3D" to Icons.Default.Category,
+            "2D" to Icons.Default.Functions,
+            "Tài liệu" to Icons.Default.MenuBook,
+            "Cài đặt" to Icons.Default.Settings
+        )
+    }
 
-            val cols = 8
-            val rows = 4
-            for (c in 1 until cols) {
-                val x = size.width * c / cols
-                drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.2f)
-            }
-            for (r in 1 until rows) {
-                val y = size.height * r / rows
-                drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.2f)
-            }
-            drawLine(axisColor, Offset(0f, size.height * 0.56f), Offset(size.width, size.height * 0.56f), strokeWidth = 2f)
-            drawLine(axisColor, Offset(size.width * 0.35f, 0f), Offset(size.width * 0.35f, size.height), strokeWidth = 2f)
-
-            val path = Path()
-            val steps = 70
-            for (i in 0..steps) {
-                val t = i.toFloat() / steps
-                val x = t * size.width
-                val y = size.height * 0.56f - sin(t * 3.2f * Math.PI.toFloat()) * size.height * 0.30f
-                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            }
-            drawPath(path, color = curveColor, style = Stroke(width = 4.2f, cap = StrokeCap.Round))
-        }
-
-        // Floating HUD preview pill rendered with active Liquid Glass surface!
-        Row(
+    CompositionLocalProvider(LocalLiquidGlassBackdrop provides previewBackdrop) {
+        Box(
             modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(9.dp)
-                .liquidGlassSurface(
-                    shape = RoundedCornerShape(10.dp),
-                    elevated = false,
-                    fallbackBg = palette.bgDark.copy(alpha = 0.92f),
-                    fallbackBorder = palette.border
-                )
-                .padding(horizontal = 9.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                .fillMaxWidth()
+                .height(142.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .border(1.dp, palette.border, RoundedCornerShape(18.dp))
         ) {
-            Box(
+            // Live colorful mathematical backdrop sampled by the floating Liquid Glass capsule bar!
+            Canvas(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(palette.primary)
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .fillMaxSize()
+                    .liquidGlassBackdropSource(previewBackdrop)
             ) {
-                Text("3D", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-            }
-            Text("y = sin(x)", color = palette.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            if (lg.enabled) {
-                Text(
-                    text = "Glass",
-                    color = palette.cyanAccent,
-                    fontSize = 9.5.sp,
-                    fontWeight = FontWeight.Bold
+                drawRect(brush = Brush.verticalGradient(listOf(bgTop, bgBottom)))
+
+                // Rich multi-hue spheres & stripes so blur + convex edge lens bending are immediately visible
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(palette.roseAccent.copy(alpha = 0.85f), Color.Transparent),
+                        center = Offset(size.width * 0.16f, size.height * 0.68f),
+                        radius = size.width * 0.34f
+                    ),
+                    radius = size.width * 0.34f,
+                    center = Offset(size.width * 0.16f, size.height * 0.68f)
                 )
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(palette.primaryBright.copy(alpha = 0.80f), Color.Transparent),
+                        center = Offset(size.width * 0.50f, size.height * 0.48f),
+                        radius = size.width * 0.36f
+                    ),
+                    radius = size.width * 0.36f,
+                    center = Offset(size.width * 0.50f, size.height * 0.48f)
+                )
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(palette.amberAccent.copy(alpha = 0.82f), Color.Transparent),
+                        center = Offset(size.width * 0.84f, size.height * 0.66f),
+                        radius = size.width * 0.32f
+                    ),
+                    radius = size.width * 0.32f,
+                    center = Offset(size.width * 0.84f, size.height * 0.66f)
+                )
+
+                val cols = 8
+                val rows = 4
+                for (c in 1 until cols) {
+                    val x = size.width * c / cols
+                    drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.4f)
+                }
+                for (r in 1 until rows) {
+                    val y = size.height * r / rows
+                    drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.4f)
+                }
+                drawLine(axisColor, Offset(0f, size.height * 0.44f), Offset(size.width, size.height * 0.44f), strokeWidth = 2f)
+                drawLine(axisColor, Offset(size.width * 0.34f, 0f), Offset(size.width * 0.34f, size.height), strokeWidth = 2f)
+
+                val path = Path()
+                val steps = 72
+                for (i in 0..steps) {
+                    val t = i.toFloat() / steps
+                    val x = t * size.width
+                    val y = size.height * 0.54f - sin(t * 3.4f * Math.PI.toFloat()) * size.height * 0.34f
+                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                }
+                drawPath(path, color = curveColor, style = Stroke(width = 6f, cap = StrokeCap.Round))
+            }
+
+            // Small top badge
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(9.dp)
+                    .liquidGlassSurface(
+                        shape = RoundedCornerShape(10.dp),
+                        pillShape = CircleShape,
+                        elevated = false,
+                        fallbackBg = palette.bgDark.copy(alpha = 0.90f),
+                        fallbackBorder = palette.border
+                    )
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Text("y = sin(x)", color = palette.textPrimary, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                if (lg.enabled) {
+                    Text(
+                        text = "• Liquid Glass",
+                        color = palette.cyanAccent,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            // Authentic Floating Liquid Glass Capsule Bar Preview (matches real Android Liquid Glass nav bar!)
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .fillMaxWidth()
+                    .liquidGlassSurface(
+                        shape = RoundedCornerShape(18.dp),
+                        pillShape = CircleShape,
+                        elevated = true,
+                        fallbackBg = palette.bgDark.copy(alpha = 0.94f),
+                        fallbackBorder = palette.border
+                    )
+                    .padding(horizontal = 5.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                previewTabs.forEachIndexed { idx, (label, icon) ->
+                    val active = previewActiveTab == idx
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .liquidGlassActiveBubble(
+                                active = active,
+                                shape = CircleShape,
+                                fallbackActiveColor = palette.primary
+                            )
+                            .clickable { previewActiveTab = idx }
+                            .padding(vertical = 5.dp, horizontal = 4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        val contentColor = when {
+                            active && lg.enabled && !palette.isDark -> palette.textPrimary
+                            active -> Color.White
+                            lg.enabled && palette.isDark -> Color.White.copy(alpha = 0.82f)
+                            else -> palette.textSecondary
+                        }
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = label,
+                            tint = contentColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = label,
+                            color = contentColor,
+                            fontSize = 9.5.sp,
+                            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                            maxLines = 1
+                        )
+                    }
+                }
             }
         }
     }

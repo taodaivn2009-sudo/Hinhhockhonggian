@@ -57,6 +57,9 @@ fun AppSettingsScreen(
     onToggleLiquidGlass: (Boolean) -> Unit,
     onApplyLiquidGlassStyle: (LiquidGlassPresetStyle) -> Unit,
     onUpdateLiquidGlass: (
+        blurRadius: Float?,
+        refraction: Float?,
+        chromaticDispersion: Float?,
         translucency: Float?,
         specularGlow: Float?,
         refractionTint: Float?,
@@ -83,6 +86,9 @@ fun AppSettingsScreen(
         mutableStateOf(updateUiState.configuredRepo)
     }
 
+    val bgOnlyBackdrop = rememberLiquidGlassBackdropState()
+    val scrollBackdrop = rememberLiquidGlassBackdropState()
+
     BackHandler {
         onSwitchWorkspace(MathWorkspace.SPACE_3D)
     }
@@ -92,43 +98,34 @@ fun AppSettingsScreen(
             .fillMaxSize()
             .testTag("app_settings_screen")
     ) {
-        LiquidGlassBackdrop(modifier = Modifier.fillMaxSize())
-
-        Column(
+        // Layer 1 (captured by floating top capsule bar): Aurora backdrop + scrolling settings cards
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .statusBarsPadding()
+                .liquidGlassBackdropSource(scrollBackdrop)
         ) {
-            // Unified Top Navigation Bar
-            Box(
+            LiquidGlassBackdrop(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                WorkspaceModeSwitch(
-                    current = MathWorkspace.SETTINGS,
-                    hasUpdateBadge = updateUiState.hasUpdate,
-                    onSelect = onSwitchWorkspace,
-                    modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp)
-                )
-            }
+                    .fillMaxSize()
+                    .liquidGlassBackdropSource(bgOnlyBackdrop)
+            )
 
-            // Scrollable Settings Body
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState())
-                    .navigationBarsPadding()
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
+            CompositionLocalProvider(LocalLiquidGlassBackdrop provides bgOnlyBackdrop) {
+                // Scrollable Settings Body flows directly underneath the floating Liquid Glass header
                 Column(
-                    modifier = Modifier.fillMaxWidth().widthIn(max = 600.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .statusBarsPadding()
+                        .navigationBarsPadding()
+                        .padding(start = 14.dp, end = 14.dp, top = 66.dp, bottom = 14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().widthIn(max = 600.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
                     // Page Title Banner
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -186,21 +183,24 @@ fun AppSettingsScreen(
                         iconTint = CyanAccent,
                         title = "Cài đặt Liquid Glass",
                         subtitle = if (themeConfig.liquidGlass.enabled) {
-                            "Đang bật • Trong suốt ${(themeConfig.liquidGlass.translucency * 100).toInt()}% • Phản quang ${(themeConfig.liquidGlass.specularGlow * 100).toInt()}%"
+                            "Mờ ${themeConfig.liquidGlass.blurRadius.toInt()}dp • Khúc xạ ${(themeConfig.liquidGlass.refraction * 100).toInt()}% • Trong suốt ${(themeConfig.liquidGlass.translucency * 100).toInt()}%"
                         } else {
-                            "Kính lỏng trong suốt, ánh phản quang & viền pha lê"
+                            "Kính lỏng làm mờ nền, khúc xạ viền & thanh viên nang"
                         }
                     ) {
                         LiquidGlassSettingsSection(
                             config = themeConfig.liquidGlass,
                             onToggleEnabled = onToggleLiquidGlass,
                             onApplyPresetStyle = onApplyLiquidGlassStyle,
-                            onUpdateTranslucency = { onUpdateLiquidGlass(it, null, null, null, null, null) },
-                            onUpdateSpecularGlow = { onUpdateLiquidGlass(null, it, null, null, null, null) },
-                            onUpdateRefractionTint = { onUpdateLiquidGlass(null, null, it, null, null, null) },
-                            onUpdateBorderIntensity = { onUpdateLiquidGlass(null, null, null, it, null, null) },
-                            onToggleDynamicShimmer = { onUpdateLiquidGlass(null, null, null, null, it, null) },
-                            onToggleHighContrastText = { onUpdateLiquidGlass(null, null, null, null, null, it) }
+                            onUpdateBlurRadius = { onUpdateLiquidGlass(it, null, null, null, null, null, null, null, null) },
+                            onUpdateRefraction = { onUpdateLiquidGlass(null, it, null, null, null, null, null, null, null) },
+                            onUpdateChromaticDispersion = { onUpdateLiquidGlass(null, null, it, null, null, null, null, null, null) },
+                            onUpdateTranslucency = { onUpdateLiquidGlass(null, null, null, it, null, null, null, null, null) },
+                            onUpdateSpecularGlow = { onUpdateLiquidGlass(null, null, null, null, it, null, null, null, null) },
+                            onUpdateRefractionTint = { onUpdateLiquidGlass(null, null, null, null, null, it, null, null, null) },
+                            onUpdateBorderIntensity = { onUpdateLiquidGlass(null, null, null, null, null, null, it, null, null) },
+                            onToggleDynamicShimmer = { onUpdateLiquidGlass(null, null, null, null, null, null, null, it, null) },
+                            onToggleHighContrastText = { onUpdateLiquidGlass(null, null, null, null, null, null, null, null, it) }
                         )
                     }
 
@@ -493,6 +493,26 @@ fun AppSettingsScreen(
 
                     Spacer(Modifier.height(12.dp))
                 }
+            }
+            }
+        }
+
+        // Layer 2: Floating Liquid Glass Top Capsule Bar (blurs & refracts scrolling Settings cards underneath!)
+        CompositionLocalProvider(LocalLiquidGlassBackdrop provides scrollBackdrop) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                WorkspaceModeSwitch(
+                    current = MathWorkspace.SETTINGS,
+                    hasUpdateBadge = updateUiState.hasUpdate,
+                    onSelect = onSwitchWorkspace,
+                    modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp)
+                )
             }
         }
     }

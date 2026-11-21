@@ -78,12 +78,13 @@ fun TopStudioHeader(
                     .testTag("top_shape_selector_pill")
                     .liquidGlassSurface(
                         shape = RoundedCornerShape(12.dp),
+                        pillShape = CircleShape,
                         fallbackBg = SlateDark.copy(alpha = 0.90f),
                         fallbackBorder = SlateBorder.copy(alpha = 0.8f),
                         accentBorder = if (uiState.activeLeftPane == LeftPane.SHAPES) CyanAccent else null
                     )
                     .clickable { viewModel.toggleLeftPane(LeftPane.SHAPES) }
-                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                    .padding(horizontal = 11.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp)
             ) {
@@ -122,10 +123,11 @@ fun TopStudioHeader(
                 modifier = Modifier
                     .liquidGlassSurface(
                         shape = RoundedCornerShape(12.dp),
+                        pillShape = CircleShape,
                         fallbackBg = SlateDark.copy(alpha = 0.90f),
                         fallbackBorder = SlateBorder.copy(alpha = 0.8f)
                     )
-                    .padding(horizontal = 3.dp, vertical = 2.dp),
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(1.dp)
             ) {
@@ -190,12 +192,13 @@ fun TopStudioHeader(
                     .testTag("live_metrics_pill")
                     .liquidGlassSurface(
                         shape = RoundedCornerShape(10.dp),
+                        pillShape = CircleShape,
                         fallbackBg = SlateDeepest.copy(alpha = 0.88f),
                         fallbackBorder = SlateBorder.copy(alpha = 0.85f)
                     )
                     .clickable { viewModel.toggleLeftPane(LeftPane.FORMULAS) }
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp)
             ) {
@@ -218,10 +221,11 @@ fun TopStudioHeader(
                     modifier = Modifier
                         .liquidGlassSurface(
                             shape = RoundedCornerShape(10.dp),
+                            pillShape = CircleShape,
                             fallbackBg = SlateDark.copy(alpha = 0.88f),
                             fallbackBorder = SlateBorder.copy(alpha = 0.8f)
                         )
-                        .padding(horizontal = 3.dp, vertical = 2.dp),
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
@@ -306,10 +310,11 @@ fun RightCanvasQuickControls(
             .padding(end = 8.dp)
             .liquidGlassSurface(
                 shape = RoundedCornerShape(14.dp),
+                pillShape = RoundedCornerShape(26.dp),
                 fallbackBg = SlateDark.copy(alpha = 0.88f),
                 fallbackBorder = SlateBorder.copy(alpha = 0.75f)
             )
-            .padding(vertical = 5.dp, horizontal = 3.dp),
+            .padding(vertical = 6.dp, horizontal = 3.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -548,11 +553,12 @@ fun BottomStudioDock(
                 modifier = Modifier
                     .liquidGlassSurface(
                         shape = RoundedCornerShape(13.dp),
+                        pillShape = CircleShape,
                         fallbackBg = SlateDark.copy(alpha = 0.92f),
                         fallbackBorder = SlateBorder
                     )
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 5.dp, vertical = 4.dp),
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(3.dp)
             ) {
@@ -607,18 +613,19 @@ fun BottomStudioDock(
             }
         }
 
-        // 4. Tier 2: Main 5-Tab 3D Figure Navigation Bar (Shape-specific controls only)
+        // 4. Tier 2: Floating Liquid Glass Capsule 5-Tab 3D Figure Navigation Bar
         Row(
             modifier = Modifier
                 .widthIn(max = 520.dp)
                 .fillMaxWidth()
                 .liquidGlassSurface(
                     shape = RoundedCornerShape(16.dp),
+                    pillShape = CircleShape,
                     elevated = true,
                     fallbackBg = SlateDark.copy(alpha = 0.96f),
                     fallbackBorder = SlateBorder
                 )
-                .padding(horizontal = 5.dp, vertical = 4.dp),
+                .padding(horizontal = 6.dp, vertical = 5.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -675,28 +682,40 @@ private fun ModePillButton(
     testTag: String,
     onClick: () -> Unit
 ) {
+    val palette = ActiveThemeState.current
+    val isGlass = palette.liquidGlass.enabled
+    val pillShape = if (isGlass) CircleShape else RoundedCornerShape(9.dp)
+    val contentTint = when {
+        active && isGlass && !palette.isDark -> SlateTextPrimary
+        active -> Color.White
+        isGlass && palette.isDark -> Color.White.copy(alpha = 0.84f)
+        else -> SlateTextLight
+    }
+
     Row(
         modifier = Modifier
             .testTag(testTag)
             .defaultMinSize(minHeight = 36.dp)
-            .clip(RoundedCornerShape(9.dp))
-            .background(if (active) activeBg else Color.Transparent)
-            .border(1.dp, if (active) Color.White.copy(alpha = 0.25f) else Color.Transparent, RoundedCornerShape(9.dp))
+            .liquidGlassActiveBubble(
+                active = active,
+                shape = pillShape,
+                fallbackActiveColor = activeBg
+            )
             .clickable(onClick = onClick)
-            .padding(horizontal = 9.dp, vertical = 6.dp),
+            .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Icon(
             imageVector = icon,
             contentDescription = label,
-            tint = if (active) Color.White else SlateTextSecondary,
+            tint = contentTint,
             modifier = Modifier.size(15.dp)
         )
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = if (active) Color.White else SlateTextLight,
+            color = contentTint,
             fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
             fontSize = 11.sp
         )
@@ -712,36 +731,57 @@ private fun StudioBottomTab(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
+    val palette = ActiveThemeState.current
+    val isGlass = palette.liquidGlass.enabled
+    val tabShape = if (isGlass) CircleShape else RoundedCornerShape(12.dp)
+    val iconTint = when {
+        active && isGlass && !palette.isDark -> SlateTextPrimary
+        active -> Color.White
+        isGlass && palette.isDark -> Color.White.copy(alpha = 0.84f)
+        else -> SlateTextSecondary
+    }
+    val labelTint = when {
+        active && isGlass && !palette.isDark -> SlateTextPrimary
+        active && isGlass -> Color.White
+        active -> CyanAccent
+        isGlass && palette.isDark -> Color.White.copy(alpha = 0.78f)
+        else -> SlateTextSecondary
+    }
+
     Column(
         modifier = modifier
             .testTag(testTag)
             .defaultMinSize(minHeight = 48.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (active) IndigoPrimary.copy(alpha = 0.28f) else Color.Transparent)
+            .liquidGlassActiveBubble(
+                active = active,
+                shape = tabShape,
+                fallbackActiveColor = IndigoPrimary.copy(alpha = 0.28f)
+            )
             .clickable(onClick = onClick)
-            .padding(vertical = 5.dp, horizontal = 2.dp),
+            .padding(vertical = 5.dp, horizontal = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
         Box(
             modifier = Modifier
                 .clip(CircleShape)
-                .background(if (active) IndigoPrimary else Color.Transparent)
+                .background(if (active && !isGlass) IndigoPrimary else Color.Transparent)
                 .padding(horizontal = 10.dp, vertical = 2.dp),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = if (active) Color.White else SlateTextSecondary,
+                tint = iconTint,
                 modifier = Modifier.size(18.dp)
             )
         }
-        Spacer(Modifier.height(2.dp))
+        Spacer(Modifier.height(1.dp))
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = if (active) CyanAccent else SlateTextSecondary,
+            color = labelTint,
+            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
             fontSize = 9.5.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

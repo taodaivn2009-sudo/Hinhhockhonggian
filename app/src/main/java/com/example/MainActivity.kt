@@ -47,7 +47,10 @@ import com.example.ui.panes.SaveExportModal
 import com.example.ui.theme.AppThemeUiState
 import com.example.ui.theme.AppThemeViewModel
 import com.example.ui.theme.Geo3DTheme
+import com.example.ui.theme.LocalLiquidGlassBackdrop
 import com.example.ui.theme.ThemePaletteResolver
+import com.example.ui.theme.liquidGlassBackdropSource
+import com.example.ui.theme.rememberLiquidGlassBackdropState
 import com.example.update.AppUpdateViewModel
 import com.example.update.UpdateAvailableBanner
 import com.example.update.UpdateDetailsDialog
@@ -148,8 +151,11 @@ fun ToolToanRootScreen(
                 onSelectAccentColor = { themeViewModel.selectAccentColor(it) },
                 onToggleLiquidGlass = { themeViewModel.toggleLiquidGlass(it) },
                 onApplyLiquidGlassStyle = { themeViewModel.applyLiquidGlassStyle(it) },
-                onUpdateLiquidGlass = { t, s, r, b, sh, hc ->
+                onUpdateLiquidGlass = { blur, ref, disp, t, s, r, b, sh, hc ->
                     themeViewModel.updateLiquidGlass(
+                        blurRadius = blur,
+                        refraction = ref,
+                        chromaticDispersion = disp,
                         translucency = t,
                         specularGlow = s,
                         refractionTint = r,
@@ -358,16 +364,21 @@ fun GeometryStudioScreen(
         launchPicker(fileName)
     }
 
+    val backdropState = rememberLiquidGlassBackdropState()
+
+    CompositionLocalProvider(LocalLiquidGlassBackdrop provides backdropState) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isCompactWidth = maxWidth < 600.dp
         val maxSheetHeight = (maxHeight * 0.56f).coerceIn(280.dp, 480.dp)
 
-        // 1. Full-bleed Interactive 3D Viewport
+        // 1. Full-bleed Interactive 3D Viewport (live GPU backdrop source for all Liquid Glass HUD bars!)
         GeometryCanvasView(
             uiState = uiState,
             viewModel = viewModel,
             onCanvasSizeChanged = { canvasSize = it },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .liquidGlassBackdropSource(backdropState)
         )
 
         // 2. Top Studio Header (Unified 4-Tab Switcher + Shape Selector + Live Metrics + Camera Presets)
@@ -488,6 +499,7 @@ fun GeometryStudioScreen(
             },
             onImportJsonClick = { importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
         )
+    }
     }
 }
 

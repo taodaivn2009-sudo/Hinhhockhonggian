@@ -26,7 +26,7 @@ enum class AppThemePreset(
     LIQUID_GLASS_DARK(
         id = "liquid_glass_dark",
         title = "Liquid Glass Tối",
-        subtitle = "Kính lỏng trong suốt phản quang",
+        subtitle = "Kính lỏng khúc xạ & mờ nền trực tiếp",
         isDark = true,
         isLiquidGlass = true,
         previewBg = Color(0xFF061024),
@@ -36,7 +36,7 @@ enum class AppThemePreset(
     LIQUID_GLASS_LIGHT(
         id = "liquid_glass_light",
         title = "Liquid Glass Sáng",
-        subtitle = "Pha lê băng trong trẻo hiện đại",
+        subtitle = "Pha lê băng trong trẻo khúc xạ",
         isDark = false,
         isLiquidGlass = true,
         previewBg = Color(0xFFDCEBFF),
@@ -111,25 +111,35 @@ enum class AppThemePreset(
 }
 
 /**
- * Fine-grained optical controls for the Liquid Glass material renderer.
+ * Real-time GPU optical parameters for the Liquid Glass backdrop blur, lens refraction,
+ * chromatic dispersion, and specular Fresnel rim highlights.
  */
 data class LiquidGlassConfig(
     val enabled: Boolean = false,
-    /** 0.25f..0.90f — higher means clearer, more transparent crystal glass */
-    val translucency: Float = 0.62f,
+    /** 4f..36f dp — live backdrop Gaussian blur radius behind glass capsules */
+    val blurRadius: Float = 16f,
+    /** 0.0f..1.0f — convex edge lens refraction / optical distortion strength (AGSL shader) */
+    val refraction: Float = 0.78f,
+    /** 0.0f..1.0f — prismatic RGB chromatic aberration along curved glass rims */
+    val chromaticDispersion: Float = 0.50f,
+    /** 0.25f..0.95f — higher means clearer, more transparent crystal glass */
+    val translucency: Float = 0.78f,
     /** 0.0f..1.0f — specular top-bevel highlight & glossy sheen intensity */
-    val specularGlow: Float = 0.72f,
-    /** 0.0f..1.0f — chromatic tint & aurora refraction intensity */
-    val refractionTint: Float = 0.58f,
-    /** 0.2f..1.0f — prismatic rim border brightness & stroke thickness */
-    val borderIntensity: Float = 0.78f,
+    val specularGlow: Float = 0.84f,
+    /** 0.0f..1.0f — subtle chromatic glass tint & ambient aurora glow */
+    val refractionTint: Float = 0.28f,
+    /** 0.2f..1.0f — crisp Fresnel rim border brightness & thickness */
+    val borderIntensity: Float = 0.82f,
     /** Smooth animated specular shimmer sweep across glass panels */
     val dynamicShimmer: Boolean = true,
-    /** Boosts frosted glass opacity slightly for extra legibility */
+    /** Boosts frosted glass opacity slightly for extra text legibility */
     val highContrastText: Boolean = false
 ) {
     fun sanitized(): LiquidGlassConfig = copy(
-        translucency = translucency.coerceIn(0.25f, 0.90f),
+        blurRadius = blurRadius.coerceIn(4f, 36f),
+        refraction = refraction.coerceIn(0f, 1f),
+        chromaticDispersion = chromaticDispersion.coerceIn(0f, 1f),
+        translucency = translucency.coerceIn(0.25f, 0.95f),
         specularGlow = specularGlow.coerceIn(0f, 1f),
         refractionTint = refractionTint.coerceIn(0f, 1f),
         borderIntensity = borderIntensity.coerceIn(0.2f, 1f)
@@ -143,25 +153,31 @@ enum class LiquidGlassPresetStyle(
 ) {
     CRYSTAL(
         id = "crystal",
-        label = "Pha lê trong",
+        label = "Pha lê chuẩn",
         config = LiquidGlassConfig(
             enabled = true,
-            translucency = 0.80f,
-            specularGlow = 0.92f,
-            refractionTint = 0.70f,
-            borderIntensity = 0.92f,
+            blurRadius = 14f,
+            refraction = 0.86f,
+            chromaticDispersion = 0.58f,
+            translucency = 0.84f,
+            specularGlow = 0.88f,
+            refractionTint = 0.20f,
+            borderIntensity = 0.88f,
             dynamicShimmer = true,
             highContrastText = false
         )
     ),
     FROSTED(
         id = "frosted",
-        label = "Kính mờ chuẩn",
+        label = "Kính mờ sương",
         config = LiquidGlassConfig(
             enabled = true,
-            translucency = 0.62f,
-            specularGlow = 0.72f,
-            refractionTint = 0.58f,
+            blurRadius = 22f,
+            refraction = 0.65f,
+            chromaticDispersion = 0.35f,
+            translucency = 0.66f,
+            specularGlow = 0.74f,
+            refractionTint = 0.38f,
             borderIntensity = 0.78f,
             dynamicShimmer = true,
             highContrastText = false
@@ -172,10 +188,13 @@ enum class LiquidGlassPresetStyle(
         label = "Kính dịu mắt",
         config = LiquidGlassConfig(
             enabled = true,
-            translucency = 0.38f,
-            specularGlow = 0.45f,
-            refractionTint = 0.35f,
-            borderIntensity = 0.55f,
+            blurRadius = 28f,
+            refraction = 0.36f,
+            chromaticDispersion = 0.14f,
+            translucency = 0.44f,
+            specularGlow = 0.48f,
+            refractionTint = 0.26f,
+            borderIntensity = 0.58f,
             dynamicShimmer = false,
             highContrastText = true
         )
@@ -275,7 +294,6 @@ object ThemePaletteResolver {
         val useDark = resolveIsDark(config, systemDark)
         val safeGlass = config.liquidGlass.sanitized()
 
-        // Pick base surfaces matching the chosen preset when brightness aligns, or a clean counterpart when toggled
         val basePreset = if (config.preset.isDark == useDark) {
             config.preset
         } else {
@@ -297,7 +315,6 @@ object ThemePaletteResolver {
         val primary = if (useDark) {
             baseAccent
         } else {
-            // Keep primary slightly deeper on light surfaces for strong button contrast
             lerp(baseAccent, Color(0xFF0F172A), 0.14f)
         }
         val primaryBright = if (useDark) lerp(primary, Color.White, 0.18f) else primary
@@ -307,15 +324,15 @@ object ThemePaletteResolver {
         return if (useDark) {
             val (bgDeepest, bgDark, surface, border, muted, bgInner, bgOuter, gMinor, gMajor) = when (basePreset) {
                 AppThemePreset.LIQUID_GLASS_DARK -> SurfaceTuple(
-                    bgDeepest = Color(0xFF050B18),
-                    bgDark = Color(0xFF0D1B34),
-                    surface = Color(0xFF172C52),
-                    border = Color(0xFF3A5F94),
+                    bgDeepest = Color(0xFF050A14),
+                    bgDark = Color(0xFF0C172B),
+                    surface = Color(0xFF162745),
+                    border = Color(0xFF3A5A8A),
                     muted = Color(0xFF567EB5),
-                    bgInner = 0xFF142A4F.toInt(),
-                    bgOuter = 0xFF040914.toInt(),
-                    gMinor = 0xFF122342.toInt(),
-                    gMajor = 0xFF213C6B.toInt()
+                    bgInner = 0xFF13274A.toInt(),
+                    bgOuter = 0xFF040812.toInt(),
+                    gMinor = 0xFF11223E.toInt(),
+                    gMajor = 0xFF203A66.toInt()
                 )
                 AppThemePreset.CHALKBOARD_FOREST -> SurfaceTuple(
                     bgDeepest = Color(0xFF06140F),
@@ -360,9 +377,9 @@ object ThemePaletteResolver {
                 surface = surface,
                 border = border,
                 muted = muted,
-                textSecondary = if (safeGlass.enabled && safeGlass.highContrastText) Color(0xFFCBD5E1) else Color(0xFF94A3B8),
-                textLight = if (safeGlass.enabled && safeGlass.highContrastText) Color(0xFFE2E8F0) else Color(0xFFCBD5E1),
-                textPrimary = Color(0xFFF8FAFC),
+                textSecondary = if (safeGlass.enabled) Color(0xFFDCE6F2) else Color(0xFF94A3B8),
+                textLight = if (safeGlass.enabled) Color(0xFFF1F5F9) else Color(0xFFCBD5E1),
+                textPrimary = Color(0xFFFFFFFF),
                 primary = primary,
                 primaryBright = primaryBright,
                 primaryLight = primaryLight,
@@ -390,7 +407,7 @@ object ThemePaletteResolver {
                     edgeSolidArgb = 0xFFF8FAFC.toInt(),
                     edgeDashedArgb = 0xFF94A3B8.toInt(),
                     faceTintArgb = primaryBright.toArgb(),
-                    labelPillBgArgb = bgDark.copy(alpha = if (safeGlass.enabled) 0.74f else 0.86f).toArgb(),
+                    labelPillBgArgb = bgDark.copy(alpha = if (safeGlass.enabled) 0.70f else 0.86f).toArgb(),
                     labelTextArgb = 0xFFF8FAFC.toInt()
                 )
             )
@@ -450,8 +467,8 @@ object ThemePaletteResolver {
                 surface = surface,
                 border = border,
                 muted = muted,
-                textSecondary = if (safeGlass.enabled && safeGlass.highContrastText) Color(0xFF1E293B) else Color(0xFF475569),
-                textLight = if (safeGlass.enabled && safeGlass.highContrastText) Color(0xFF0F172A) else Color(0xFF334155),
+                textSecondary = if (safeGlass.enabled) Color(0xFF1E293B) else Color(0xFF475569),
+                textLight = if (safeGlass.enabled) Color(0xFF0F172A) else Color(0xFF334155),
                 textPrimary = Color(0xFF0F172A),
                 primary = primary,
                 primaryBright = primary,
@@ -480,7 +497,7 @@ object ThemePaletteResolver {
                     edgeSolidArgb = 0xFF0F172A.toInt(),
                     edgeDashedArgb = 0xFF64748B.toInt(),
                     faceTintArgb = primary.toArgb(),
-                    labelPillBgArgb = bgDark.copy(alpha = if (safeGlass.enabled) 0.78f else 0.92f).toArgb(),
+                    labelPillBgArgb = bgDark.copy(alpha = if (safeGlass.enabled) 0.74f else 0.92f).toArgb(),
                     labelTextArgb = 0xFF0F172A.toInt()
                 )
             )

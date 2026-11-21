@@ -20,6 +20,9 @@ class ThemePreferences(context: Context) {
         val defaultGlass = LiquidGlassConfig(enabled = preset.isLiquidGlass)
         val liquidGlass = LiquidGlassConfig(
             enabled = prefs.getBoolean(KEY_LG_ENABLED, defaultGlass.enabled),
+            blurRadius = prefs.getFloat(KEY_LG_BLUR, defaultGlass.blurRadius),
+            refraction = prefs.getFloat(KEY_LG_LENS_REFRACTION, defaultGlass.refraction),
+            chromaticDispersion = prefs.getFloat(KEY_LG_DISPERSION, defaultGlass.chromaticDispersion),
             translucency = prefs.getFloat(KEY_LG_TRANSLUCENCY, defaultGlass.translucency),
             specularGlow = prefs.getFloat(KEY_LG_SPECULAR, defaultGlass.specularGlow),
             refractionTint = prefs.getFloat(KEY_LG_REFRACTION, defaultGlass.refractionTint),
@@ -46,6 +49,9 @@ class ThemePreferences(context: Context) {
                 remove(KEY_ACCENT_ARGB)
             }
             putBoolean(KEY_LG_ENABLED, lg.enabled)
+            putFloat(KEY_LG_BLUR, lg.blurRadius)
+            putFloat(KEY_LG_LENS_REFRACTION, lg.refraction)
+            putFloat(KEY_LG_DISPERSION, lg.chromaticDispersion)
             putFloat(KEY_LG_TRANSLUCENCY, lg.translucency)
             putFloat(KEY_LG_SPECULAR, lg.specularGlow)
             putFloat(KEY_LG_REFRACTION, lg.refractionTint)
@@ -61,6 +67,9 @@ class ThemePreferences(context: Context) {
         private const val KEY_PRESET = "theme_preset"
         private const val KEY_ACCENT_ARGB = "theme_custom_accent_argb"
         private const val KEY_LG_ENABLED = "lg_enabled"
+        private const val KEY_LG_BLUR = "lg_blur_radius"
+        private const val KEY_LG_LENS_REFRACTION = "lg_lens_refraction"
+        private const val KEY_LG_DISPERSION = "lg_chromatic_dispersion"
         private const val KEY_LG_TRANSLUCENCY = "lg_translucency"
         private const val KEY_LG_SPECULAR = "lg_specular"
         private const val KEY_LG_REFRACTION = "lg_refraction"
@@ -128,6 +137,9 @@ class AppThemeViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun updateLiquidGlass(
+        blurRadius: Float? = null,
+        refraction: Float? = null,
+        chromaticDispersion: Float? = null,
         translucency: Float? = null,
         specularGlow: Float? = null,
         refractionTint: Float? = null,
@@ -140,6 +152,9 @@ class AppThemeViewModel(application: Application) : AndroidViewModel(application
             cfg.copy(
                 liquidGlass = lg.copy(
                     enabled = true,
+                    blurRadius = blurRadius ?: lg.blurRadius,
+                    refraction = refraction ?: lg.refraction,
+                    chromaticDispersion = chromaticDispersion ?: lg.chromaticDispersion,
                     translucency = translucency ?: lg.translucency,
                     specularGlow = specularGlow ?: lg.specularGlow,
                     refractionTint = refractionTint ?: lg.refractionTint,
