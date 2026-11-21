@@ -90,11 +90,17 @@ fun StudioInspectorSheet(
                 .fillMaxHeight()
         }
 
+        val isGlass = ActiveThemeState.current.liquidGlass.enabled
+        val headerBg = if (isGlass) SlateDeepest.copy(alpha = 0.42f) else SlateDeepest
+
         Column(
             modifier = containerModifier
-                .clip(RoundedCornerShape(16.dp))
-                .background(SlateDark.copy(alpha = 0.96f))
-                .border(1.dp, SlateBorder, RoundedCornerShape(16.dp))
+                .liquidGlassSurface(
+                    shape = RoundedCornerShape(16.dp),
+                    elevated = true,
+                    fallbackBg = SlateDark.copy(alpha = 0.96f),
+                    fallbackBorder = SlateBorder
+                )
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
@@ -105,7 +111,7 @@ fun StudioInspectorSheet(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(SlateDeepest)
+                        .background(headerBg)
                         .clickable { viewModel.closeLeftPane() }
                         .padding(top = 7.dp, bottom = 2.dp),
                     contentAlignment = Alignment.Center
@@ -124,7 +130,7 @@ fun StudioInspectorSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SlateDeepest)
+                    .background(headerBg)
                     .padding(horizontal = 14.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween

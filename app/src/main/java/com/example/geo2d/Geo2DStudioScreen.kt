@@ -78,9 +78,12 @@ fun WorkspaceModeSwitch(
 ) {
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(13.dp))
-            .background(SlateDeepest.copy(alpha = 0.95f))
-            .border(1.dp, SlateBorder.copy(alpha = 0.9f), RoundedCornerShape(13.dp))
+            .liquidGlassSurface(
+                shape = RoundedCornerShape(14.dp),
+                elevated = false,
+                fallbackBg = SlateDeepest.copy(alpha = 0.95f),
+                fallbackBorder = SlateBorder.copy(alpha = 0.9f)
+            )
             .padding(3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(3.dp)
@@ -601,9 +604,12 @@ private fun Geo2DTopHeader(
             Row(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(SlateDark.copy(alpha = 0.90f))
-                    .border(1.dp, if (uiState.activeTab == Geo2DTab.FUNCTIONS) EmeraldAccent else SlateBorder.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
+                    .liquidGlassSurface(
+                        shape = RoundedCornerShape(12.dp),
+                        fallbackBg = SlateDark.copy(alpha = 0.90f),
+                        fallbackBorder = SlateBorder.copy(alpha = 0.8f),
+                        accentBorder = if (uiState.activeTab == Geo2DTab.FUNCTIONS) EmeraldAccent else null
+                    )
                     .clickable { viewModel.toggleTab(Geo2DTab.FUNCTIONS) }
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -624,9 +630,11 @@ private fun Geo2DTopHeader(
 
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(SlateDark.copy(alpha = 0.90f))
-                    .border(1.dp, SlateBorder.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
+                    .liquidGlassSurface(
+                        shape = RoundedCornerShape(12.dp),
+                        fallbackBg = SlateDark.copy(alpha = 0.90f),
+                        fallbackBorder = SlateBorder.copy(alpha = 0.8f)
+                    )
                     .padding(horizontal = 3.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -644,9 +652,11 @@ private fun Geo2DTopHeader(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 680.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(SlateDeepest.copy(alpha = 0.92f))
-                    .border(1.dp, CyanAccent.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
+                    .liquidGlassSurface(
+                        shape = RoundedCornerShape(10.dp),
+                        fallbackBg = SlateDeepest.copy(alpha = 0.92f),
+                        accentBorder = CyanAccent.copy(alpha = 0.6f)
+                    )
                     .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -714,9 +724,11 @@ private fun Geo2DRightQuickControls(
     Column(
         modifier = modifier
             .padding(end = 8.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(SlateDark.copy(alpha = 0.84f))
-            .border(1.dp, SlateBorder.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+            .liquidGlassSurface(
+                shape = RoundedCornerShape(14.dp),
+                fallbackBg = SlateDark.copy(alpha = 0.84f),
+                fallbackBorder = SlateBorder.copy(alpha = 0.7f)
+            )
             .padding(vertical = 5.dp, horizontal = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(3.dp)
@@ -787,11 +799,17 @@ private fun Geo2DInspectorSheet(
                 .fillMaxHeight()
         }
 
+        val isGlass2D = ActiveThemeState.current.liquidGlass.enabled
+        val headerBg2D = if (isGlass2D) SlateDeepest.copy(alpha = 0.42f) else SlateDeepest
+
         Column(
             modifier = containerMod
-                .clip(shape)
-                .background(SlateDark.copy(alpha = 0.96f))
-                .border(1.dp, SlateBorder.copy(alpha = 0.85f), shape)
+                .liquidGlassSurface(
+                    shape = shape,
+                    elevated = true,
+                    fallbackBg = SlateDark.copy(alpha = 0.96f),
+                    fallbackBorder = SlateBorder.copy(alpha = 0.85f)
+                )
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
@@ -801,7 +819,7 @@ private fun Geo2DInspectorSheet(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(SlateDeepest)
+                        .background(headerBg2D)
                         .clickable { viewModel.closeTab() }
                         .padding(top = 7.dp, bottom = 2.dp),
                     contentAlignment = Alignment.Center
@@ -818,7 +836,7 @@ private fun Geo2DInspectorSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SlateDeepest)
+                    .background(headerBg2D)
                     .padding(horizontal = 14.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -920,9 +938,11 @@ private fun Geo2DBottomDock(
         AnimatedVisibility(visible = uiState.activeTab == null) {
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(13.dp))
-                    .background(SlateDark.copy(alpha = 0.9f))
-                    .border(1.dp, SlateBorder.copy(alpha = 0.75f), RoundedCornerShape(13.dp))
+                    .liquidGlassSurface(
+                        shape = RoundedCornerShape(13.dp),
+                        fallbackBg = SlateDark.copy(alpha = 0.9f),
+                        fallbackBorder = SlateBorder.copy(alpha = 0.75f)
+                    )
                     .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 5.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
@@ -965,9 +985,12 @@ private fun Geo2DBottomDock(
             modifier = Modifier
                 .widthIn(max = 520.dp)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(SlateDark.copy(alpha = 0.95f))
-                .border(1.dp, SlateBorder.copy(alpha = 0.8f), RoundedCornerShape(16.dp))
+                .liquidGlassSurface(
+                    shape = RoundedCornerShape(16.dp),
+                    elevated = true,
+                    fallbackBg = SlateDark.copy(alpha = 0.95f),
+                    fallbackBorder = SlateBorder.copy(alpha = 0.8f)
+                )
                 .padding(horizontal = 5.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically

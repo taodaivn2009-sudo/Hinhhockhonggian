@@ -2,6 +2,14 @@
 
 ## Bản cập nhật mới nhất
 
+### Chủ đề Liquid Glass & Bộ cài đặt chất liệu kính lỏng
+- **2 chủ đề Liquid Glass thiết kế riêng:** Thêm **Liquid Glass Tối** (*kính lỏng trong suốt phản quang*) và **Liquid Glass Sáng** (*pha lê băng trong trẻo*), tự động chuyển đổi đồng bộ giữa chế độ Sáng/Tối kèm nền cực quang chiều sâu phía sau các thẻ kính.
+- **Bộ cài đặt Liquid Glass chuyên sâu trong Tab Cài đặt:**
+  - Công tắc bật/tắt **Liquid Glass** (dùng được độc lập cho mọi chủ đề màu sắc khác nhau).
+  - 3 kiểu chất liệu nhanh 1 chạm: **Pha lê trong**, **Kính mờ chuẩn**, **Kính dịu mắt**.
+  - 4 thanh trượt quang học thời gian thực: **Độ trong suốt kính**, **Ánh phản quang bề mặt**, **Tán sắc màu & nền cực quang**, và **Độ sáng viền pha lê**.
+  - 2 tùy chọn nâng cao: **Ánh sáng lướt động (Liquid Shimmer)** và **Tăng tương phản chữ trên kính**, lưu tự động vào bộ nhớ máy.
+
 ### Viết lại giao diện gọn gàng & Tách riêng Cài đặt ứng dụng / Cài đặt hình
 - **Thanh điều hướng 4 không gian thống nhất:** Làm mới toàn bộ đầu trang trên **3D | 2D | Tài liệu | Cài đặt** với giao diện đồng bộ, gọn thoáng, loại bỏ hoàn toàn các nút nổi chồng chéo trên màn hình vẽ.
 - **Tab Cài đặt ứng dụng chuyên biệt:** Gom toàn bộ cài đặt chung của ứng dụng vào 1 nơi duy nhất — **Chủ đề & Màu sắc giao diện** (Sáng/Tối/Hệ thống, 6 bộ màu gợi ý, thanh pha sắc Hue tự do), **Độ nhạy cảm ứng 3D & 2D**, **Kiểm tra & Cài đặt bản cập nhật từ GitHub** (có chấm xanh báo khi có bản mới) và **Thông tin ứng dụng**.

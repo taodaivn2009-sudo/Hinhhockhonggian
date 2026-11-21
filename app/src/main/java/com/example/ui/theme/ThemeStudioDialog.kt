@@ -1,5 +1,6 @@
 package com.example.ui.theme
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,6 +29,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
@@ -58,7 +61,7 @@ fun ThemeStudioSection(
             .testTag("theme_studio_section"),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // 1. Live Interactive Mini Preview Card
+        // 1. Live Interactive Mini Preview Card (shows Liquid Glass lens in real time)
         ThemeLivePreviewCard(palette = activePalette)
 
         // 2. Brightness Mode Selector (Tối / Sáng / Theo máy)
@@ -73,7 +76,7 @@ fun ThemeStudioSection(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
-                    .background(SlateDeepest)
+                    .background(SlateDeepest.copy(alpha = if (activePalette.liquidGlass.enabled) 0.55f else 1f))
                     .border(1.dp, SlateBorder, RoundedCornerShape(12.dp))
                     .padding(4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -115,7 +118,7 @@ fun ThemeStudioSection(
             }
         }
 
-        // 3. Curated Presets Grid (6 Light & Dark Suggestions)
+        // 3. Curated Presets Grid (8 Light, Dark & Liquid Glass Suggestions)
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
                 text = "Gợi ý chủ đề nổi bật",
@@ -136,6 +139,7 @@ fun ThemeStudioSection(
                             modifier = Modifier.weight(1f)
                         )
                     }
+                    if (pair.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
         }
@@ -145,7 +149,7 @@ fun ThemeStudioSection(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(14.dp))
-                .background(SlateDeepest)
+                .background(SlateDeepest.copy(alpha = if (activePalette.liquidGlass.enabled) 0.45f else 1f))
                 .border(1.dp, SlateBorder, RoundedCornerShape(14.dp))
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -287,6 +291,266 @@ fun ThemeStudioSection(
     }
 }
 
+/**
+ * Dedicated Liquid Glass optical calibration section inside the App Settings tab.
+ */
+@Composable
+fun LiquidGlassSettingsSection(
+    config: LiquidGlassConfig,
+    onToggleEnabled: (Boolean) -> Unit,
+    onApplyPresetStyle: (LiquidGlassPresetStyle) -> Unit,
+    onUpdateTranslucency: (Float) -> Unit,
+    onUpdateSpecularGlow: (Float) -> Unit,
+    onUpdateRefractionTint: (Float) -> Unit,
+    onUpdateBorderIntensity: (Float) -> Unit,
+    onToggleDynamicShimmer: (Boolean) -> Unit,
+    onToggleHighContrastText: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("liquid_glass_settings_section"),
+        verticalArrangement = Arrangement.spacedBy(11.dp)
+    ) {
+        // Master Toggle Row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(
+                    if (config.enabled) CyanAccent.copy(alpha = 0.14f)
+                    else SlateDeepest.copy(alpha = 0.65f)
+                )
+                .border(
+                    width = 1.dp,
+                    color = if (config.enabled) CyanAccent.copy(alpha = 0.65f) else SlateBorder,
+                    shape = RoundedCornerShape(12.dp)
+                )
+                .clickable { onToggleEnabled(!config.enabled) }
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .testTag("liquid_glass_master_toggle"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "Bật chất liệu Liquid Glass",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = SlateTextPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = if (config.enabled) {
+                        "Đang bật kính lỏng trong suốt cho thanh nổi, bảng & thẻ"
+                    } else {
+                        "Có thể bật kết hợp cùng bất kỳ chủ đề sáng/tối nào"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SlateTextSecondary,
+                    fontSize = 11.sp
+                )
+            }
+            Switch(
+                checked = config.enabled,
+                onCheckedChange = onToggleEnabled,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = CyanAccent
+                )
+            )
+        }
+
+        AnimatedVisibility(visible = config.enabled) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // Quick Liquid Glass Presets
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "Kiểu chất liệu kính nhanh",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = SlateTextSecondary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        LiquidGlassPresetStyle.entries.forEach { style ->
+                            val isActive = abs(config.translucency - style.config.translucency) < 0.04f &&
+                                abs(config.specularGlow - style.config.specularGlow) < 0.05f &&
+                                config.highContrastText == style.config.highContrastText
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .defaultMinSize(minHeight = 38.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (isActive) CyanAccent.copy(alpha = 0.24f) else SlateDeepest.copy(alpha = 0.5f))
+                                    .border(
+                                        width = if (isActive) 1.4.dp else 1.dp,
+                                        color = if (isActive) CyanAccent else SlateBorder,
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                    .clickable { onApplyPresetStyle(style) }
+                                    .padding(horizontal = 6.dp, vertical = 7.dp)
+                                    .testTag("lg_style_${style.id}"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = style.label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isActive) CyanAccent else SlateTextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 4 Real-Time Optical Sliders
+                LiquidGlassSliderRow(
+                    label = "Độ trong suốt kính",
+                    value = config.translucency,
+                    range = 0.25f..0.90f,
+                    accent = CyanAccent,
+                    testTag = "lg_slider_translucency",
+                    onValueChange = onUpdateTranslucency
+                )
+                LiquidGlassSliderRow(
+                    label = "Ánh phản quang bề mặt",
+                    value = config.specularGlow,
+                    range = 0f..1f,
+                    accent = IndigoBright,
+                    testTag = "lg_slider_specular",
+                    onValueChange = onUpdateSpecularGlow
+                )
+                LiquidGlassSliderRow(
+                    label = "Tán sắc màu & nền cực quang",
+                    value = config.refractionTint,
+                    range = 0f..1f,
+                    accent = PurpleAccent,
+                    testTag = "lg_slider_refraction",
+                    onValueChange = onUpdateRefractionTint
+                )
+                LiquidGlassSliderRow(
+                    label = "Độ sáng viền pha lê",
+                    value = config.borderIntensity,
+                    range = 0.2f..1f,
+                    accent = EmeraldAccent,
+                    testTag = "lg_slider_border",
+                    onValueChange = onUpdateBorderIntensity
+                )
+
+                HorizontalDivider(color = SlateBorder.copy(alpha = 0.5f))
+
+                // 2 Toggle Switches
+                LiquidGlassToggleRow(
+                    title = "Ánh sáng lướt động (Liquid Shimmer)",
+                    subtitle = "Hiệu ứng vệt sáng chuyển động nhẹ qua bề mặt kính",
+                    checked = config.dynamicShimmer,
+                    testTag = "lg_toggle_shimmer",
+                    onCheckedChange = onToggleDynamicShimmer
+                )
+                LiquidGlassToggleRow(
+                    title = "Tăng tương phản chữ trên kính",
+                    subtitle = "Làm đục nhẹ lớp kính nền để đọc công thức rõ hơn",
+                    checked = config.highContrastText,
+                    testTag = "lg_toggle_high_contrast",
+                    onCheckedChange = onToggleHighContrastText
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiquidGlassSliderRow(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    accent: Color,
+    testTag: String,
+    onValueChange: (Float) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = SlateTextPrimary
+            )
+            Text(
+                text = "${(value * 100f).roundToInt()}%",
+                style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily),
+                color = accent,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Slider(
+            value = value.coerceIn(range.start, range.endInclusive),
+            onValueChange = onValueChange,
+            valueRange = range,
+            colors = SliderDefaults.colors(
+                thumbColor = accent,
+                activeTrackColor = accent,
+                inactiveTrackColor = SlateBorder
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(28.dp)
+                .testTag(testTag)
+        )
+    }
+}
+
+@Composable
+private fun LiquidGlassToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    testTag: String,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 4.dp)
+            .testTag(testTag),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodySmall,
+                color = SlateTextPrimary,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = SlateTextSecondary,
+                fontSize = 10.5.sp
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = IndigoBright
+            )
+        )
+    }
+}
+
 @Composable
 fun ThemeLivePreviewCard(palette: AppThemePalette) {
     val gridColor = Color(palette.canvas.gridMajorArgb)
@@ -294,16 +558,40 @@ fun ThemeLivePreviewCard(palette: AppThemePalette) {
     val curveColor = palette.primaryBright
     val bgTop = Color(palette.canvas.bgInnerArgb)
     val bgBottom = Color(palette.canvas.bgOuterArgb)
+    val lg = palette.liquidGlass
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(92.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .height(106.dp)
+            .clip(RoundedCornerShape(15.dp))
             .background(Brush.verticalGradient(listOf(bgTop, bgBottom)))
-            .border(1.dp, palette.border, RoundedCornerShape(14.dp))
+            .border(1.dp, palette.border, RoundedCornerShape(15.dp))
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
+            // Luminous aurora spheres behind preview when Liquid Glass is active
+            if (lg.enabled) {
+                val glow = 0.32f + lg.refractionTint * 0.45f
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(palette.primaryBright.copy(alpha = glow), Color.Transparent),
+                        center = Offset(size.width * 0.22f, size.height * 0.25f),
+                        radius = size.width * 0.42f
+                    ),
+                    radius = size.width * 0.42f,
+                    center = Offset(size.width * 0.22f, size.height * 0.25f)
+                )
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(palette.cyanAccent.copy(alpha = glow * 0.85f), Color.Transparent),
+                        center = Offset(size.width * 0.78f, size.height * 0.72f),
+                        radius = size.width * 0.40f
+                    ),
+                    radius = size.width * 0.40f,
+                    center = Offset(size.width * 0.78f, size.height * 0.72f)
+                )
+            }
+
             val cols = 8
             val rows = 4
             for (c in 1 until cols) {
@@ -314,7 +602,7 @@ fun ThemeLivePreviewCard(palette: AppThemePalette) {
                 val y = size.height * r / rows
                 drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.2f)
             }
-            drawLine(axisColor, Offset(0f, size.height * 0.55f), Offset(size.width, size.height * 0.55f), strokeWidth = 2f)
+            drawLine(axisColor, Offset(0f, size.height * 0.56f), Offset(size.width, size.height * 0.56f), strokeWidth = 2f)
             drawLine(axisColor, Offset(size.width * 0.35f, 0f), Offset(size.width * 0.35f, size.height), strokeWidth = 2f)
 
             val path = Path()
@@ -322,32 +610,44 @@ fun ThemeLivePreviewCard(palette: AppThemePalette) {
             for (i in 0..steps) {
                 val t = i.toFloat() / steps
                 val x = t * size.width
-                val y = size.height * 0.55f - sin(t * 3.2f * Math.PI.toFloat()) * size.height * 0.30f
+                val y = size.height * 0.56f - sin(t * 3.2f * Math.PI.toFloat()) * size.height * 0.30f
                 if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
             }
-            drawPath(path, color = curveColor, style = Stroke(width = 4f, cap = StrokeCap.Round))
+            drawPath(path, color = curveColor, style = Stroke(width = 4.2f, cap = StrokeCap.Round))
         }
 
+        // Floating HUD preview pill rendered with active Liquid Glass surface!
         Row(
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .padding(8.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(palette.bgDark.copy(alpha = 0.92f))
-                .border(1.dp, palette.border, RoundedCornerShape(8.dp))
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+                .padding(9.dp)
+                .liquidGlassSurface(
+                    shape = RoundedCornerShape(10.dp),
+                    elevated = false,
+                    fallbackBg = palette.bgDark.copy(alpha = 0.92f),
+                    fallbackBorder = palette.border
+                )
+                .padding(horizontal = 9.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(5.dp))
+                    .clip(RoundedCornerShape(6.dp))
                     .background(palette.primary)
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {
                 Text("3D", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
             }
             Text("y = sin(x)", color = palette.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            if (lg.enabled) {
+                Text(
+                    text = "Glass",
+                    color = palette.cyanAccent,
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 }
@@ -359,10 +659,17 @@ private fun ThemePresetCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val activeGlass = ActiveThemeState.current.liquidGlass.enabled
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(13.dp))
-            .background(if (selected) IndigoPrimary.copy(alpha = 0.14f) else SlateDeepest)
+            .background(
+                when {
+                    selected -> IndigoPrimary.copy(alpha = 0.18f)
+                    activeGlass -> SlateDeepest.copy(alpha = 0.48f)
+                    else -> SlateDeepest
+                }
+            )
             .border(
                 width = if (selected) 1.6.dp else 1.dp,
                 color = if (selected) IndigoPrimary else SlateBorder,
@@ -401,20 +708,37 @@ private fun ThemePresetCard(
                 )
             }
 
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(
-                        if (preset.isDark) Color(0xFF1E293B) else Color(0xFFFEF3C7)
+            Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (preset.isLiquidGlass) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(CyanAccent.copy(alpha = 0.22f))
+                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "Glass",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = CyanAccent
+                        )
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(
+                            if (preset.isDark) Color(0xFF1E293B) else Color(0xFFFEF3C7)
+                        )
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = if (preset.isDark) "Tối" else "Sáng",
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (preset.isDark) Color(0xFF93C5FD) else Color(0xFFB45309)
                     )
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-            ) {
-                Text(
-                    text = if (preset.isDark) "Tối" else "Sáng",
-                    fontSize = 9.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (preset.isDark) Color(0xFF93C5FD) else Color(0xFFB45309)
-                )
+                }
             }
         }
 

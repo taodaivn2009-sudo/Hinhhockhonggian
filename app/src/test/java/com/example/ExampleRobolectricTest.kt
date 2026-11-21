@@ -497,8 +497,8 @@ class ExampleRobolectricTest {
 
     @Test
     fun `theme palette resolver presets custom accent and preferences persistence work cleanly`() {
-        // 1. All 6 curated presets resolve cleanly with matching Light/Dark canvas contrast
-        assertEquals(6, AppThemePreset.entries.size)
+        // 1. All 8 curated presets (including Liquid Glass Light & Dark) resolve cleanly
+        assertEquals(8, AppThemePreset.entries.size)
         AppThemePreset.entries.forEach { preset ->
             val mode = if (preset.isDark) AppThemeMode.DARK else AppThemeMode.LIGHT
             val palette = ThemePaletteResolver.resolve(AppThemeConfig(mode = mode, preset = preset), systemDark = true)
@@ -594,6 +594,51 @@ class ExampleRobolectricTest {
         val wsPrefs = Geo2DPersistence(app)
         wsPrefs.saveLastWorkspace(MathWorkspace.SETTINGS)
         assertEquals(MathWorkspace.SETTINGS, wsPrefs.loadLastWorkspace())
+    }
+
+    @Test
+    fun `liquid glass presets optical math viewmodel controls and persistence work cleanly`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val vm = AppThemeViewModel(app)
+
+        // 1. Selecting Liquid Glass Dark enables Liquid Glass and resolves glass palette
+        vm.selectPreset(AppThemePreset.LIQUID_GLASS_DARK)
+        assertTrue(vm.uiState.value.config.liquidGlass.enabled)
+        assertEquals(AppThemeMode.DARK, vm.uiState.value.config.mode)
+
+        // Switching to Light mode keeps Liquid Glass paired to LIQUID_GLASS_LIGHT
+        vm.setThemeMode(AppThemeMode.LIGHT)
+        assertEquals(AppThemePreset.LIQUID_GLASS_LIGHT, vm.uiState.value.config.preset)
+        assertTrue(vm.uiState.value.config.liquidGlass.enabled)
+
+        // 2. Optical math: higher translucency lowers core alpha, highContrastText boosts alpha
+        val crystalAlpha = LiquidGlassMath.coreAlpha(LiquidGlassPresetStyle.CRYSTAL.config, isDark = true, elevated = false)
+        val softAlpha = LiquidGlassMath.coreAlpha(LiquidGlassPresetStyle.SOFT.config, isDark = true, elevated = false)
+        assertTrue("Crystal preset should be more transparent than Soft Frost", crystalAlpha < softAlpha)
+
+        // 3. Updating Liquid Glass sliders clamps safely and persists across ThemePreferences reload
+        vm.updateLiquidGlass(
+            translucency = 0.85f,
+            specularGlow = 0.90f,
+            refractionTint = 0.72f,
+            borderIntensity = 0.88f,
+            dynamicShimmer = false,
+            highContrastText = true
+        )
+        val reloaded = ThemePreferences(app).load()
+        assertTrue(reloaded.liquidGlass.enabled)
+        assertEquals(0.85f, reloaded.liquidGlass.translucency, 1e-3f)
+        assertEquals(0.90f, reloaded.liquidGlass.specularGlow, 1e-3f)
+        assertEquals(0.72f, reloaded.liquidGlass.refractionTint, 1e-3f)
+        assertEquals(0.88f, reloaded.liquidGlass.borderIntensity, 1e-3f)
+        assertFalse(reloaded.liquidGlass.dynamicShimmer)
+        assertTrue(reloaded.liquidGlass.highContrastText)
+
+        // 4. Liquid Glass can also be toggled cleanly on non-glass themes
+        vm.selectPreset(AppThemePreset.VIOLET_NEBULA)
+        assertFalse(vm.uiState.value.config.liquidGlass.enabled)
+        vm.toggleLiquidGlass(true)
+        assertTrue(vm.uiState.value.config.liquidGlass.enabled)
     }
 }
 

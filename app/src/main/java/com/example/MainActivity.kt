@@ -146,6 +146,18 @@ fun ToolToanRootScreen(
                 onSelectThemeMode = { themeViewModel.setThemeMode(it) },
                 onSelectThemePreset = { themeViewModel.selectPreset(it) },
                 onSelectAccentColor = { themeViewModel.selectAccentColor(it) },
+                onToggleLiquidGlass = { themeViewModel.toggleLiquidGlass(it) },
+                onApplyLiquidGlassStyle = { themeViewModel.applyLiquidGlassStyle(it) },
+                onUpdateLiquidGlass = { t, s, r, b, sh, hc ->
+                    themeViewModel.updateLiquidGlass(
+                        translucency = t,
+                        specularGlow = s,
+                        refractionTint = r,
+                        borderIntensity = b,
+                        dynamicShimmer = sh,
+                        highContrastText = hc
+                    )
+                },
                 onResetThemeDefault = { themeViewModel.resetToDefault() },
                 sensitivity = geoUiState.snapshot.sensitivity,
                 geometryViewModel = geometryViewModel,

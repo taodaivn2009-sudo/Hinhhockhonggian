@@ -18,15 +18,37 @@ enum class AppThemePreset(
     val title: String,
     val subtitle: String,
     val isDark: Boolean,
+    val isLiquidGlass: Boolean,
     val previewBg: Color,
     val previewSurface: Color,
     val previewAccent: Color
 ) {
+    LIQUID_GLASS_DARK(
+        id = "liquid_glass_dark",
+        title = "Liquid Glass Tối",
+        subtitle = "Kính lỏng trong suốt phản quang",
+        isDark = true,
+        isLiquidGlass = true,
+        previewBg = Color(0xFF061024),
+        previewSurface = Color(0xFF1A355E),
+        previewAccent = Color(0xFF38BDF8)
+    ),
+    LIQUID_GLASS_LIGHT(
+        id = "liquid_glass_light",
+        title = "Liquid Glass Sáng",
+        subtitle = "Pha lê băng trong trẻo hiện đại",
+        isDark = false,
+        isLiquidGlass = true,
+        previewBg = Color(0xFFDCEBFF),
+        previewSurface = Color(0xFFFFFFFF),
+        previewAccent = Color(0xFF0EA5E9)
+    ),
     MIDNIGHT_OBSERVATORY(
         id = "midnight_observatory",
         title = "Thiên Văn Tối",
         subtitle = "Xanh đêm dịu mắt • Mặc định",
         isDark = true,
+        isLiquidGlass = false,
         previewBg = Color(0xFF090D16),
         previewSurface = Color(0xFF1E293B),
         previewAccent = Color(0xFF4F46E5)
@@ -36,6 +58,7 @@ enum class AppThemePreset(
         title = "Giấy Trắng Học Tập",
         subtitle = "Sáng rõ như vở toán in",
         isDark = false,
+        isLiquidGlass = false,
         previewBg = Color(0xFFF4F7FB),
         previewSurface = Color(0xFFFFFFFF),
         previewAccent = Color(0xFF2563EB)
@@ -45,6 +68,7 @@ enum class AppThemePreset(
         title = "Bảng Xanh Lớp Học",
         subtitle = "Xanh bảng trầm chống mỏi mắt",
         isDark = true,
+        isLiquidGlass = false,
         previewBg = Color(0xFF071712),
         previewSurface = Color(0xFF122C23),
         previewAccent = Color(0xFF10B981)
@@ -54,6 +78,7 @@ enum class AppThemePreset(
         title = "Giấy Kem Nắng Ấm",
         subtitle = "Tông ấm đọc công thức êm mắt",
         isDark = false,
+        isLiquidGlass = false,
         previewBg = Color(0xFFF8F4EC),
         previewSurface = Color(0xFFFFFDF8),
         previewAccent = Color(0xFFD97706)
@@ -63,6 +88,7 @@ enum class AppThemePreset(
         title = "Ngân Hà Tím",
         subtitle = "Tím sâu hiện đại & sắc nét",
         isDark = true,
+        isLiquidGlass = false,
         previewBg = Color(0xFF0D091A),
         previewSurface = Color(0xFF1F1638),
         previewAccent = Color(0xFF8B5CF6)
@@ -72,6 +98,7 @@ enum class AppThemePreset(
         title = "Bầu Trời Sáng",
         subtitle = "Xanh băng tươi sáng hiện đại",
         isDark = false,
+        isLiquidGlass = false,
         previewBg = Color(0xFFEDF5FF),
         previewSurface = Color(0xFFFFFFFF),
         previewAccent = Color(0xFF0284C7)
@@ -81,6 +108,78 @@ enum class AppThemePreset(
         fun fromId(id: String?): AppThemePreset =
             entries.firstOrNull { it.id == id } ?: MIDNIGHT_OBSERVATORY
     }
+}
+
+/**
+ * Fine-grained optical controls for the Liquid Glass material renderer.
+ */
+data class LiquidGlassConfig(
+    val enabled: Boolean = false,
+    /** 0.25f..0.90f — higher means clearer, more transparent crystal glass */
+    val translucency: Float = 0.62f,
+    /** 0.0f..1.0f — specular top-bevel highlight & glossy sheen intensity */
+    val specularGlow: Float = 0.72f,
+    /** 0.0f..1.0f — chromatic tint & aurora refraction intensity */
+    val refractionTint: Float = 0.58f,
+    /** 0.2f..1.0f — prismatic rim border brightness & stroke thickness */
+    val borderIntensity: Float = 0.78f,
+    /** Smooth animated specular shimmer sweep across glass panels */
+    val dynamicShimmer: Boolean = true,
+    /** Boosts frosted glass opacity slightly for extra legibility */
+    val highContrastText: Boolean = false
+) {
+    fun sanitized(): LiquidGlassConfig = copy(
+        translucency = translucency.coerceIn(0.25f, 0.90f),
+        specularGlow = specularGlow.coerceIn(0f, 1f),
+        refractionTint = refractionTint.coerceIn(0f, 1f),
+        borderIntensity = borderIntensity.coerceIn(0.2f, 1f)
+    )
+}
+
+enum class LiquidGlassPresetStyle(
+    val id: String,
+    val label: String,
+    val config: LiquidGlassConfig
+) {
+    CRYSTAL(
+        id = "crystal",
+        label = "Pha lê trong",
+        config = LiquidGlassConfig(
+            enabled = true,
+            translucency = 0.80f,
+            specularGlow = 0.92f,
+            refractionTint = 0.70f,
+            borderIntensity = 0.92f,
+            dynamicShimmer = true,
+            highContrastText = false
+        )
+    ),
+    FROSTED(
+        id = "frosted",
+        label = "Kính mờ chuẩn",
+        config = LiquidGlassConfig(
+            enabled = true,
+            translucency = 0.62f,
+            specularGlow = 0.72f,
+            refractionTint = 0.58f,
+            borderIntensity = 0.78f,
+            dynamicShimmer = true,
+            highContrastText = false
+        )
+    ),
+    SOFT(
+        id = "soft",
+        label = "Kính dịu mắt",
+        config = LiquidGlassConfig(
+            enabled = true,
+            translucency = 0.38f,
+            specularGlow = 0.45f,
+            refractionTint = 0.35f,
+            borderIntensity = 0.55f,
+            dynamicShimmer = false,
+            highContrastText = true
+        )
+    )
 }
 
 data class AppAccentSwatch(
@@ -93,7 +192,7 @@ object AppAccentSwatches {
     val all: List<AppAccentSwatch> = listOf(
         AppAccentSwatch("indigo", "Chàm", Color(0xFF4F46E5)),
         AppAccentSwatch("blue", "Xanh dương", Color(0xFF2563EB)),
-        AppAccentSwatch("sky", "Xanh trời", Color(0xFF0284C7)),
+        AppAccentSwatch("sky", "Xanh trời", Color(0xFF0EA5E9)),
         AppAccentSwatch("teal", "Xanh ngọc", Color(0xFF0D9488)),
         AppAccentSwatch("emerald", "Lục bảo", Color(0xFF059669)),
         AppAccentSwatch("violet", "Tím", Color(0xFF7C3AED)),
@@ -105,7 +204,8 @@ object AppAccentSwatches {
 data class AppThemeConfig(
     val mode: AppThemeMode = AppThemeMode.DARK,
     val preset: AppThemePreset = AppThemePreset.MIDNIGHT_OBSERVATORY,
-    val customAccentArgb: Long? = null
+    val customAccentArgb: Long? = null,
+    val liquidGlass: LiquidGlassConfig = LiquidGlassConfig()
 )
 
 data class CanvasThemeColors(
@@ -125,6 +225,7 @@ data class CanvasThemeColors(
 
 data class AppThemePalette(
     val isDark: Boolean,
+    val liquidGlass: LiquidGlassConfig,
     val bgDeepest: Color,
     val bgDark: Color,
     val surface: Color,
@@ -168,16 +269,19 @@ object ThemePaletteResolver {
     }
 
     /**
-     * Resolves a full, high-contrast [AppThemePalette] for both Compose UI and 2D/3D Canvases.
+     * Resolves a full, high-contrast [AppThemePalette] for Compose UI, Liquid Glass chrome, and 2D/3D Canvases.
      */
     fun resolve(config: AppThemeConfig, systemDark: Boolean): AppThemePalette {
         val useDark = resolveIsDark(config, systemDark)
+        val safeGlass = config.liquidGlass.sanitized()
 
         // Pick base surfaces matching the chosen preset when brightness aligns, or a clean counterpart when toggled
         val basePreset = if (config.preset.isDark == useDark) {
             config.preset
         } else {
             when (config.preset) {
+                AppThemePreset.LIQUID_GLASS_DARK -> AppThemePreset.LIQUID_GLASS_LIGHT
+                AppThemePreset.LIQUID_GLASS_LIGHT -> AppThemePreset.LIQUID_GLASS_DARK
                 AppThemePreset.MIDNIGHT_OBSERVATORY -> AppThemePreset.IVORY_PAPER
                 AppThemePreset.IVORY_PAPER -> AppThemePreset.MIDNIGHT_OBSERVATORY
                 AppThemePreset.CHALKBOARD_FOREST -> AppThemePreset.IVORY_PAPER
@@ -202,6 +306,17 @@ object ThemePaletteResolver {
 
         return if (useDark) {
             val (bgDeepest, bgDark, surface, border, muted, bgInner, bgOuter, gMinor, gMajor) = when (basePreset) {
+                AppThemePreset.LIQUID_GLASS_DARK -> SurfaceTuple(
+                    bgDeepest = Color(0xFF050B18),
+                    bgDark = Color(0xFF0D1B34),
+                    surface = Color(0xFF172C52),
+                    border = Color(0xFF3A5F94),
+                    muted = Color(0xFF567EB5),
+                    bgInner = 0xFF142A4F.toInt(),
+                    bgOuter = 0xFF040914.toInt(),
+                    gMinor = 0xFF122342.toInt(),
+                    gMajor = 0xFF213C6B.toInt()
+                )
                 AppThemePreset.CHALKBOARD_FOREST -> SurfaceTuple(
                     bgDeepest = Color(0xFF06140F),
                     bgDark = Color(0xFF0C221A),
@@ -239,13 +354,14 @@ object ThemePaletteResolver {
 
             AppThemePalette(
                 isDark = true,
+                liquidGlass = safeGlass,
                 bgDeepest = bgDeepest,
                 bgDark = bgDark,
                 surface = surface,
                 border = border,
                 muted = muted,
-                textSecondary = Color(0xFF94A3B8),
-                textLight = Color(0xFFCBD5E1),
+                textSecondary = if (safeGlass.enabled && safeGlass.highContrastText) Color(0xFFCBD5E1) else Color(0xFF94A3B8),
+                textLight = if (safeGlass.enabled && safeGlass.highContrastText) Color(0xFFE2E8F0) else Color(0xFFCBD5E1),
                 textPrimary = Color(0xFFF8FAFC),
                 primary = primary,
                 primaryBright = primaryBright,
@@ -274,12 +390,23 @@ object ThemePaletteResolver {
                     edgeSolidArgb = 0xFFF8FAFC.toInt(),
                     edgeDashedArgb = 0xFF94A3B8.toInt(),
                     faceTintArgb = primaryBright.toArgb(),
-                    labelPillBgArgb = bgDark.copy(alpha = 0.86f).toArgb(),
+                    labelPillBgArgb = bgDark.copy(alpha = if (safeGlass.enabled) 0.74f else 0.86f).toArgb(),
                     labelTextArgb = 0xFFF8FAFC.toInt()
                 )
             )
         } else {
             val (bgDeepest, bgDark, surface, border, muted, bgInner, bgOuter, gMinor, gMajor) = when (basePreset) {
+                AppThemePreset.LIQUID_GLASS_LIGHT -> SurfaceTuple(
+                    bgDeepest = Color(0xFFDFECFF),
+                    bgDark = Color(0xFFF4F9FF),
+                    surface = Color(0xFFD6E8FF),
+                    border = Color(0xFF9EC5F5),
+                    muted = Color(0xFF7CAEEB),
+                    bgInner = 0xFFF7FBFF.toInt(),
+                    bgOuter = 0xFFD8E9FF.toInt(),
+                    gMinor = 0xFFCDE1FA.toInt(),
+                    gMajor = 0xFFA5C7F2.toInt()
+                )
                 AppThemePreset.WARM_SAND_LIGHT -> SurfaceTuple(
                     bgDeepest = Color(0xFFF5EFE4),
                     bgDark = Color(0xFFFFFCF7),
@@ -317,13 +444,14 @@ object ThemePaletteResolver {
 
             AppThemePalette(
                 isDark = false,
+                liquidGlass = safeGlass,
                 bgDeepest = bgDeepest,
                 bgDark = bgDark,
                 surface = surface,
                 border = border,
                 muted = muted,
-                textSecondary = Color(0xFF475569),
-                textLight = Color(0xFF334155),
+                textSecondary = if (safeGlass.enabled && safeGlass.highContrastText) Color(0xFF1E293B) else Color(0xFF475569),
+                textLight = if (safeGlass.enabled && safeGlass.highContrastText) Color(0xFF0F172A) else Color(0xFF334155),
                 textPrimary = Color(0xFF0F172A),
                 primary = primary,
                 primaryBright = primary,
@@ -352,7 +480,7 @@ object ThemePaletteResolver {
                     edgeSolidArgb = 0xFF0F172A.toInt(),
                     edgeDashedArgb = 0xFF64748B.toInt(),
                     faceTintArgb = primary.toArgb(),
-                    labelPillBgArgb = bgDark.copy(alpha = 0.92f).toArgb(),
+                    labelPillBgArgb = bgDark.copy(alpha = if (safeGlass.enabled) 0.78f else 0.92f).toArgb(),
                     labelTextArgb = 0xFF0F172A.toInt()
                 )
             )
@@ -374,7 +502,8 @@ object ThemePaletteResolver {
 
 /**
  * Reactive Compose snapshot holder for the active theme palette so every composable
- * and 2D/3D canvas updates seamlessly when the user switches Dark/Light, presets, or accent colors.
+ * and 2D/3D canvas updates seamlessly when the user switches Dark/Light, presets, accent colors,
+ * or Liquid Glass optical parameters.
  */
 object ActiveThemeState {
     var current by mutableStateOf(

@@ -76,12 +76,11 @@ fun TopStudioHeader(
                 modifier = Modifier
                     .weight(1f)
                     .testTag("top_shape_selector_pill")
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(SlateDark.copy(alpha = 0.90f))
-                    .border(
-                        width = 1.dp,
-                        color = if (uiState.activeLeftPane == LeftPane.SHAPES) CyanAccent else SlateBorder.copy(alpha = 0.8f),
-                        shape = RoundedCornerShape(12.dp)
+                    .liquidGlassSurface(
+                        shape = RoundedCornerShape(12.dp),
+                        fallbackBg = SlateDark.copy(alpha = 0.90f),
+                        fallbackBorder = SlateBorder.copy(alpha = 0.8f),
+                        accentBorder = if (uiState.activeLeftPane == LeftPane.SHAPES) CyanAccent else null
                     )
                     .clickable { viewModel.toggleLeftPane(LeftPane.SHAPES) }
                     .padding(horizontal = 9.dp, vertical = 5.dp),
@@ -121,9 +120,11 @@ fun TopStudioHeader(
 
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(SlateDark.copy(alpha = 0.90f))
-                    .border(1.dp, SlateBorder.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
+                    .liquidGlassSurface(
+                        shape = RoundedCornerShape(12.dp),
+                        fallbackBg = SlateDark.copy(alpha = 0.90f),
+                        fallbackBorder = SlateBorder.copy(alpha = 0.8f)
+                    )
                     .padding(horizontal = 3.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(1.dp)
@@ -187,9 +188,11 @@ fun TopStudioHeader(
                 modifier = Modifier
                     .weight(1f, fill = false)
                     .testTag("live_metrics_pill")
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(SlateDeepest.copy(alpha = 0.88f))
-                    .border(1.dp, SlateBorder.copy(alpha = 0.85f), RoundedCornerShape(10.dp))
+                    .liquidGlassSurface(
+                        shape = RoundedCornerShape(10.dp),
+                        fallbackBg = SlateDeepest.copy(alpha = 0.88f),
+                        fallbackBorder = SlateBorder.copy(alpha = 0.85f)
+                    )
                     .clickable { viewModel.toggleLeftPane(LeftPane.FORMULAS) }
                     .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 9.dp, vertical = 5.dp),
@@ -213,9 +216,11 @@ fun TopStudioHeader(
                 Spacer(Modifier.width(6.dp))
                 Row(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(SlateDark.copy(alpha = 0.88f))
-                        .border(1.dp, SlateBorder.copy(alpha = 0.8f), RoundedCornerShape(10.dp))
+                        .liquidGlassSurface(
+                            shape = RoundedCornerShape(10.dp),
+                            fallbackBg = SlateDark.copy(alpha = 0.88f),
+                            fallbackBorder = SlateBorder.copy(alpha = 0.8f)
+                        )
                         .padding(horizontal = 3.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp)
@@ -299,9 +304,11 @@ fun RightCanvasQuickControls(
     Column(
         modifier = modifier
             .padding(end = 8.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(SlateDark.copy(alpha = 0.88f))
-            .border(1.dp, SlateBorder.copy(alpha = 0.75f), RoundedCornerShape(14.dp))
+            .liquidGlassSurface(
+                shape = RoundedCornerShape(14.dp),
+                fallbackBg = SlateDark.copy(alpha = 0.88f),
+                fallbackBorder = SlateBorder.copy(alpha = 0.75f)
+            )
             .padding(vertical = 5.dp, horizontal = 3.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -478,9 +485,12 @@ fun BottomStudioDock(
         ) {
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(SlateDark.copy(alpha = 0.96f))
-                    .border(1.dp, PinkAccent, RoundedCornerShape(12.dp))
+                    .liquidGlassSurface(
+                        shape = RoundedCornerShape(12.dp),
+                        elevated = true,
+                        fallbackBg = SlateDark.copy(alpha = 0.96f),
+                        accentBorder = PinkAccent
+                    )
                     .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 8.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -536,9 +546,11 @@ fun BottomStudioDock(
         AnimatedVisibility(visible = uiState.activeLeftPane == null) {
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(13.dp))
-                    .background(SlateDark.copy(alpha = 0.92f))
-                    .border(1.dp, SlateBorder, RoundedCornerShape(13.dp))
+                    .liquidGlassSurface(
+                        shape = RoundedCornerShape(13.dp),
+                        fallbackBg = SlateDark.copy(alpha = 0.92f),
+                        fallbackBorder = SlateBorder
+                    )
                     .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 5.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -600,9 +612,12 @@ fun BottomStudioDock(
             modifier = Modifier
                 .widthIn(max = 520.dp)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(SlateDark.copy(alpha = 0.96f))
-                .border(1.dp, SlateBorder, RoundedCornerShape(16.dp))
+                .liquidGlassSurface(
+                    shape = RoundedCornerShape(16.dp),
+                    elevated = true,
+                    fallbackBg = SlateDark.copy(alpha = 0.96f),
+                    fallbackBorder = SlateBorder
+                )
                 .padding(horizontal = 5.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically

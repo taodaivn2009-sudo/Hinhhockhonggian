@@ -81,13 +81,10 @@ fun MathDocumentsScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(SlateDark, SlateDeepest)
-                )
-            )
             .testTag("math_documents_screen")
     ) {
+        LiquidGlassBackdrop(modifier = Modifier.fillMaxSize())
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -309,9 +306,11 @@ private fun TrigFormulaGroupCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(SlateDark)
-            .border(1.dp, accent.copy(alpha = 0.48f), RoundedCornerShape(16.dp))
+            .liquidGlassSurface(
+                shape = RoundedCornerShape(16.dp),
+                fallbackBg = SlateDark,
+                accentBorder = accent.copy(alpha = 0.52f)
+            )
             .padding(14.dp)
             .testTag("docs_group_${group.id}"),
         verticalArrangement = Arrangement.spacedBy(9.dp)
@@ -418,9 +417,11 @@ private fun DegreeRadianConverterCard(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(SlateDark)
-            .border(1.dp, CyanAccent.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
+            .liquidGlassSurface(
+                shape = RoundedCornerShape(16.dp),
+                fallbackBg = SlateDark,
+                accentBorder = CyanAccent.copy(alpha = 0.50f)
+            )
             .padding(14.dp)
             .testTag("trig_deg_rad_converter"),
         verticalArrangement = Arrangement.spacedBy(8.dp)

@@ -54,6 +54,16 @@ fun AppSettingsScreen(
     onSelectThemeMode: (AppThemeMode) -> Unit,
     onSelectThemePreset: (AppThemePreset) -> Unit,
     onSelectAccentColor: (Long?) -> Unit,
+    onToggleLiquidGlass: (Boolean) -> Unit,
+    onApplyLiquidGlassStyle: (LiquidGlassPresetStyle) -> Unit,
+    onUpdateLiquidGlass: (
+        translucency: Float?,
+        specularGlow: Float?,
+        refractionTint: Float?,
+        borderIntensity: Float?,
+        dynamicShimmer: Boolean?,
+        highContrastText: Boolean?
+    ) -> Unit,
     onResetThemeDefault: () -> Unit,
     sensitivity: SensitivityConfig,
     geometryViewModel: GeometryViewModel,
@@ -80,9 +90,10 @@ fun AppSettingsScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(SlateDark, SlateDeepest)))
             .testTag("app_settings_screen")
     ) {
+        LiquidGlassBackdrop(modifier = Modifier.fillMaxSize())
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -166,6 +177,30 @@ fun AppSettingsScreen(
                             onSelectPreset = onSelectThemePreset,
                             onSelectAccentColor = onSelectAccentColor,
                             onResetDefault = onResetThemeDefault
+                        )
+                    }
+
+                    // 1b. Dedicated Liquid Glass Material Settings Card
+                    SettingsGroupCard(
+                        icon = Icons.Default.AutoAwesome,
+                        iconTint = CyanAccent,
+                        title = "Cài đặt Liquid Glass",
+                        subtitle = if (themeConfig.liquidGlass.enabled) {
+                            "Đang bật • Trong suốt ${(themeConfig.liquidGlass.translucency * 100).toInt()}% • Phản quang ${(themeConfig.liquidGlass.specularGlow * 100).toInt()}%"
+                        } else {
+                            "Kính lỏng trong suốt, ánh phản quang & viền pha lê"
+                        }
+                    ) {
+                        LiquidGlassSettingsSection(
+                            config = themeConfig.liquidGlass,
+                            onToggleEnabled = onToggleLiquidGlass,
+                            onApplyPresetStyle = onApplyLiquidGlassStyle,
+                            onUpdateTranslucency = { onUpdateLiquidGlass(it, null, null, null, null, null) },
+                            onUpdateSpecularGlow = { onUpdateLiquidGlass(null, it, null, null, null, null) },
+                            onUpdateRefractionTint = { onUpdateLiquidGlass(null, null, it, null, null, null) },
+                            onUpdateBorderIntensity = { onUpdateLiquidGlass(null, null, null, it, null, null) },
+                            onToggleDynamicShimmer = { onUpdateLiquidGlass(null, null, null, null, it, null) },
+                            onToggleHighContrastText = { onUpdateLiquidGlass(null, null, null, null, null, it) }
                         )
                     }
 
@@ -474,9 +509,12 @@ private fun SettingsGroupCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(SlateDark)
-            .border(1.dp, SlateBorder, RoundedCornerShape(18.dp))
+            .liquidGlassSurface(
+                shape = RoundedCornerShape(18.dp),
+                elevated = false,
+                fallbackBg = SlateDark,
+                fallbackBorder = SlateBorder
+            )
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
