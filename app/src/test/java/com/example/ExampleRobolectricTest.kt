@@ -423,31 +423,6 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `trigonometry documents repository has complete poster formulas and accurate converters`() {
-        // 1. All 10 formula groups, 16 unit-circle angles, and 4 quadrant sign rows exist
-        assertEquals(10, TrigReferenceRepository.formulaGroups.size)
-        assertEquals(16, TrigReferenceRepository.specialCircleAngles.size)
-        assertEquals(4, TrigReferenceRepository.quadrantSignRows.size)
-
-        // 2. Category and search filtering work accurately
-        val specialOnly = TrigReferenceRepository.filterGroups(TrigDocCategory.SPECIAL_ANGLES, "")
-        assertEquals(4, specialOnly.size)
-
-        val searchDouble = TrigReferenceRepository.filterGroups(TrigDocCategory.ALL, "nhân đôi")
-        assertTrue("Search 'nhân đôi' should match double-angle group", searchDouble.any { it.id == "double_triple" })
-
-        val searchCosDiff = TrigReferenceRepository.filterGroups(TrigDocCategory.ALL, "cos u - cos v")
-        assertTrue("Search should match sum-to-product group", searchCosDiff.any { it.id == "sum_to_product" })
-
-        // 3. Degree <-> Radian conversion & exact pi-fraction formatting
-        assertEquals(PI, TrigReferenceRepository.degreesToRadians(180.0), 1e-9)
-        assertEquals(180.0, TrigReferenceRepository.radiansToDegrees(PI), 1e-9)
-        assertEquals("5π/6", TrigReferenceRepository.formatDegreesAsPiFraction(150.0))
-        assertEquals("π/2", TrigReferenceRepository.formatDegreesAsPiFraction(90.0))
-        assertEquals("0", TrigReferenceRepository.formatDegreesAsPiFraction(0.0))
-    }
-
-    @Test
     fun `github update checker parses releases normalizes repos and compares versions accurately`() {
         // 1. Repo slug normalization from raw slug or full GitHub URLs
         assertEquals("user/tool-toan", GitHubUpdateChecker.normalizeRepoSlug("user/tool-toan"))
@@ -659,83 +634,72 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `high school grade 10 11 12 curriculum chapters search favorites and quick actions are valid`() {
+    fun `bundled 388 page dpad pdf toc search page lookup and preferences work cleanly`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
 
-        // 1. Complete GDPT 2018 chapter counts: 9 (Grade 10) + 9 (Grade 11) + 6 (Grade 12) = 24
-        val g10 = HighSchoolMathRepository.chaptersFor(MathGrade.GRADE_10)
-        val g11 = HighSchoolMathRepository.chaptersFor(MathGrade.GRADE_11)
-        val g12 = HighSchoolMathRepository.chaptersFor(MathGrade.GRADE_12)
-        assertEquals(9, g10.size)
-        assertEquals(9, g11.size)
-        assertEquals(6, g12.size)
-        assertEquals(24, HighSchoolMathRepository.allChapters.size)
+        // 1. All 3 grades have complete DPAD topic tables with globally unique IDs and valid 1..388 page bounds
+        val g10 = PdfCurriculumRepository.topicsFor(PdfGrade.GRADE_10)
+        val g11 = PdfCurriculumRepository.topicsFor(PdfGrade.GRADE_11)
+        val g12 = PdfCurriculumRepository.topicsFor(PdfGrade.GRADE_12)
+        assertEquals(22, g10.size)
+        assertEquals(19, g11.size)
+        assertEquals(18, g12.size)
+        assertEquals(59, PdfCurriculumRepository.allTopics.size)
 
-        // 2. Every formula ID across all 3 grades is unique and non-blank
-        val allIds = HighSchoolMathRepository.allChapters.flatMap { c ->
-            c.groups.flatMap { g -> g.formulas.map { it.id } }
-        }
-        assertEquals("Formula IDs must be globally unique", allIds.size, allIds.toSet().size)
-        assertTrue("Should contain > 280 total formulas (actual: ${allIds.size})", allIds.size > 280)
-
-        // 3. Grade 11 Chapter I preserves interactive Trigonometry tools & all expanded trig formulas
-        val g11Trig = HighSchoolMathRepository.chapterById("g11_c1")
-        assertTrue(g11Trig != null && g11Trig.hasTrigInteractiveTools)
-        assertTrue(g11Trig!!.formulaCount >= 50)
-
-        // 4. Accent-insensitive cross-grade search finds core & newly added formulas in Grades 10, 11, and 12
-        val vietHits = HighSchoolMathRepository.searchFormulas("vi-et")
-        assertTrue("Should match Grade 10 Vieta", vietHits.any { it.chapter.grade == MathGrade.GRADE_10 })
-
-        val cauchyHits = HighSchoolMathRepository.searchFormulas("cauchy")
-        assertTrue("Should match Grade 10 AM-GM Cauchy inequality", cauchyHits.any { it.chapter.grade == MathGrade.GRADE_10 })
-
-        val heronHits = HighSchoolMathRepository.searchFormulas("heron")
-        assertTrue("Should match Grade 10 Heron formula", heronHits.any { it.chapter.grade == MathGrade.GRADE_10 })
-
-        val logHits = HighSchoolMathRepository.searchFormulas("logarit")
-        assertTrue("Should match Grade 11 Logarithms", logHits.any { it.chapter.grade == MathGrade.GRADE_11 })
-
-        val compoundHits = HighSchoolMathRepository.searchFormulas("lai kep")
-        assertTrue("Should match Grade 11 compound interest", compoundHits.any { it.chapter.grade == MathGrade.GRADE_11 })
-
-        val bernoulliHits = HighSchoolMathRepository.searchFormulas("bernoulli")
-        assertTrue("Should match Grade 11 Bernoulli trials", bernoulliHits.any { it.chapter.grade == MathGrade.GRADE_11 })
-
-        val bayesHits = HighSchoolMathRepository.searchFormulas("bayes")
-        assertTrue("Should match Grade 12 Bayes", bayesHits.any { it.chapter.grade == MathGrade.GRADE_12 })
-
-        val integralHits = HighSchoolMathRepository.searchFormulas("tung phan")
-        assertTrue("Should match Grade 12 Integration by Parts without diacritics", integralHits.any { it.chapter.id == "g12_c4" })
-
-        val skewHits = HighSchoolMathRepository.searchFormulas("cheo nhau")
-        assertTrue("Should match Grade 12 skew lines distance", skewHits.any { it.chapter.id == "g12_c5" })
-
-        val obliqueHits = HighSchoolMathRepository.searchFormulas("tiem can xien")
-        assertTrue("Should match Grade 12 oblique asymptote", obliqueHits.any { it.chapter.id == "g12_c1" })
-
-        // 5. All 2D Plot quick actions parse cleanly in MathExprParser
-        val plotActions = HighSchoolMathRepository.allChapters
-            .flatMap { it.quickActions }
-            .filterIsInstance<DocQuickAction.Plot2D>()
-        assertTrue("Should provide 2D quick plot actions", plotActions.isNotEmpty())
-        plotActions.forEach { action ->
-            val parsed = MathExprParser.parse(action.expression)
-            assertTrue("2D expression '${action.expression}' must parse cleanly", parsed is MathExprParser.ParseResult.Ok)
+        val allIds = PdfCurriculumRepository.allTopics.map { it.id }
+        assertEquals("PDF topic IDs must be unique", allIds.size, allIds.toSet().size)
+        PdfCurriculumRepository.allTopics.forEach { topic ->
+            assertTrue("startPage valid for ${topic.id}", topic.startPage in 1..PDF_TOTAL_PAGES)
+            assertTrue("endPage valid for ${topic.id}", topic.endPage in topic.startPage..PDF_TOTAL_PAGES)
+            topic.subTopics.forEach { sub ->
+                assertTrue("subtopic page valid for ${topic.id}", sub.page in topic.startPage..topic.endPage)
+            }
         }
 
-        // 6. Favorites & last tab persist cleanly via MathDocsPreferences
-        val prefs = MathDocsPreferences(context)
-        prefs.saveFavoriteIds(emptySet())
-        val afterAdd = prefs.toggleFavorite("g12_c6_f4")
-        assertTrue("g12_c6_f4" in afterAdd)
-        assertEquals(1, HighSchoolMathRepository.favoriteHits(prefs.loadFavoriteIds()).size)
+        // 2. Exact page-to-topic resolution matches the 388-page DPAD PDF structure
+        assertEquals("g10_t01", PdfCurriculumRepository.topicForPage(18)?.id)
+        assertEquals("g11_t01", PdfCurriculumRepository.topicForPage(121)?.id)
+        assertEquals("g12_t07", PdfCurriculumRepository.topicForPage(314)?.id)
+        assertEquals("g12_t18", PdfCurriculumRepository.topicForPage(386)?.id)
+        assertEquals("Mục lục chi tiết PDF", PdfCurriculumRepository.sectionLabelForPage(5))
 
-        val afterRemove = prefs.toggleFavorite("g12_c6_f4")
-        assertFalse("g12_c6_f4" in afterRemove)
+        // 3. Diacritic-insensitive search across all 3 grades jumps to accurate target pages
+        val vietHits = PdfCurriculumRepository.searchTopics("vi-et")
+        assertTrue("Should find Grade 10 Vi-ét", vietHits.any { it.topic.id == "g10_t05" && it.targetPage == 34 })
 
-        prefs.saveLastTab(DocsOverviewTab.GRADE_12)
-        assertEquals(DocsOverviewTab.GRADE_12, prefs.loadLastTab())
+        val trigHits = PdfCurriculumRepository.searchTopics("luong giac")
+        assertTrue("Should find Grade 11 Trigonometry", trigHits.any { it.topic.id == "g11_t01" })
+
+        val integralHits = PdfCurriculumRepository.searchTopics("tung phan")
+        assertTrue("Should find Grade 12 Integration by Parts", integralHits.any { it.topic.id == "g12_t07" && it.targetPage == 314 })
+
+        val bayesHits = PdfCurriculumRepository.searchTopics("bayes")
+        assertTrue("Should find Grade 12 Bayes on page 386", bayesHits.any { it.topic.id == "g12_t18" && it.targetPage == 386 })
+
+        // 4. Bundled PDF asset exists and is readable
+        context.assets.open(PDF_ASSET_PATH).use { stream ->
+            val header = ByteArray(4)
+            assertEquals(4, stream.read(header))
+            assertEquals("%PDF", String(header, Charsets.US_ASCII))
+        }
+
+        // 5. PdfDocsPreferences persists last page, bookmarks, grade tab, and night filter cleanly
+        val prefs = PdfDocsPreferences(context)
+        prefs.saveLastPage(256)
+        assertEquals(256, prefs.loadLastPage())
+
+        prefs.saveBookmarks(emptySet())
+        val afterAdd = prefs.toggleBookmark(121)
+        assertTrue(121 in afterAdd)
+        assertEquals(setOf(121), prefs.loadBookmarks())
+        val afterRemove = prefs.toggleBookmark(121)
+        assertFalse(121 in afterRemove)
+
+        prefs.saveLastTab(PdfDocsTab.GRADE_11)
+        assertEquals(PdfDocsTab.GRADE_11, prefs.loadLastTab())
+
+        prefs.saveNightFilter(true)
+        assertTrue(prefs.loadNightFilter())
     }
 }
 
