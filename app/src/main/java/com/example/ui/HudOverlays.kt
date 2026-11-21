@@ -38,6 +38,8 @@ import com.example.geo2d.WorkspaceModeSwitch
 import com.example.ui.panes.SensitivityControlsSection
 import com.example.ui.panes.ShapePreviewThumbnail
 import com.example.ui.theme.*
+import com.example.update.AppUpdateUiState
+import com.example.update.UpdateVersionPill
 import com.example.viewmodel.GeometryViewModel
 import java.util.Locale
 import kotlin.math.abs
@@ -48,6 +50,8 @@ fun TopStudioHeader(
     viewModel: GeometryViewModel,
     isCompactWidth: Boolean,
     onSwitchWorkspace: (MathWorkspace) -> Unit,
+    updateUiState: AppUpdateUiState = AppUpdateUiState(),
+    onOpenUpdateDialog: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val m = uiState.scene.metrics
@@ -209,27 +213,37 @@ fun TopStudioHeader(
                 MetricPill("V", f2(m.vol), AmberAccent)
             }
 
-            // Active Sensitivity Indicator Pill (only when non-default)
-            val s = uiState.snapshot.sensitivity
-            val isCustomSens = abs(s.rotation - 1f) > 0.05f || abs(s.zoom - 1f) > 0.05f || abs(s.drag - 1f) > 0.05f || abs(s.touchRadius - 1f) > 0.05f
-            if (isCustomSens) {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(9.dp))
-                        .background(SkyBlue.copy(alpha = 0.24f))
-                        .border(1.dp, CyanAccent.copy(alpha = 0.7f), RoundedCornerShape(9.dp))
-                        .clickable { viewModel.toggleSensitivityPopover() }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(Icons.Default.Speed, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(13.dp))
-                    Text(
-                        text = String.format(Locale.US, "%.1fx", s.rotation),
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
-                        color = CyanAccent
-                    )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                // Active Sensitivity Indicator Pill (only when non-default)
+                val s = uiState.snapshot.sensitivity
+                val isCustomSens = abs(s.rotation - 1f) > 0.05f || abs(s.zoom - 1f) > 0.05f || abs(s.drag - 1f) > 0.05f || abs(s.touchRadius - 1f) > 0.05f
+                if (isCustomSens) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(SkyBlue.copy(alpha = 0.24f))
+                            .border(1.dp, CyanAccent.copy(alpha = 0.7f), RoundedCornerShape(9.dp))
+                            .clickable { viewModel.toggleSensitivityPopover() }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(Icons.Default.Speed, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(13.dp))
+                        Text(
+                            text = String.format(Locale.US, "%.1fx", s.rotation),
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                            color = CyanAccent
+                        )
+                    }
                 }
+
+                UpdateVersionPill(
+                    uiState = updateUiState,
+                    onClick = onOpenUpdateDialog
+                )
             }
         }
     }

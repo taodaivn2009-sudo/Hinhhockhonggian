@@ -2,6 +2,11 @@
 
 ## Bản cập nhật mới nhất
 
+### Tự động thông báo & gợi ý cài đặt bản mới từ GitHub
+- **Kiểm tra phiên bản tự động khi mở ứng dụng:** Tự động kết nối GitHub Releases của kho dự án (được gắn tự động khi đóng gói APK bằng GitHub Actions, hoặc có thể nhập/đổi kho `owner/repo` trực tiếp trong app).
+- **Thông báo nổi & Hộp thoại chi tiết bản cập nhật:** Khi phát hiện phiên bản mới hơn (`v2`, `v3`...), ứng dụng hiển thị banner thông báo nổi cùng bảng nhật ký thay đổi, dung lượng tệp `.apk` và nút **Tải & Cài đặt APK** mở nhanh liên kết tải để cài đè trực tiếp mà vẫn giữ nguyên toàn bộ bài vẽ.
+- **Nút phiên bản trên mọi không gian:** Hiển thị nhãn phiên bản (`v1` / `Mới v2`) ở cả **3D**, **2D** và **Tài liệu** để kiểm tra cập nhật thủ công hoặc bỏ qua tạm thời phiên bản bất kỳ lúc nào.
+
 ### Mục mới: Tài liệu — Hàm Số Lượng Giác (Chương I)
 - **Thư viện công thức lượng giác đầy đủ:** Thêm tab **Tài liệu** ngay cạnh `3D | 2D`, tổng hợp trọn bộ công thức Chương I (6 công thức cơ bản & đổi Độ ↔ Radian, công thức cộng, nhân đôi & nhân ba, hạ bậc, biến đổi tổng ↔ tích và tích ↔ tổng).
 - **Đường tròn lượng giác tương tác & Bảng xét dấu 4 góc phần tư:** Chạm trực tiếp 16 góc đặc biệt trên đường tròn lượng giác để xem hình chiếu `cos α`, `sin α`, `tan α`, `cot α`; kèm bảng xét dấu góc phần tư `I, II, III, IV` và mẹo nhớ nhanh.

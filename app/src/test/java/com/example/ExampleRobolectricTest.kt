@@ -7,7 +7,9 @@ import com.example.docs.TrigDocCategory
 import com.example.docs.TrigReferenceRepository
 import com.example.engine.*
 import com.example.geo2d.*
+import com.example.update.GitHubUpdateChecker
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -443,5 +445,52 @@ class ExampleRobolectricTest {
         assertEquals("5π/6", TrigReferenceRepository.formatDegreesAsPiFraction(150.0))
         assertEquals("π/2", TrigReferenceRepository.formatDegreesAsPiFraction(90.0))
         assertEquals("0", TrigReferenceRepository.formatDegreesAsPiFraction(0.0))
+    }
+
+    @Test
+    fun `github update checker parses releases normalizes repos and compares versions accurately`() {
+        // 1. Repo slug normalization from raw slug or full GitHub URLs
+        assertEquals("user/tool-toan", GitHubUpdateChecker.normalizeRepoSlug("user/tool-toan"))
+        assertEquals("user/tool-toan", GitHubUpdateChecker.normalizeRepoSlug("https://github.com/user/tool-toan/releases/latest"))
+        assertEquals("user/tool-toan", GitHubUpdateChecker.normalizeRepoSlug("github.com/user/tool-toan.git"))
+        assertEquals(null, GitHubUpdateChecker.normalizeRepoSlug("not a valid repo"))
+
+        // 2. Single-number (v1 -> v2 -> v10) and semantic version comparisons
+        assertTrue(GitHubUpdateChecker.isNewerVersion("v2", "v1", 1))
+        assertTrue(GitHubUpdateChecker.isNewerVersion("v10", "v9", 9))
+        assertFalse(GitHubUpdateChecker.isNewerVersion("v3", "v3", 3))
+        assertFalse(GitHubUpdateChecker.isNewerVersion("v2", "v3", 3))
+        assertTrue(GitHubUpdateChecker.isNewerVersion("v1.2.0", "v1.1.9", 1))
+
+        // 3. GitHub Releases API JSON parsing picks the tool-toan APK asset cleanly
+        val sampleJson = """
+            {
+              "tag_name": "v5",
+              "name": "Tool Toán v5",
+              "body": "## Điểm mới\n- Thêm thông báo cập nhật GitHub",
+              "html_url": "https://github.com/demo/tool-toan/releases/tag/v5",
+              "published_at": "2026-11-20T12:30:00Z",
+              "assets": [
+                {
+                  "name": "notes.txt",
+                  "size": 1024,
+                  "browser_download_url": "https://github.com/demo/tool-toan/releases/download/v5/notes.txt"
+                },
+                {
+                  "name": "tool-toan-v5.apk",
+                  "size": 15728640,
+                  "browser_download_url": "https://github.com/demo/tool-toan/releases/download/v5/tool-toan-v5.apk"
+                }
+              ]
+            }
+        """.trimIndent()
+        val parsed = GitHubUpdateChecker.parseReleaseJson(sampleJson)
+        assertTrue(parsed != null)
+        assertEquals("v5", parsed!!.tagName)
+        assertEquals("Tool Toán v5", parsed.releaseName)
+        assertEquals("tool-toan-v5.apk", parsed.apkAssetName)
+        assertEquals("https://github.com/demo/tool-toan/releases/download/v5/tool-toan-v5.apk", parsed.preferredInstallUrl)
+        assertEquals("15.0 MB", GitHubUpdateChecker.formatFileSize(parsed.apkSizeBytes))
+        assertEquals("20/11/2026", GitHubUpdateChecker.formatPublishedDate(parsed.publishedAt))
     }
 }

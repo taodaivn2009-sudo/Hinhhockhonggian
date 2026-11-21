@@ -44,6 +44,10 @@ import com.example.ui.ToastBanner
 import com.example.ui.TopStudioHeader
 import com.example.ui.panes.SaveExportModal
 import com.example.ui.theme.Geo3DTheme
+import com.example.update.AppUpdateUiState
+import com.example.update.AppUpdateViewModel
+import com.example.update.UpdateAvailableBanner
+import com.example.update.UpdateDetailsDialog
 import com.example.viewmodel.GeometryViewModel
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -65,11 +69,14 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun ToolToanRootScreen() {
+fun ToolToanRootScreen(
+    updateViewModel: AppUpdateViewModel = viewModel()
+) {
     val context = LocalContext.current
     val workspacePrefs = remember(context) { Geo2DPersistence(context.applicationContext) }
     var activeWorkspace by remember { mutableStateOf(workspacePrefs.loadLastWorkspace()) }
     var pending2DExpr by remember { mutableStateOf<String?>(null) }
+    val updateUiState by updateViewModel.uiState.collectAsStateWithLifecycle()
 
     val onSelectWorkspace: (MathWorkspace) -> Unit = { target ->
         if (target != activeWorkspace) {
@@ -78,19 +85,46 @@ fun ToolToanRootScreen() {
         }
     }
 
-    when (activeWorkspace) {
-        MathWorkspace.SPACE_3D -> GeometryStudioScreen(onSwitchWorkspace = onSelectWorkspace)
-        MathWorkspace.PLANE_2D -> Geo2DStudioScreen(
-            onSwitchWorkspace = onSelectWorkspace,
-            pendingPlotExpr = pending2DExpr,
-            onConsumePendingPlot = { pending2DExpr = null }
+    Box(modifier = Modifier.fillMaxSize()) {
+        when (activeWorkspace) {
+            MathWorkspace.SPACE_3D -> GeometryStudioScreen(
+                onSwitchWorkspace = onSelectWorkspace,
+                updateUiState = updateUiState,
+                onOpenUpdateDialog = { updateViewModel.openUpdateDialog() }
+            )
+            MathWorkspace.PLANE_2D -> Geo2DStudioScreen(
+                onSwitchWorkspace = onSelectWorkspace,
+                pendingPlotExpr = pending2DExpr,
+                onConsumePendingPlot = { pending2DExpr = null },
+                updateUiState = updateUiState,
+                onOpenUpdateDialog = { updateViewModel.openUpdateDialog() }
+            )
+            MathWorkspace.DOCUMENTS -> MathDocumentsScreen(
+                onSwitchWorkspace = onSelectWorkspace,
+                onPlotTrigIn2D = { expr ->
+                    pending2DExpr = expr
+                    onSelectWorkspace(MathWorkspace.PLANE_2D)
+                },
+                updateUiState = updateUiState,
+                onOpenUpdateDialog = { updateViewModel.openUpdateDialog() }
+            )
+        }
+
+        // Global non-intrusive top notification banner when a newer GitHub Release is detected
+        UpdateAvailableBanner(
+            uiState = updateUiState,
+            onOpenDetails = { updateViewModel.openUpdateDialog() },
+            onDismiss = { updateViewModel.dismissBannerForNow() },
+            modifier = Modifier.align(Alignment.TopCenter)
         )
-        MathWorkspace.DOCUMENTS -> MathDocumentsScreen(
-            onSwitchWorkspace = onSelectWorkspace,
-            onPlotTrigIn2D = { expr ->
-                pending2DExpr = expr
-                onSelectWorkspace(MathWorkspace.PLANE_2D)
-            }
+
+        // Full GitHub Release Update & Install Suggestion Modal
+        UpdateDetailsDialog(
+            uiState = updateUiState,
+            onCheckNow = { updateViewModel.checkForUpdates(isAutoStartup = false) },
+            onSaveRepoAndCheck = { updateViewModel.saveRepoAndCheck(it) },
+            onSkipVersion = { updateViewModel.skipCurrentAvailableVersion() },
+            onDismiss = { updateViewModel.closeUpdateDialog() }
         )
     }
 }
@@ -98,6 +132,8 @@ fun ToolToanRootScreen() {
 @Composable
 fun GeometryStudioScreen(
     onSwitchWorkspace: (MathWorkspace) -> Unit,
+    updateUiState: AppUpdateUiState = AppUpdateUiState(),
+    onOpenUpdateDialog: () -> Unit = {},
     viewModel: GeometryViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -284,6 +320,8 @@ fun GeometryStudioScreen(
             viewModel = viewModel,
             isCompactWidth = isCompactWidth,
             onSwitchWorkspace = onSwitchWorkspace,
+            updateUiState = updateUiState,
+            onOpenUpdateDialog = onOpenUpdateDialog,
             modifier = Modifier.align(Alignment.TopCenter)
         )
 

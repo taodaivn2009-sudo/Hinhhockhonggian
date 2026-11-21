@@ -62,6 +62,8 @@ import com.example.ui.ConstructionReplayBar
 import com.example.ui.ParameterMSliderOverlay
 import com.example.ui.ToastBanner
 import com.example.ui.theme.*
+import com.example.update.AppUpdateUiState
+import com.example.update.UpdateVersionPill
 import java.io.OutputStreamWriter
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -140,6 +142,8 @@ fun Geo2DStudioScreen(
     onSwitchWorkspace: (MathWorkspace) -> Unit,
     pendingPlotExpr: String? = null,
     onConsumePendingPlot: () -> Unit = {},
+    updateUiState: AppUpdateUiState = AppUpdateUiState(),
+    onOpenUpdateDialog: () -> Unit = {},
     viewModel: Geo2DViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -306,6 +310,8 @@ fun Geo2DStudioScreen(
             uiState = uiState,
             viewModel = viewModel,
             onSwitchWorkspace = onSwitchWorkspace,
+            updateUiState = updateUiState,
+            onOpenUpdateDialog = onOpenUpdateDialog,
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
@@ -524,6 +530,8 @@ private fun Geo2DTopHeader(
     uiState: Geo2DUiState,
     viewModel: Geo2DViewModel,
     onSwitchWorkspace: (MathWorkspace) -> Unit,
+    updateUiState: AppUpdateUiState = AppUpdateUiState(),
+    onOpenUpdateDialog: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -583,6 +591,19 @@ private fun Geo2DTopHeader(
                 TopIconBtn(Icons.Default.PlayCircleOutline, "Tua lại từng bước dựng", tint = AmberAccent, testTag = "replay_2d_btn") { viewModel.startReplay() }
                 TopIconBtn(Icons.Default.MyLocation, "Về tâm O(0;0)") { viewModel.resetView() }
                 TopIconBtn(Icons.Default.SaveAlt, "Lưu / Xuất 2D", tint = EmeraldAccent) { viewModel.openSaveModal() }
+            }
+        }
+
+        // Compact GitHub version / update pill aligned neatly to the right below header
+        if (uiState.traceX == null || uiState.traceResults.isEmpty()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                UpdateVersionPill(
+                    uiState = updateUiState,
+                    onClick = onOpenUpdateDialog
+                )
             }
         }
 

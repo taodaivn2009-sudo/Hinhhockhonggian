@@ -233,10 +233,12 @@ jobs:
         env:
           APP_VERSION_CODE: ${{ steps.app_version.outputs.version_num }}
           APP_VERSION_NAME: ${{ steps.app_version.outputs.version_tag }}
+          APP_GITHUB_REPO: ${{ github.repository }}
         run: >
           gradle :app:assembleDebug
           -PappVersionCode="${APP_VERSION_CODE}"
           -PappVersionName="${APP_VERSION_NAME}"
+          -PappGithubRepo="${APP_GITHUB_REPO}"
           --stacktrace --no-daemon
 
       - name: Verify debug APK

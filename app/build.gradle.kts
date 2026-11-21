@@ -24,8 +24,14 @@ android {
       .orElse(providers.environmentVariable("APP_VERSION_NAME"))
       .map { it.ifBlank { "v1" } }
       .getOrElse("v1")
+    val resolvedGithubRepo = providers.gradleProperty("appGithubRepo")
+      .orElse(providers.environmentVariable("APP_GITHUB_REPO"))
+      .orElse(providers.environmentVariable("GITHUB_REPOSITORY"))
+      .map { it.trim().replace("\"", "") }
+      .getOrElse("")
     versionCode = resolvedVersionCode
     versionName = resolvedVersionName
+    buildConfigField("String", "GITHUB_REPO", "\"$resolvedGithubRepo\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
