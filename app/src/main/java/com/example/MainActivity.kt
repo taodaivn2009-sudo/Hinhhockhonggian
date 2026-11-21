@@ -34,6 +34,8 @@ import com.example.ai.AiAssistantViewModel
 import com.example.ai.AiDrawTarget
 import com.example.ai.AiResponseParser
 import com.example.ai.AiWorkspaceScreen
+import com.example.ai.configureAppCheck
+import com.example.ai.findActivity
 import com.example.docs.MathDocumentsScreen
 import com.example.geo2d.Geo2DPersistence
 import com.example.geo2d.Geo2DStudioScreen
@@ -67,6 +69,8 @@ import java.io.OutputStreamWriter
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // STEP 1: Configure Firebase App Check with launch intent before UI, ViewModels, or Firebase calls
+        configureAppCheck(this, intent)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT)
@@ -121,6 +125,10 @@ fun ToolToanRootScreen(
     val geoUiState by geometryViewModel.uiState.collectAsStateWithLifecycle()
     val geo2DUiState by geo2DViewModel.uiState.collectAsStateWithLifecycle()
     val aiUiState by aiViewModel.uiState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        aiViewModel.attemptSilentGoogleSignIn(context)
+    }
 
     val onSelectWorkspace: (MathWorkspace) -> Unit = { target ->
         if (target != activeWorkspace) {
@@ -210,6 +218,10 @@ fun ToolToanRootScreen(
                 onSaveUpdateRepoAndCheck = { updateViewModel.saveRepoAndCheck(it) },
                 onSkipUpdateVersion = { updateViewModel.skipCurrentAvailableVersion() },
                 aiUiState = aiUiState,
+                onSignInWithGoogle = {
+                    context.findActivity()?.let { aiViewModel.signInWithGoogle(it) }
+                },
+                onSignOutGoogle = { aiViewModel.signOutGoogle(context) },
                 onSaveAndVerifyAiKey = { key, model -> aiViewModel.saveAndVerifyApiKey(key, model) },
                 onSaveAiKeyOnly = { key, model -> aiViewModel.saveApiKey(key, model) },
                 onSelectAiModel = { aiViewModel.selectModel(it) },

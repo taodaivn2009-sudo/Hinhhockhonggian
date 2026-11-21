@@ -810,6 +810,41 @@ class ExampleRobolectricTest {
         assertEquals("x^3 - 3x + 1", snap2D.functions.first().expression)
         assertTrue(snap2D.functions.first().showDerivative)
     }
+
+    @Test
+    fun `google sign in unlocks keyless gemini readiness and formats user profile cleanly`() {
+        // 1. Neither Google user nor API key -> not ready
+        val disconnected = AiAssistantUiState()
+        assertFalse(disconnected.isSignedInWithGoogle)
+        assertFalse(disconnected.isAiReady)
+        assertTrue(disconnected.activeProviderLabel.contains("Chưa đăng nhập"))
+
+        // 2. Signed in with Google and NO API key -> ready immediately with keyless Google Gemini
+        val profile = GoogleUserProfile(
+            uid = "uid_google_123",
+            displayName = "Nguyen Van An",
+            email = "an.nguyen@gmail.com"
+        )
+        assertEquals("NA", profile.initials)
+
+        val googleReady = AiAssistantUiState(
+            googleUser = profile,
+            keyConfig = AiKeyConfig(apiKey = "")
+        )
+        assertTrue(googleReady.isSignedInWithGoogle)
+        assertTrue(googleReady.isAiReady)
+        assertTrue(googleReady.activeProviderLabel.contains("Không cần API Key"))
+
+        // 3. Fallback API key without Google Sign-In -> still ready
+        val keyOnlyReady = AiAssistantUiState(
+            googleUser = null,
+            keyConfig = AiKeyConfig(apiKey = "AIzaSyManualFallbackKey9999")
+        )
+        assertFalse(keyOnlyReady.isSignedInWithGoogle)
+        assertTrue(keyOnlyReady.isAiReady)
+        assertTrue(keyOnlyReady.activeProviderLabel.contains("API Key riêng"))
+    }
 }
+
 
 

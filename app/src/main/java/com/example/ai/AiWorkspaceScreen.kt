@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -51,6 +52,10 @@ fun AiWorkspaceScreen(
     hasUpdateBadge: Boolean = false
 ) {
     val uiState by aiViewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val triggerGoogleSignIn: () -> Unit = {
+        context.findActivity()?.let { aiViewModel.signInWithGoogle(it) }
+    }
 
     BackHandler {
         onSwitchWorkspace(MathWorkspace.SPACE_3D)
@@ -87,6 +92,7 @@ fun AiWorkspaceScreen(
                     // AI Sub-Tab Switcher Pill
                     AiSubTabBar(
                         activeTab = uiState.activeSubTab,
+                        isSignedInWithGoogle = uiState.isSignedInWithGoogle,
                         hasKey = uiState.keyConfig.hasKey,
                         onSelectTab = { aiViewModel.selectSubTab(it) },
                         modifier = Modifier
@@ -103,6 +109,7 @@ fun AiWorkspaceScreen(
                             onClearChat = { aiViewModel.clearChatHistory() },
                             onOpenPdfPage = onOpenPdfPage,
                             onGoToKeyTab = { aiViewModel.selectSubTab(AiSubTab.API_KEY) },
+                            onSignInWithGoogle = triggerGoogleSignIn,
                             modifier = Modifier.weight(1f)
                         )
 
@@ -115,6 +122,7 @@ fun AiWorkspaceScreen(
                             onApplyDrawingPlan = onApplyDrawingPlan,
                             onOpenPdfPage = onOpenPdfPage,
                             onGoToKeyTab = { aiViewModel.selectSubTab(AiSubTab.API_KEY) },
+                            onSignInWithGoogle = triggerGoogleSignIn,
                             modifier = Modifier.weight(1f)
                         )
 
@@ -145,16 +153,16 @@ fun AiWorkspaceScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    Icon(Icons.Default.Key, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(22.dp))
+                                    Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(22.dp))
                                     Column {
                                         Text(
-                                            text = "Cài đặt Mục Key AI",
+                                            text = "Kết nối Google Gemini & Key AI",
                                             style = MaterialTheme.typography.titleMedium,
                                             color = SlateTextPrimary,
                                             fontWeight = FontWeight.ExtraBold
                                         )
                                         Text(
-                                            text = "Điền Gemini API Key để mở khóa Hỏi tài liệu 388 trang & Chụp đề vẽ hình",
+                                            text = "Đăng nhập Google để dùng ngay không cần API Key, hoặc nhập khóa riêng",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = SlateTextSecondary
                                         )
@@ -162,6 +170,12 @@ fun AiWorkspaceScreen(
                                 }
 
                                 AiKeySetupSection(
+                                    googleUser = uiState.googleUser,
+                                    isSigningIn = uiState.isSigningIn,
+                                    authStatusMessage = uiState.authStatusMessage,
+                                    authStatusSuccess = uiState.authStatusSuccess,
+                                    onSignInWithGoogle = triggerGoogleSignIn,
+                                    onSignOutGoogle = { aiViewModel.signOutGoogle(context) },
                                     keyConfig = uiState.keyConfig,
                                     isVerifying = uiState.isVerifyingKey,
                                     statusMessage = uiState.keyStatusMessage,
@@ -204,6 +218,7 @@ fun AiWorkspaceScreen(
 @Composable
 private fun AiSubTabBar(
     activeTab: AiSubTab,
+    isSignedInWithGoogle: Boolean,
     hasKey: Boolean,
     onSelectTab: (AiSubTab) -> Unit,
     modifier: Modifier = Modifier
@@ -223,13 +238,18 @@ private fun AiSubTabBar(
     ) {
         AiSubTab.entries.forEach { tab ->
             val selected = tab == activeTab
+            val connected = isSignedInWithGoogle || hasKey
             val accent = when (tab) {
                 AiSubTab.DOCS_QA -> CyanAccent
                 AiSubTab.PROBLEM_DRAW -> PurpleAccent
-                AiSubTab.API_KEY -> if (hasKey) EmeraldAccent else AmberAccent
+                AiSubTab.API_KEY -> if (connected) EmeraldAccent else AmberAccent
             }
             val label = if (tab == AiSubTab.API_KEY) {
-                if (hasKey) "Key ✓" else "Mục Key"
+                when {
+                    isSignedInWithGoogle -> "Google ✓"
+                    hasKey -> "Key ✓"
+                    else -> "Đăng nhập"
+                }
             } else tab.label
 
             Box(
@@ -267,6 +287,7 @@ private fun AiDocsQaTab(
     onClearChat: () -> Unit,
     onOpenPdfPage: (Int) -> Unit,
     onGoToKeyTab: () -> Unit,
+    onSignInWithGoogle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var inputText by remember { mutableStateOf("") }
@@ -294,10 +315,14 @@ private fun AiDocsQaTab(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            if (!uiState.keyConfig.hasKey) {
+            if (!uiState.isAiReady) {
                 item(key = "docs_missing_key") {
                     Box(modifier = Modifier.widthIn(max = 720.dp)) {
-                        AiMissingKeyBanner(onGoToKeyTab = onGoToKeyTab)
+                        AiMissingKeyBanner(
+                            isSigningIn = uiState.isSigningIn,
+                            onSignInWithGoogle = onSignInWithGoogle,
+                            onGoToKeyTab = onGoToKeyTab
+                        )
                     }
                 }
             }

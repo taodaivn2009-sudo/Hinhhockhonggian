@@ -227,7 +227,7 @@ object GeminiApiClient {
         )
     }
 
-    private fun downscaleBitmap(src: Bitmap, maxDim: Int): Bitmap {
+    internal fun downscaleBitmap(src: Bitmap, maxDim: Int): Bitmap {
         val w = src.width
         val h = src.height
         if (w <= maxDim && h <= maxDim) return src
@@ -271,7 +271,7 @@ object GeminiApiClient {
         }
     }
 
-    private fun buildDocsSystemPrompt(): String = """
+    internal fun buildDocsSystemPrompt(): String = """
 Bạn là Trợ lý Toán học THPT (Lớp 10, 11, 12) tích hợp trực tiếp trong ứng dụng Tool Toán.
 Người dùng có sẵn cuốn tài liệu PDF "$PDF_TOTAL_PAGES trang — Tóm Tắt Kiến Thức Toán 10 - 11 - 12 (DPAD)".
 
@@ -292,7 +292,7 @@ BẮT BUỘC TRẢ VỀ JSON HỢP LỆ (không bọc markdown):
 Lưu ý: Mỗi `page` phải là số nguyên từ 1 đến $PDF_TOTAL_PAGES. Tối đa 4 trang gợi ý sát nhất.
 """.trimIndent()
 
-    private fun buildProblemDrawSystemPrompt(): String = """
+    internal fun buildProblemDrawSystemPrompt(): String = """
 Bạn là chuyên gia Toán THPT (Hình học không gian 3D, Oxyz, Hình học phẳng Oxy và Khảo sát hàm số 2D) tích hợp trong ứng dụng Tool Toán.
 Nhiệm vụ của bạn là đọc ảnh đề bài (hoặc văn bản đề bài), nhận diện xem nên vẽ trên **3D** hay **2D**, và xuất cấu hình dựng hình CHÍNH XÁC tuyệt đối theo hệ thống đỉnh của ứng dụng.
 

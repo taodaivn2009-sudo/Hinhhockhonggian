@@ -38,7 +38,7 @@ enum class AiModelPreset(
 enum class AiSubTab(val key: String, val label: String) {
     DOCS_QA("docs_qa", "Hỏi tài liệu"),
     PROBLEM_DRAW("problem_draw", "Chụp đề vẽ hình"),
-    API_KEY("api_key", "Mục Key")
+    API_KEY("api_key", "Tài khoản / Key")
 }
 
 data class AiKeyConfig(

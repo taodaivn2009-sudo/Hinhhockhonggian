@@ -79,6 +79,8 @@ fun AppSettingsScreen(
     onSaveUpdateRepoAndCheck: (String) -> Unit,
     onSkipUpdateVersion: () -> Unit,
     aiUiState: AiAssistantUiState,
+    onSignInWithGoogle: () -> Unit,
+    onSignOutGoogle: () -> Unit,
     onSaveAndVerifyAiKey: (String, String) -> Unit,
     onSaveAiKeyOnly: (String, String) -> Unit,
     onSelectAiModel: (String) -> Unit,
@@ -168,18 +170,24 @@ fun AppSettingsScreen(
                         }
                     }
 
-                    // 0. Dedicated AI API Key Section ("Mục Key AI")
+                    // 0. Dedicated Google Sign-In & AI Section
                     SettingsGroupCard(
-                        icon = Icons.Default.Key,
-                        iconTint = if (aiUiState.keyConfig.hasKey) EmeraldAccent else AmberAccent,
-                        title = "Mục Key AI (Gemini API)",
-                        subtitle = if (aiUiState.keyConfig.hasKey) {
-                            "Đã lưu Key (${aiUiState.keyConfig.maskedKey}) • ${aiUiState.keyConfig.effectiveModelId}"
-                        } else {
-                            "Điền API Key để hỏi AI tìm tài liệu 388 trang & chụp đề vẽ hình"
+                        icon = if (aiUiState.isSignedInWithGoogle) Icons.Default.AutoAwesome else Icons.Default.Key,
+                        iconTint = if (aiUiState.isAiReady) EmeraldAccent else CyanAccent,
+                        title = "Tài khoản Google & AI (Gemini)",
+                        subtitle = when {
+                            aiUiState.googleUser != null -> "Google: ${aiUiState.googleUser.email.ifBlank { aiUiState.googleUser.displayName }} • ${aiUiState.keyConfig.effectiveModelId}"
+                            aiUiState.keyConfig.hasKey -> "API Key (${aiUiState.keyConfig.maskedKey}) • ${aiUiState.keyConfig.effectiveModelId}"
+                            else -> "Đăng nhập Google để dùng Gemini không cần API Key"
                         }
                     ) {
                         AiKeySetupSection(
+                            googleUser = aiUiState.googleUser,
+                            isSigningIn = aiUiState.isSigningIn,
+                            authStatusMessage = aiUiState.authStatusMessage,
+                            authStatusSuccess = aiUiState.authStatusSuccess,
+                            onSignInWithGoogle = onSignInWithGoogle,
+                            onSignOutGoogle = onSignOutGoogle,
                             keyConfig = aiUiState.keyConfig,
                             isVerifying = aiUiState.isVerifyingKey,
                             statusMessage = aiUiState.keyStatusMessage,

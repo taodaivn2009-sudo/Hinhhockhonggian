@@ -64,6 +64,7 @@ fun AiProblemDrawTab(
     onApplyDrawingPlan: (AiDrawingPlan) -> Unit,
     onOpenPdfPage: (Int) -> Unit,
     onGoToKeyTab: () -> Unit,
+    onSignInWithGoogle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -125,8 +126,12 @@ fun AiProblemDrawTab(
                 .widthIn(max = 720.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            if (!uiState.keyConfig.hasKey) {
-                AiMissingKeyBanner(onGoToKeyTab = onGoToKeyTab)
+            if (!uiState.isAiReady) {
+                AiMissingKeyBanner(
+                    isSigningIn = uiState.isSigningIn,
+                    onSignInWithGoogle = onSignInWithGoogle,
+                    onGoToKeyTab = onGoToKeyTab
+                )
             }
 
             // Hero capture card
@@ -530,34 +535,70 @@ fun AiSuggestedPdfPageRow(
 }
 
 @Composable
-fun AiMissingKeyBanner(onGoToKeyTab: () -> Unit) {
-    Row(
+fun AiMissingKeyBanner(
+    isSigningIn: Boolean = false,
+    onSignInWithGoogle: () -> Unit = {},
+    onGoToKeyTab: () -> Unit
+) {
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(AmberAccent.copy(alpha = 0.14f))
-            .border(1.dp, AmberAccent.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
-            .clickable(onClick = onGoToKeyTab)
+            .background(CyanAccent.copy(alpha = 0.13f))
+            .border(1.dp, CyanAccent.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
             .padding(horizontal = 12.dp, vertical = 10.dp)
             .testTag("ai_missing_key_banner"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Icon(Icons.Default.WarningAmber, contentDescription = null, tint = AmberAccent, modifier = Modifier.size(20.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "Bạn chưa nhập API Key AI",
-                style = MaterialTheme.typography.labelLarge,
-                color = SlateTextPrimary,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "Chạm vào đây để điền API Key trong Mục Key trước khi sử dụng AI.",
-                style = MaterialTheme.typography.labelSmall,
-                color = SlateTextSecondary
-            )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(20.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Đăng nhập Google để dùng Gemini ngay",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = SlateTextPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Không cần nhập API Key — hoặc chạm \"Mục Key\" nếu muốn dùng khóa riêng.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SlateTextSecondary
+                )
+            }
         }
-        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = AmberAccent)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = onSignInWithGoogle,
+                enabled = !isSigningIn,
+                colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF1F1F1F)),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .defaultMinSize(minHeight = 42.dp)
+                    .testTag("ai_banner_google_sign_in_btn")
+            ) {
+                if (isSigningIn) {
+                    CircularProgressIndicator(color = Color(0xFF1F1F1F), strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Đang đăng nhập...", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                } else {
+                    Text("Đăng nhập Google", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
+                }
+            }
+            OutlinedButton(
+                onClick = onGoToKeyTab,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.defaultMinSize(minHeight = 42.dp)
+            ) {
+                Text("Mục Key", color = SlateTextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
     }
 }
 

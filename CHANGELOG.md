@@ -2,6 +2,11 @@
 
 ## Bản cập nhật mới nhất
 
+### Đăng nhập Google → Dùng trực tiếp Google Gemini (Không cần nhập API Key)
+- **Đăng nhập Google 1 chạm (Credential Manager):** Tích hợp nút **Đăng nhập với Google** ngay trong tab **AI** (mục *Tài khoản / Key* & thanh thông báo nhanh) và trong **Cài đặt → Tài khoản Google & AI**, hỗ trợ tự động đăng nhập lại nhẹ nhàng khi mở ứng dụng.
+- **Dùng trực tiếp Gemini của Google không cần API Key:** Sau khi đăng nhập Google, toàn bộ tính năng **Hỏi AI tìm tài liệu 388 trang** và **Chụp đề bài tự động vẽ hình 3D / 2D** chạy trực tiếp trên **Google Gemini (Firebase AI Logic + App Check)** mà không cần tạo hay dán API Key.
+- **Vẫn hỗ trợ API Key riêng (tùy chọn):** Giữ nguyên mục nhập Gemini API Key cá nhân (thu gọn gọn gàng khi đã đăng nhập Google) và cho phép đổi linh hoạt giữa `Gemini 3.8 Flash`, `Gemini 3.5 Flash-Lite`, `Gemini 4 Argon`.
+
 ### Hệ thống Trợ lý AI (Mục Key riêng · Hỏi tìm tài liệu 388 trang · Chụp đề bài tự động vẽ hình 3D/2D)
 - **Tab AI mới & Mục Key AI chuyên biệt:** Thêm tab **AI** ngay trên thanh điều hướng Liquid Glass (`3D | 2D | Tài liệu | AI | Cài đặt`) đồng thời tích hợp **Mục Key AI (Gemini API)** trong cả tab **AI** lẫn tab **Cài đặt** — cho phép người dùng tự điền API Key của mình, ẩn/hiện khóa an toàn, chọn mô hình Gemini (`3.8 Flash`, `3.5 Flash-Lite`, `4 Argon` hoặc mã tùy chỉnh) và bấm **Lưu & Kiểm tra Key** xác thực trực tiếp.
 - **Hỏi AI tìm nội dung tài liệu PDF 388 trang:** Sau khi điền Key, người dùng có thể hỏi AI bất kỳ công thức hay dạng bài Toán 10–11–12 nào; AI giải thích ngắn gọn kèm **thẻ nhảy thẳng tới đúng số trang trong cuốn PDF DPAD 388 trang**. Hỗ trợ bấm nút **Hỏi AI** ngay trên thanh đầu trình đọc PDF hoặc gõ `"Giải thích trang X"` để AI đọc trực tiếp ảnh trang PDF đó.
