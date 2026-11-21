@@ -106,7 +106,17 @@ object SvgExporter {
         // 2. Smart solid / dashed edges
         val solidColor = if (transparentBg) "#0F172A" else "#F8FAFC"
         val dashedColor = if (transparentBg) "#475569" else "#94A3B8"
+        val customLineSegments = if (snap.customLines.isEmpty()) emptyList() else snap.customLines.mapNotNull { ln ->
+            val v1 = scene.pointRegistry[ln.p1]
+            val v2 = scene.pointRegistry[ln.p2]
+            if (v1 != null && v2 != null) v1 to v2 else null
+        }
         for (edge in scene.edges) {
+            if (customLineSegments.any { (c1, c2) ->
+                    (c1.distanceToSq(edge.p1) < 1e-4f && c2.distanceToSq(edge.p2) < 1e-4f) ||
+                        (c1.distanceToSq(edge.p2) < 1e-4f && c2.distanceToSq(edge.p1) < 1e-4f)
+                }
+            ) continue
             val a = proj.project(edge.p1)
             val b = proj.project(edge.p2)
             if (!a.visible || !b.visible) continue
@@ -243,17 +253,31 @@ object SvgExporter {
             }
         }
 
-        // 6. Custom lines & vectors
+        // 6. Custom lines & vectors (with real 3D hidden-line/vector occlusion)
         for (ln in snap.customLines) {
             val v1 = scene.pointRegistry[ln.p1] ?: continue
             val v2 = scene.pointRegistry[ln.p2] ?: continue
             val a = proj.project(v1)
             val b = proj.project(v2)
             if (!a.visible || !b.visible) continue
-            val dashAttr = if (ln.style.isDashed) """ stroke-dasharray="10,7"""" else ""
-            sb.appendLine("""  <line x1="${f(a.x)}" y1="${f(a.y)}" x2="${f(b.x)}" y2="${f(b.y)}" stroke="${escapeXml(ln.colorHex)}" stroke-width="3.2" stroke-linecap="round"$dashAttr/>""")
+            val effectiveDashed = ln.style.isDashed || (snap.dashed && Geo3DMathHelpers.isSegmentOccludedBySolid(
+                p1 = v1,
+                p2 = v2,
+                camPos = camPos,
+                occluderFaces = scene.occluderFaces,
+                roundBodyHint = scene.roundBodyHint
+            ))
+            val isNeutral = Geo3DMathHelpers.isNeutralColorHex(ln.colorHex)
+            val strokeCss = if (isNeutral) {
+                if (effectiveDashed) dashedColor else solidColor
+            } else {
+                escapeXml(ln.colorHex)
+            }
+            val sw = if (isNeutral) (if (effectiveDashed) "2.2" else "2.8") else "3.2"
+            val dashAttr = if (effectiveDashed) """ stroke-dasharray="10,7"""" else ""
+            sb.appendLine("""  <line x1="${f(a.x)}" y1="${f(a.y)}" x2="${f(b.x)}" y2="${f(b.y)}" stroke="$strokeCss" stroke-width="$sw" stroke-linecap="round"$dashAttr/>""")
             if (ln.style.isVector) {
-                sb.appendLine(svgArrowPolygon(a.x, a.y, b.x, b.y, 15f, escapeXml(ln.colorHex)))
+                sb.appendLine(svgArrowPolygon(a.x, a.y, b.x, b.y, 15f, strokeCss))
             }
         }
 
@@ -484,13 +508,22 @@ object SvgExporter {
 
         // Geometric Objects
         val ptMap = snap.points.associateBy { it.id }
+        val neutralSolid2D = if (transparentBg) "#0F172A" else "#E2E8F0"
+        val neutralDashed2D = if (transparentBg) "#475569" else "#94A3B8"
+        fun resolveSvgColor2D(rawHex: String, dashed: Boolean = false): String = when {
+            Geo3DMathHelpers.isNeutralColorHex(rawHex) -> if (dashed) neutralDashed2D else neutralSolid2D
+            transparentBg && rawHex.equals("#F8FAFC", true) -> "#0F172A"
+            else -> escapeXml(rawHex)
+        }
         for (obj in snap.objects) {
             when (obj) {
                 is Geo2DObject.Polygon -> {
                     val pts = obj.pointIds.mapNotNull { ptMap[it] }
                     if (pts.size >= 3) {
+                        val isNeutral = Geo3DMathHelpers.isNeutralColorHex(obj.colorHex)
+                        val col = resolveSvgColor2D(obj.colorHex)
                         val attr = pts.joinToString(" ") { "${f(toSx(it.x.toDouble()))},${f(toSy(it.y.toDouble()))}" }
-                        sb.appendLine("""  <polygon points="$attr" fill="${escapeXml(obj.colorHex)}" fill-opacity="0.20" stroke="${escapeXml(obj.colorHex)}" stroke-width="2.6"/>""")
+                        sb.appendLine("""  <polygon points="$attr" fill="$col" fill-opacity="${if (isNeutral) "0.07" else "0.20"}" stroke="$col" stroke-width="${if (isNeutral) "2.2" else "2.6"}"/>""")
                     }
                 }
                 is Geo2DObject.Circle -> {
@@ -503,15 +536,17 @@ object SvgExporter {
                     }
                     val screenR = (r * cam.pixelsPerUnit).toFloat()
                     if (screenR.isFinite() && screenR > 0.5f && screenR < max(w, h) * 8f) {
-                        sb.appendLine("""  <circle cx="${f(toSx(c.x.toDouble()))}" cy="${f(toSy(c.y.toDouble()))}" r="${f(screenR)}" fill="${escapeXml(obj.colorHex)}" fill-opacity="0.12" stroke="${escapeXml(obj.colorHex)}" stroke-width="2.6"/>""")
+                        val isNeutral = Geo3DMathHelpers.isNeutralColorHex(obj.colorHex)
+                        val col = resolveSvgColor2D(obj.colorHex)
+                        sb.appendLine("""  <circle cx="${f(toSx(c.x.toDouble()))}" cy="${f(toSy(c.y.toDouble()))}" r="${f(screenR)}" fill="$col" fill-opacity="${if (isNeutral) "0.05" else "0.12"}" stroke="$col" stroke-width="${if (isNeutral) "2.2" else "2.6"}"/>""")
                     }
                 }
                 is Geo2DObject.Segment -> {
                     val p1 = ptMap[obj.p1Id] ?: continue
                     val p2 = ptMap[obj.p2Id] ?: continue
-                    val col = if (transparentBg && obj.colorHex.equals("#F8FAFC", true)) "#0F172A" else obj.colorHex
+                    val col = resolveSvgColor2D(obj.colorHex, obj.dashed)
                     val dash = if (obj.dashed) """ stroke-dasharray="9,6"""" else ""
-                    sb.appendLine("""  <line x1="${f(toSx(p1.x.toDouble()))}" y1="${f(toSy(p1.y.toDouble()))}" x2="${f(toSx(p2.x.toDouble()))}" y2="${f(toSy(p2.y.toDouble()))}" stroke="${escapeXml(col)}" stroke-width="2.6" stroke-linecap="round"$dash/>""")
+                    sb.appendLine("""  <line x1="${f(toSx(p1.x.toDouble()))}" y1="${f(toSy(p1.y.toDouble()))}" x2="${f(toSx(p2.x.toDouble()))}" y2="${f(toSy(p2.y.toDouble()))}" stroke="$col" stroke-width="2.6" stroke-linecap="round"$dash/>""")
                 }
                 is Geo2DObject.Line -> {
                     val p1 = ptMap[obj.p1Id] ?: continue
@@ -521,7 +556,9 @@ object SvgExporter {
                     val len = hypot(sx2 - sx1, sy2 - sy1)
                     if (len > 1f) {
                         val ux = (sx2 - sx1) / len; val uy = (sy2 - sy1) / len; val ext = max(w, h) * 1.5f
-                        sb.appendLine("""  <line x1="${f(sx1 - ux * ext)}" y1="${f(sy1 - uy * ext)}" x2="${f(sx1 + ux * ext)}" y2="${f(sy1 + uy * ext)}" stroke="${escapeXml(obj.colorHex)}" stroke-width="2.4"/>""")
+                        val col = resolveSvgColor2D(obj.colorHex, obj.dashed)
+                        val dash = if (obj.dashed) """ stroke-dasharray="9,6"""" else ""
+                        sb.appendLine("""  <line x1="${f(sx1 - ux * ext)}" y1="${f(sy1 - uy * ext)}" x2="${f(sx1 + ux * ext)}" y2="${f(sy1 + uy * ext)}" stroke="$col" stroke-width="2.4"$dash/>""")
                     }
                 }
                 is Geo2DObject.Ray -> {
@@ -532,7 +569,8 @@ object SvgExporter {
                     val len = hypot(sx2 - sx1, sy2 - sy1)
                     if (len > 1f) {
                         val ux = (sx2 - sx1) / len; val uy = (sy2 - sy1) / len; val ext = max(w, h) * 1.5f
-                        sb.appendLine("""  <line x1="${f(sx1)}" y1="${f(sy1)}" x2="${f(sx1 + ux * ext)}" y2="${f(sy1 + uy * ext)}" stroke="${escapeXml(obj.colorHex)}" stroke-width="2.4"/>""")
+                        val col = resolveSvgColor2D(obj.colorHex)
+                        sb.appendLine("""  <line x1="${f(sx1)}" y1="${f(sy1)}" x2="${f(sx1 + ux * ext)}" y2="${f(sy1 + uy * ext)}" stroke="$col" stroke-width="2.4"/>""")
                     }
                 }
                 is Geo2DObject.VectorObj -> {
@@ -540,8 +578,10 @@ object SvgExporter {
                     val p2 = ptMap[obj.toId] ?: continue
                     val sx1 = toSx(p1.x.toDouble()); val sy1 = toSy(p1.y.toDouble())
                     val sx2 = toSx(p2.x.toDouble()); val sy2 = toSy(p2.y.toDouble())
-                    sb.appendLine("""  <line x1="${f(sx1)}" y1="${f(sy1)}" x2="${f(sx2)}" y2="${f(sy2)}" stroke="${escapeXml(obj.colorHex)}" stroke-width="3" stroke-linecap="round"/>""")
-                    sb.appendLine(svgArrowPolygon(sx1, sy1, sx2, sy2, 14f, escapeXml(obj.colorHex)))
+                    val col = resolveSvgColor2D(obj.colorHex, obj.dashed)
+                    val dash = if (obj.dashed) """ stroke-dasharray="9,6"""" else ""
+                    sb.appendLine("""  <line x1="${f(sx1)}" y1="${f(sy1)}" x2="${f(sx2)}" y2="${f(sy2)}" stroke="$col" stroke-width="3" stroke-linecap="round"$dash/>""")
+                    sb.appendLine(svgArrowPolygon(sx1, sy1, sx2, sy2, 14f, col))
                 }
                 is Geo2DObject.AngleMeasure -> {
                     val pA = ptMap[obj.pAId] ?: continue
@@ -549,7 +589,8 @@ object SvgExporter {
                     val pC = ptMap[obj.pCId] ?: continue
                     val deg = Geo2DMathHelpers.angleDegrees(Vec2(pA.x, pA.y), Vec2(pV.x, pV.y), Vec2(pC.x, pC.y))
                     val svx = toSx(pV.x.toDouble()); val svy = toSy(pV.y.toDouble())
-                    sb.appendLine("""  <text x="${f(svx + 16f)}" y="${f(svy - 10f)}" fill="${escapeXml(obj.colorHex)}" font-family="monospace" font-weight="bold" font-size="14">${Geo2DMathHelpers.formatNum(deg)}°</text>""")
+                    val col = resolveSvgColor2D(obj.colorHex)
+                    sb.appendLine("""  <text x="${f(svx + 16f)}" y="${f(svy - 10f)}" fill="$col" font-family="monospace" font-weight="bold" font-size="14">${Geo2DMathHelpers.formatNum(deg)}°</text>""")
                 }
             }
         }

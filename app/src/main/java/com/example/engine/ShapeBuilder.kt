@@ -52,6 +52,7 @@ object ShapeBuilder {
     fun build(snap: GeometrySnapshot): BuiltScene {
         val registry = LinkedHashMap<String, Vec3>()
         val faces = mutableListOf<RenderFace>()
+        val occluderFaces = mutableListOf<RenderFace>()
         val edges = mutableListOf<SmartEdge>()
         val clickable = mutableListOf<SegmentRef>()
         val polyEdgesForSection = mutableListOf<Pair<Vec3, Vec3>>()
@@ -98,8 +99,10 @@ object ShapeBuilder {
                 var normal = v1.cross(v2).normalized()
                 if (normal.dot(fc - centerSolid) < 0f) normal = -normal
 
+                val solidFace = RenderFace(pts, normal, fc, COLOR_FACE_DEFAULT)
+                occluderFaces.add(solidFace)
                 if (snap.faces) {
-                    faces.add(RenderFace(pts, normal, fc, COLOR_FACE_DEFAULT))
+                    faces.add(solidFace)
                 }
                 FaceInfo(normal, fc)
             }
@@ -650,7 +653,8 @@ object ShapeBuilder {
             metrics = metrics,
             roundBodyHint = roundHint,
             dynamicSectionBorder = dynamicSectionBorder,
-            dynamicSectionArea = dynamicSectionArea
+            dynamicSectionArea = dynamicSectionArea,
+            occluderFaces = occluderFaces
         )
     }
 

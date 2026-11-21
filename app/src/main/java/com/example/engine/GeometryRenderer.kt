@@ -228,7 +228,20 @@ object GeometryRenderer {
             pathEffect = scratch.dash75
         }
 
+        // Pre-resolve custom line endpoint pairs so base edges covered by a custom line/vector aren't double-drawn with misaligned dashes
+        val customLineSegments = if (snap.customLines.isEmpty()) emptyList() else snap.customLines.mapNotNull { ln ->
+            val v1 = scene.pointRegistry[ln.p1]
+            val v2 = scene.pointRegistry[ln.p2]
+            if (v1 != null && v2 != null) v1 to v2 else null
+        }
+
         for (edge in scene.edges) {
+            if (customLineSegments.any { (c1, c2) ->
+                    (c1.distanceToSq(edge.p1) < 1e-4f && c2.distanceToSq(edge.p2) < 1e-4f) ||
+                        (c1.distanceToSq(edge.p2) < 1e-4f && c2.distanceToSq(edge.p1) < 1e-4f)
+                }
+            ) continue
+
             val a = proj.project(edge.p1)
             val b = proj.project(edge.p2)
             if (!a.visible || !b.visible) continue
@@ -303,12 +316,30 @@ object GeometryRenderer {
             drawCoordinateAxes(canvas, proj, origin, density, snap.labels, scratch)
         }
 
-        // 9. Custom Lines & 3D Vectors
+        // 9. Custom Lines & 3D Vectors (auto-dashed when occluded behind the 3D solid)
         for (ln in snap.customLines) {
             val p1 = scene.pointRegistry[ln.p1] ?: continue
             val p2 = scene.pointRegistry[ln.p2] ?: continue
-            val colorInt = parseHexColor(ln.colorHex, 0xFF38BDF8.toInt())
-            drawCustomLineOrVector(canvas, proj, p1, p2, colorInt, ln.style, density, scratch)
+            val effectiveDashed = ln.style.isDashed || (snap.dashed && Geo3DMathHelpers.isSegmentOccludedBySolid(
+                p1 = p1,
+                p2 = p2,
+                camPos = camPos,
+                occluderFaces = scene.occluderFaces,
+                roundBodyHint = scene.roundBodyHint
+            ))
+            val isNeutral = Geo3DMathHelpers.isNeutralColorHex(ln.colorHex)
+            val colorInt = if (isNeutral) {
+                if (effectiveDashed) dashedEdgePaint.color else solidEdgePaint.color
+            } else {
+                parseHexColor(ln.colorHex, if (effectiveDashed) dashedEdgePaint.color else solidEdgePaint.color)
+            }
+            val strokeW = when {
+                !isNeutral -> 2.4f * density
+                ln.style.isVector -> 2.0f * density
+                effectiveDashed -> 1.45f * density
+                else -> 1.8f * density
+            }
+            drawCustomLineOrVector(canvas, proj, p1, p2, colorInt, effectiveDashed, ln.style.isVector, strokeW, density, scratch)
         }
 
         // 10. Pink Constraint Rail (when dragging along vertical Oz or segment AB)
@@ -682,7 +713,9 @@ object GeometryRenderer {
         p1: Vec3,
         p2: Vec3,
         colorArgb: Int,
-        style: LineStyle,
+        isDashed: Boolean,
+        isVector: Boolean,
+        strokeWidthPx: Float,
         density: Float,
         scratch: RenderScratch3D
     ) {
@@ -690,13 +723,13 @@ object GeometryRenderer {
         val b = proj.project(p2)
         if (!a.visible || !b.visible) return
 
-        val paint = if (style.isDashed) scratch.dashedStrokePaint else scratch.strokePaint
-        paint.strokeWidth = 2.3f * density
+        val paint = if (isDashed) scratch.dashedStrokePaint else scratch.strokePaint
+        paint.strokeWidth = strokeWidthPx
         paint.strokeCap = Paint.Cap.ROUND
         paint.color = colorArgb
-        paint.pathEffect = if (style.isDashed) scratch.dash75 else null
+        paint.pathEffect = if (isDashed) scratch.dash75 else null
         canvas.drawLine(a.x, a.y, b.x, b.y, paint)
-        if (style.isVector) {
+        if (isVector) {
             drawArrowHead2D(canvas, a.x, a.y, b.x, b.y, colorArgb, 11.5f * density, scratch)
         }
     }

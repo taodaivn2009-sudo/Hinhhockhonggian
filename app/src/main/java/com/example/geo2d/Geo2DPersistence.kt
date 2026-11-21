@@ -97,6 +97,7 @@ class Geo2DPersistence(context: Context) {
                         o.put("kind", "vector")
                         o.put("fromId", obj.fromId)
                         o.put("toId", obj.toId)
+                        o.put("dashed", obj.dashed)
                     }
                     is Geo2DObject.Circle -> {
                         o.put("kind", "circle")
@@ -185,7 +186,7 @@ class Geo2DPersistence(context: Context) {
                             val fId = item.optString("fromId")
                             val tId = item.optString("toId")
                             if (fId.isNotEmpty() && tId.isNotEmpty()) {
-                                objects.add(Geo2DObject.VectorObj(id, fId, tId, color))
+                                objects.add(Geo2DObject.VectorObj(id, fId, tId, color, dashed = item.optBoolean("dashed", false)))
                             }
                         }
                         "circle" -> {

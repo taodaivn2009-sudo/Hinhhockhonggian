@@ -874,6 +874,140 @@ class ExampleRobolectricTest {
         assertTrue(keyOnlyReady.isAiReady)
         assertTrue(keyOnlyReady.activeProviderLabel.contains("API Key riêng"))
     }
+
+    @Test
+    fun `ai drawings dash hidden vectors and lines and only color problem highlighted items`() {
+        // 1. Real 3D occlusion detection on pyramid4_sa from default camera (7.5, 5.5, 8.5)
+        val pyrSnap = GeometrySnapshot(
+            shape = ShapeType.PYRAMID4_SA,
+            a = 4f,
+            h = 5f,
+            faces = false, // must STILL detect occlusion even when translucent faces toggle is off
+            customPoints = listOf(CustomEdgePoint("ep1", "M", "S", "C", 0.5f)),
+            customLines = listOf(
+                CustomLine("ln_hidden_vec", "A", "M", LineStyle.VECTOR_SOLID, "#F43F5E"),
+                CustomLine("ln_front_vec", "S", "C", LineStyle.VECTOR_SOLID, "#38BDF8"),
+                CustomLine("ln_neutral_aux", "B", "D", LineStyle.DASHED, "")
+            )
+        )
+        val builtPyr = ShapeBuilder.build(pyrSnap)
+        val camPos = CameraOrbitState.DEFAULT.cameraPosition()
+        val reg = builtPyr.pointRegistry
+
+        // Interior vector A->M, back edge S->A, and base diagonal B->D are hidden -> occluded = true
+        assertTrue(
+            "Interior vector AM must be detected as occluded (dashed)",
+            Geo3DMathHelpers.isSegmentOccludedBySolid(reg["A"]!!, reg["M"]!!, camPos, builtPyr.occluderFaces, builtPyr.roundBodyHint)
+        )
+        assertTrue(
+            "Back edge SA must be detected as occluded (dashed)",
+            Geo3DMathHelpers.isSegmentOccludedBySolid(reg["S"]!!, reg["A"]!!, camPos, builtPyr.occluderFaces, builtPyr.roundBodyHint)
+        )
+        assertTrue(
+            "Base diagonal BD must be detected as occluded from above",
+            Geo3DMathHelpers.isSegmentOccludedBySolid(reg["B"]!!, reg["D"]!!, camPos, builtPyr.occluderFaces, builtPyr.roundBodyHint)
+        )
+        // Front visible edge S->C and front base edge C->D must NOT be occluded
+        assertFalse(
+            "Front edge SC must remain visible (solid)",
+            Geo3DMathHelpers.isSegmentOccludedBySolid(reg["S"]!!, reg["C"]!!, camPos, builtPyr.occluderFaces, builtPyr.roundBodyHint)
+        )
+        assertFalse(
+            "Front base edge CD must remain visible (solid)",
+            Geo3DMathHelpers.isSegmentOccludedBySolid(reg["C"]!!, reg["D"]!!, camPos, builtPyr.occluderFaces, builtPyr.roundBodyHint)
+        )
+
+        // SVG export must emit stroke-dasharray on occluded VECTOR_SOLID A->M and keep neutral color uncolored
+        val svg3D = SvgExporter.export3DToSvg(1080, 1080, GeometryUiState(pyrSnap, builtPyr), transparentBg = false)
+        assertTrue(
+            "Occluded vector AM (#F43F5E) must be exported dashed in SVG",
+            svg3D.contains("""stroke="#F43F5E" stroke-width="3.2" stroke-linecap="round" stroke-dasharray="10,7"""")
+        )
+        assertTrue(
+            "Visible front vector SC (#38BDF8) must stay solid in SVG",
+            svg3D.contains("""stroke="#38BDF8" stroke-width="3.2" stroke-linecap="round"/>""")
+        )
+
+        // 2. Cube space diagonal A->C' is occluded while front top edge A'->B' is visible
+        val cubeBuilt = ShapeBuilder.build(GeometrySnapshot(shape = ShapeType.CUBE, a = 4f))
+        val cReg = cubeBuilt.pointRegistry
+        assertTrue(
+            "Cube interior diagonal AC' must be occluded",
+            Geo3DMathHelpers.isSegmentOccludedBySolid(cReg["A"]!!, cReg["C'"]!!, camPos, cubeBuilt.occluderFaces, cubeBuilt.roundBodyHint)
+        )
+        assertFalse(
+            "Cube front top edge A'B' must be visible",
+            Geo3DMathHelpers.isSegmentOccludedBySolid(cReg["A'"]!!, cReg["B'"]!!, camPos, cubeBuilt.occluderFaces, cubeBuilt.roundBodyHint)
+        )
+
+        // 3. AI 3D parser only colors highlighted lines/vectors and disables unrequested altitude
+        val selective3DJson = """
+            {
+              "target": "3D",
+              "title": "Góc giữa vectơ AM và SB",
+              "problemText": "Cho chóp S.ABCD. Tính góc giữa vectơ AM và vectơ SB.",
+              "drawingSummary": "Tô màu vectơ AM (nét đứt) và vectơ SB (nét liền).",
+              "solutionHint": "Dùng tích vô hướng.",
+              "scene3D": {
+                "shapeKey": "pyramid4_sa",
+                "a": 4.0,
+                "h": 5.0,
+                "showAltitude": false,
+                "edgePoints": [{"name": "M", "from": "S", "to": "C", "ratio": 0.5}],
+                "lines": [
+                  {"p1": "A", "p2": "M", "style": "vector_dashed", "highlighted": true, "colorHex": "#F43F5E"},
+                  {"p1": "S", "p2": "B", "style": "vector_solid", "highlighted": true, "colorHex": "#38BDF8"},
+                  {"p1": "A", "p2": "C", "style": "dashed", "highlighted": false, "colorHex": "#10B981"}
+                ],
+                "planes": []
+              }
+            }
+        """.trimIndent()
+        val plan3D = AiResponseParser.parseDrawingPlan(selective3DJson)!!
+        val snap3D = AiResponseParser.buildGeometrySnapshot(plan3D.scene3D!!)
+        assertFalse("Unrequested altitude must stay off by default", snap3D.altitude)
+        assertEquals(3, snap3D.customLines.size)
+        assertEquals("#F43F5E", snap3D.customLines[0].colorHex)
+        assertEquals(LineStyle.VECTOR_DASHED, snap3D.customLines[0].style)
+        assertEquals("#38BDF8", snap3D.customLines[1].colorHex)
+        assertEquals("", snap3D.customLines[2].colorHex) // unhighlighted helper line stays neutral
+
+        // 4. AI 2D parser supports dashed vectors, keeps base polygon neutral, and persists dashed VectorObj cleanly
+        val selective2DJson = """
+            {
+              "target": "2D",
+              "title": "Tam giác ABC và vectơ AM",
+              "problemText": "Cho tam giác ABC, M là trung điểm BC. Vẽ vectơ AM nét đứt.",
+              "drawingSummary": "Tam giác ABC nét thường, tô màu vectơ AM nét đứt.",
+              "solutionHint": "AM = 1/2 (AB + AC).",
+              "scene2D": {
+                "points": [
+                  {"name": "A", "x": 0, "y": 3},
+                  {"name": "B", "x": -2, "y": 0},
+                  {"name": "C", "x": 2, "y": 0},
+                  {"name": "M", "x": 0, "y": 0}
+                ],
+                "objects": [
+                  {"kind": "polygon", "pointNames": ["A", "B", "C"], "highlighted": false, "colorHex": ""},
+                  {"kind": "vector", "p1": "A", "p2": "M", "dashed": true, "highlighted": true, "colorHex": "#F43F5E"}
+                ]
+              }
+            }
+        """.trimIndent()
+        val plan2D = AiResponseParser.parseDrawingPlan(selective2DJson)!!
+        val snap2D = AiResponseParser.buildGeo2DSnapshot(plan2D.scene2D!!)
+        val poly = snap2D.objects.filterIsInstance<Geo2DObject.Polygon>().first()
+        val vec = snap2D.objects.filterIsInstance<Geo2DObject.VectorObj>().first()
+        assertEquals("", poly.colorHex)
+        assertEquals("#F43F5E", vec.colorHex)
+        assertTrue("2D AI vector must preserve dashed=true", vec.dashed)
+
+        // Round-trip persistence of dashed 2D VectorObj
+        val restored2D = Geo2DPersistence.jsonToSnapshot(Geo2DPersistence.snapshotToJson(snap2D))
+        val restoredVec = restored2D.objects.filterIsInstance<Geo2DObject.VectorObj>().first()
+        assertTrue("Geo2DPersistence must preserve VectorObj.dashed", restoredVec.dashed)
+        assertEquals("#F43F5E", restoredVec.colorHex)
+    }
 }
 
 

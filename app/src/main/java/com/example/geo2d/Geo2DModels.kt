@@ -93,7 +93,8 @@ sealed class Geo2DObject {
         override val id: String,
         val fromId: String,
         val toId: String,
-        override val colorHex: String = "#F43F5E"
+        override val colorHex: String = "#F43F5E",
+        val dashed: Boolean = false
     ) : Geo2DObject()
 
     data class Circle(

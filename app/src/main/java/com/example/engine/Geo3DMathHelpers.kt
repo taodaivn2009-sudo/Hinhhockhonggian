@@ -220,4 +220,208 @@ object Geo3DMathHelpers {
     }
 
     fun formatDeg(deg: Float): String = String.format(Locale.US, "%.1f°", deg)
+
+    /**
+     * Returns true when a color string indicates neutral/uncolored ink (blank, "default", or "neutral").
+     */
+    fun isNeutralColorHex(hex: String?): Boolean {
+        val t = hex?.trim().orEmpty()
+        return t.isEmpty() || t.equals("default", ignoreCase = true) || t.equals("neutral", ignoreCase = true)
+    }
+
+    /**
+     * Determines whether a 3D segment or vector [p1] -> [p2] is hidden/occluded behind the solid
+     * from [camPos]. Handles interior segments (diagonals, altitudes, medians), back-facing edges,
+     * and segments behind polyhedra, cylinders, cones, and spheres.
+     */
+    fun isSegmentOccludedBySolid(
+        p1: Vec3,
+        p2: Vec3,
+        camPos: Vec3,
+        occluderFaces: List<RenderFace>,
+        roundBodyHint: RoundBodyHint?
+    ): Boolean {
+        if (occluderFaces.isEmpty() && roundBodyHint == null) return false
+        if (p1.distanceToSq(p2) < 1e-6f) return false
+
+        val qMid = Vec3.lerp(p1, p2, 0.5f)
+        if (isPointOccludedBySolid(qMid, camPos, occluderFaces, roundBodyHint)) return true
+
+        val q1 = Vec3.lerp(p1, p2, 0.25f)
+        val q3 = Vec3.lerp(p1, p2, 0.75f)
+        return isPointOccludedBySolid(q1, camPos, occluderFaces, roundBodyHint) &&
+            isPointOccludedBySolid(q3, camPos, occluderFaces, roundBodyHint)
+    }
+
+    private fun isPointOccludedBySolid(
+        q: Vec3,
+        camPos: Vec3,
+        occluderFaces: List<RenderFace>,
+        roundBodyHint: RoundBodyHint?
+    ): Boolean {
+        if (occluderFaces.isNotEmpty()) {
+            var onFrontFace = false
+            var onBackFace = false
+            for (face in occluderFaces) {
+                if (face.points.size < 3) continue
+                val planeDist = abs((q - face.points[0]).dot(face.normal))
+                if (planeDist < 1.5e-3f && isPointInConvexPolygon3D(q, face.points, face.normal)) {
+                    if (face.normal.dot(camPos - face.center) > 1e-4f) {
+                        onFrontFace = true
+                    } else {
+                        onBackFace = true
+                    }
+                }
+            }
+            if (onBackFace && !onFrontFace) return true
+
+            val dir = q - camPos
+            for (face in occluderFaces) {
+                if (face.points.size < 3) continue
+                // Only front-facing faces can occlude points behind them
+                if (face.normal.dot(camPos - face.center) <= 1e-4f) continue
+                val denom = dir.dot(face.normal)
+                if (denom >= -1e-5f) continue
+                val u = (face.points[0] - camPos).dot(face.normal) / denom
+                if (u > 0.005f && u < 0.985f) {
+                    val hit = camPos + dir * u
+                    if (isPointInConvexPolygon3D(hit, face.points, face.normal)) {
+                        return true
+                    }
+                }
+            }
+        }
+
+        if (roundBodyHint != null) {
+            return isPointOccludedByRoundBody(q, camPos, roundBodyHint)
+        }
+        return false
+    }
+
+    private fun isPointInConvexPolygon3D(pt: Vec3, poly: List<Vec3>, normal: Vec3): Boolean {
+        var hasPos = false
+        var hasNeg = false
+        val n = poly.size
+        for (i in 0 until n) {
+            val a = poly[i]
+            val b = poly[(i + 1) % n]
+            val d = (b - a).cross(pt - a).dot(normal)
+            if (d > 1.5e-4f) hasPos = true
+            else if (d < -1.5e-4f) hasNeg = true
+            if (hasPos && hasNeg) return false
+        }
+        return true
+    }
+
+    private fun isPointOccludedByRoundBody(q: Vec3, camPos: Vec3, hint: RoundBodyHint): Boolean {
+        val dir = q - camPos
+        val uMin = 0.005f
+        val uMax = 0.985f
+        return when (hint) {
+            is RoundBodyHint.Sphere -> {
+                val oc = camPos - hint.center
+                val a = dir.dot(dir)
+                if (a < 1e-6f) return false
+                val b = 2f * oc.dot(dir)
+                val c = oc.dot(oc) - hint.radius * hint.radius
+                val disc = b * b - 4f * a * c
+                if (disc <= 0f) return false
+                val sqrtD = sqrt(disc)
+                val u1 = (-b - sqrtD) / (2f * a)
+                val u2 = (-b + sqrtD) / (2f * a)
+                (u1 in uMin..uMax) || (u2 in uMin..uMax)
+            }
+            is RoundBodyHint.Cylinder -> {
+                val cx = hint.centerBottom.x
+                val cz = hint.centerBottom.z
+                val yMin = kotlin.math.min(hint.centerBottom.y, hint.centerTop.y)
+                val yMax = kotlin.math.max(hint.centerBottom.y, hint.centerTop.y)
+                val rSq = hint.radius * hint.radius
+                // Check caps
+                if (abs(dir.y) > 1e-5f) {
+                    val uTop = (yMax - camPos.y) / dir.y
+                    if (uTop in uMin..uMax) {
+                        val hx = camPos.x + dir.x * uTop - cx
+                        val hz = camPos.z + dir.z * uTop - cz
+                        if (hx * hx + hz * hz <= rSq + 1e-3f) return true
+                    }
+                    val uBot = (yMin - camPos.y) / dir.y
+                    if (uBot in uMin..uMax) {
+                        val hx = camPos.x + dir.x * uBot - cx
+                        val hz = camPos.z + dir.z * uBot - cz
+                        if (hx * hx + hz * hz <= rSq + 1e-3f) return true
+                    }
+                }
+                // Check lateral cylinder surface
+                val ox = camPos.x - cx
+                val oz = camPos.z - cz
+                val a = dir.x * dir.x + dir.z * dir.z
+                if (a > 1e-6f) {
+                    val b = 2f * (ox * dir.x + oz * dir.z)
+                    val c = ox * ox + oz * oz - rSq
+                    val disc = b * b - 4f * a * c
+                    if (disc > 0f) {
+                        val sqrtD = sqrt(disc)
+                        val u1 = (-b - sqrtD) / (2f * a)
+                        if (u1 in uMin..uMax) {
+                            val hy = camPos.y + dir.y * u1
+                            if (hy in (yMin - 1e-3f)..(yMax + 1e-3f)) return true
+                        }
+                        val u2 = (-b + sqrtD) / (2f * a)
+                        if (u2 in uMin..uMax) {
+                            val hy = camPos.y + dir.y * u2
+                            if (hy in (yMin - 1e-3f)..(yMax + 1e-3f)) return true
+                        }
+                    }
+                }
+                false
+            }
+            is RoundBodyHint.Cone -> {
+                val cx = hint.centerBottom.x
+                val cz = hint.centerBottom.z
+                val yBase = hint.centerBottom.y
+                val yApex = hint.apex.y
+                val h = yApex - yBase
+                if (abs(h) < 1e-4f) return false
+                val rSq = hint.radius * hint.radius
+                // Check base disk
+                if (abs(dir.y) > 1e-5f) {
+                    val uBot = (yBase - camPos.y) / dir.y
+                    if (uBot in uMin..uMax) {
+                        val hx = camPos.x + dir.x * uBot - cx
+                        val hz = camPos.z + dir.z * uBot - cz
+                        if (hx * hx + hz * hz <= rSq + 1e-3f) return true
+                    }
+                }
+                // Check lateral cone surface: (x-ax)^2 + (z-az)^2 = k^2 * (yApex - y)^2
+                val k = hint.radius / h
+                val k2 = k * k
+                val ox = camPos.x - hint.apex.x
+                val oy = camPos.y - hint.apex.y
+                val oz = camPos.z - hint.apex.z
+                val a = dir.x * dir.x + dir.z * dir.z - k2 * dir.y * dir.y
+                val b = 2f * (ox * dir.x + oz * dir.z - k2 * oy * dir.y)
+                val c = ox * ox + oz * oz - k2 * oy * oy
+                val yLo = kotlin.math.min(yBase, yApex) - 1e-3f
+                val yHi = kotlin.math.max(yBase, yApex) + 1e-3f
+                if (abs(a) > 1e-6f) {
+                    val disc = b * b - 4f * a * c
+                    if (disc > 0f) {
+                        val sqrtD = sqrt(disc)
+                        val u1 = (-b - sqrtD) / (2f * a)
+                        if (u1 in uMin..uMax) {
+                            val hy = camPos.y + dir.y * u1
+                            if (hy in yLo..yHi) return true
+                        }
+                        val u2 = (-b + sqrtD) / (2f * a)
+                        if (u2 in uMin..uMax) {
+                            val hy = camPos.y + dir.y * u2
+                            if (hy in yLo..yHi) return true
+                        }
+                    }
+                }
+                false
+            }
+        }
+    }
 }

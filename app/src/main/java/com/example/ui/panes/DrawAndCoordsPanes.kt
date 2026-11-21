@@ -317,7 +317,7 @@ fun DrawPane(
                             "Đoạn ${l.p1}${l.p2} (${if (l.style.isDashed) "Nét đứt" else "Nét liền"})"
                         }
                         CustomElementRow(
-                            dotColor = Color(GeometryRenderer.parseHexColor(l.colorHex, 0xFF38BDF8.toInt())),
+                            dotColor = Color(GeometryRenderer.parseHexColor(l.colorHex, 0xFF94A3B8.toInt())),
                             text = desc,
                             onDelete = { viewModel.removeCustomLine(l.id) }
                         )

@@ -128,8 +128,9 @@ data class Ai3DXyzPointSpec(
 data class Ai3DLineSpec(
     val p1: String,
     val p2: String,
-    val style: LineStyle = LineStyle.SOLID,
-    val colorHex: String = "#F43F5E"
+    val style: LineStyle = LineStyle.DASHED,
+    val colorHex: String = "",
+    val highlighted: Boolean = false
 )
 
 data class Ai3DSceneSpec(
@@ -138,6 +139,7 @@ data class Ai3DSceneSpec(
     val b: Float = 3f,
     val h: Float = 4.8f,
     val showAxes: Boolean = false,
+    val showAltitude: Boolean = false,
     val originPoint: String? = null,
     val edgePoints: List<Ai3DEdgePointSpec> = emptyList(),
     val xyzPoints: List<Ai3DXyzPointSpec> = emptyList(),
@@ -150,7 +152,7 @@ data class Ai2DPointSpec(
     val name: String,
     val x: Float,
     val y: Float,
-    val colorHex: String = "#38BDF8"
+    val colorHex: String = ""
 )
 
 data class Ai2DObjectSpec(
@@ -161,7 +163,8 @@ data class Ai2DObjectSpec(
     val radius: Float? = null,
     val pointNames: List<String> = emptyList(),
     val dashed: Boolean = false,
-    val colorHex: String = "#38BDF8"
+    val colorHex: String = "",
+    val highlighted: Boolean = false
 )
 
 data class Ai2DFunctionSpec(
@@ -194,7 +197,7 @@ data class AiDrawingPlan(
  */
 object AiResponseParser {
 
-    private val defaultColors = listOf("#38BDF8", "#10B981", "#F43F5E", "#FBBF24", "#A78BFA", "#FB923C")
+    private val defaultColors = listOf("#F43F5E", "#38BDF8", "#10B981", "#FBBF24", "#A78BFA", "#FB923C")
 
     fun extractJsonObject(rawText: String): JSONObject? {
         val trimmed = rawText.trim()
@@ -287,17 +290,25 @@ object AiResponseParser {
             )
         }
 
+        var highlightIdx3D = 0
         val lines = spec.lines.mapIndexedNotNull { idx, ln ->
             val p1 = ln.p1.trim()
             val p2 = ln.p2.trim()
             if (p1.isEmpty() || p2.isEmpty() || p1 == p2) null
-            else CustomLine(
-                id = "ai_ln_$idx",
-                p1 = p1,
-                p2 = p2,
-                style = ln.style,
-                colorHex = sanitizeHex(ln.colorHex, defaultColors[idx % defaultColors.size])
-            )
+            else {
+                val resolvedColor = if (ln.highlighted) {
+                    sanitizeHex(ln.colorHex, defaultColors[highlightIdx3D++ % defaultColors.size])
+                } else {
+                    ""
+                }
+                CustomLine(
+                    id = "ai_ln_$idx",
+                    p1 = p1,
+                    p2 = p2,
+                    style = ln.style,
+                    colorHex = resolvedColor
+                )
+            }
         }
 
         val planes = spec.planes.mapIndexedNotNull { idx, pts ->
@@ -323,7 +334,7 @@ object AiResponseParser {
             showGrid = true,
             dashed = true,
             labels = true,
-            altitude = true,
+            altitude = spec.showAltitude,
             faces = true,
             customPoints = edgePoints,
             customXYZPoints = xyzPoints,
@@ -349,17 +360,23 @@ object AiResponseParser {
                         name = cleanName,
                         x = pt.x.coerceIn(-50f, 50f),
                         y = pt.y.coerceIn(-50f, 50f),
-                        colorHex = sanitizeHex(pt.colorHex, defaultColors[idx % defaultColors.size])
+                        colorHex = sanitizeHex(pt.colorHex, "#94A3B8")
                     )
                 )
             }
         }
 
         val objects = mutableListOf<Geo2DObject>()
+        var highlightIdx2D = 0
         spec.objects.forEachIndexed { idx, raw ->
-            val color = sanitizeHex(raw.colorHex, defaultColors[idx % defaultColors.size])
+            val kind = raw.kind.trim().lowercase()
+            val color = if (raw.highlighted || kind == "angle") {
+                sanitizeHex(raw.colorHex, defaultColors[highlightIdx2D++ % defaultColors.size])
+            } else {
+                ""
+            }
             val id = "ai_obj_$idx"
-            when (raw.kind.trim().lowercase()) {
+            when (kind) {
                 "segment" -> {
                     val i1 = nameToId[raw.p1?.trim()]
                     val i2 = nameToId[raw.p2?.trim()]
@@ -385,7 +402,7 @@ object AiResponseParser {
                     val i1 = nameToId[raw.p1?.trim()]
                     val i2 = nameToId[raw.p2?.trim()]
                     if (i1 != null && i2 != null && i1 != i2) {
-                        objects.add(Geo2DObject.VectorObj(id, i1, i2, colorHex = color))
+                        objects.add(Geo2DObject.VectorObj(id, i1, i2, colorHex = color, dashed = raw.dashed))
                     }
                 }
                 "circle" -> {
@@ -518,12 +535,19 @@ object AiResponseParser {
             if (lnArr != null) {
                 for (i in 0 until lnArr.length()) {
                     val l = lnArr.optJSONObject(i) ?: continue
+                    val rawColor = l.optString("colorHex", "").trim()
+                    val highlighted = if (l.has("highlighted") && !l.isNull("highlighted")) {
+                        l.optBoolean("highlighted", false)
+                    } else {
+                        isValidHex(rawColor)
+                    }
                     add(
                         Ai3DLineSpec(
                             p1 = l.optString("p1"),
                             p2 = l.optString("p2"),
-                            style = LineStyle.fromKey(l.optString("style", "solid")),
-                            colorHex = l.optString("colorHex", "#F43F5E")
+                            style = LineStyle.fromKey(l.optString("style", "dashed")),
+                            colorHex = rawColor,
+                            highlighted = highlighted
                         )
                     )
                 }
@@ -553,6 +577,7 @@ object AiResponseParser {
             b = o.optDouble("b", 3.0).toFloat(),
             h = o.optDouble("h", 4.8).toFloat(),
             showAxes = o.optBoolean("showAxes", false),
+            showAltitude = o.optBoolean("showAltitude", false),
             originPoint = o.optString("originPoint").takeIf { it.isNotBlank() },
             edgePoints = edgePoints,
             xyzPoints = xyzPoints,
@@ -573,7 +598,7 @@ object AiResponseParser {
                             name = p.optString("name"),
                             x = p.optDouble("x", 0.0).toFloat(),
                             y = p.optDouble("y", 0.0).toFloat(),
-                            colorHex = p.optString("colorHex", "#38BDF8")
+                            colorHex = p.optString("colorHex", "")
                         )
                     )
                 }
@@ -593,6 +618,12 @@ object AiResponseParser {
                             }
                         }
                     }
+                    val rawColor = item.optString("colorHex", "").trim()
+                    val highlighted = if (item.has("highlighted") && !item.isNull("highlighted")) {
+                        item.optBoolean("highlighted", false)
+                    } else {
+                        isValidHex(rawColor)
+                    }
                     add(
                         Ai2DObjectSpec(
                             kind = item.optString("kind", "segment"),
@@ -602,7 +633,8 @@ object AiResponseParser {
                             radius = if (item.has("radius") && !item.isNull("radius")) item.optDouble("radius").toFloat() else null,
                             pointNames = pNames,
                             dashed = item.optBoolean("dashed", false),
-                            colorHex = item.optString("colorHex", "#38BDF8")
+                            colorHex = rawColor,
+                            highlighted = highlighted
                         )
                     )
                 }
@@ -633,8 +665,13 @@ object AiResponseParser {
         )
     }
 
+    private fun isValidHex(raw: String?): Boolean {
+        val t = raw?.trim().orEmpty()
+        return Regex("^#[0-9A-Fa-f]{6}$").matches(t)
+    }
+
     private fun sanitizeHex(raw: String?, fallback: String): String {
         val t = raw?.trim().orEmpty()
-        return if (Regex("^#[0-9A-Fa-f]{6}$").matches(t)) t else fallback
+        return if (isValidHex(t)) t else fallback
     }
 }

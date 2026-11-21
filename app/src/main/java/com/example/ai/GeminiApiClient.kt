@@ -316,30 +316,41 @@ Nhiệm vụ của bạn là đọc ảnh đề bài (hoặc văn bản đề b�
 Trong 3D:
 - Dùng `edgePoints` để tạo trung điểm (ratio=0.5), điểm chia tỉ lệ (ratio=0.333, 0.25, 0.667...) trên cạnh từ `from` đến `to` (chỉ dùng tên đỉnh đã có hoặc đỉnh mới tạo trước đó).
 - Dùng `xyzPoints` nếu đề bài cho tọa độ Oxyz cụ thể (và đặt `showAxes: true`).
-- Dùng `lines` với `style`: "solid", "dashed", "vector_solid", "vector_dashed".
-- Dùng `planes` để tô màu mặt phẳng cần xét (vd: ["A","M","N"]).
-- Dùng `dynamicSection` nếu đề bài yêu cầu vẽ thiết diện cắt khối bởi 3 điểm `{"p1":"A","p2":"M","p3":"N"}`.
+- Dùng `lines` với `style`: "solid", "dashed", "vector_solid", "vector_dashed", kèm trường `highlighted` (true/false) và `colorHex`.
+- Dùng `planes` CHỈ KHI đề bài nhắc trực tiếp tới mặt phẳng cần xét (vd: góc/khoảng cách tới `(AMN)`). Nếu đề chỉ hỏi về đoạn thẳng hoặc vectơ thì để `"planes": []`.
+- Dùng `dynamicSection` chỉ khi đề bài yêu cầu vẽ thiết diện cắt khối bởi 3 điểm `{"p1":"A","p2":"M","p3":"N"}`.
+- `showAltitude`: đặt `false` mặc định; chỉ đặt `true` khi đề bài nhắc trực tiếp đến đường cao nội tại của khối (vd: `SO`, `SH`, `OO'`).
 - Giá trị kích thước `a`, `b`, `h` nên scale đẹp trong khoảng 2.0 đến 7.0 (nếu đề cho bằng chữ `a`, chọn a=4.0, h=4.8 hoặc theo tỉ lệ đề cho).
 
-=== 2. HỆ THỐNG HÌNH PHẲNG & ĐỒ THỊ 2D (Oxy) ===
+=== 2. QUY TẮC BẮT BUỘC VỀ NÉT ĐỨT & TÔ MÀU (TUÂN THỦ TUYỆT ĐỐI) ===
+1. NÉT ĐỨT CHO ĐƯỜNG KHUẤT & VECTƠ KHUẤT:
+   - Trong 3D: Mọi đoạn thẳng HOẶC VECTƠ đi bên trong khối hình (vd: đường chéo không gian `AC'`, `BD'`, đường chéo đáy `AC`, `BD`, đoạn/vectơ nối từ đỉnh tới trung điểm/trọng tâm bên trong như `AM`, `AG`, `SO`, `MN`) hoặc nằm trên cạnh/mặt khuất phía sau PHẢI dùng `style: "dashed"` (cho đoạn thẳng) hoặc `style: "vector_dashed"` (cho vectơ).
+   - Chỉ dùng `"solid"` / `"vector_solid"` khi đoạn thẳng hoặc vectơ nằm hoàn toàn trên cạnh/mặt thấy phía trước (lưu ý: bộ dựng 3D cũng sẽ tự động vẽ nét đứt khi đoạn/vectơ bị che khuất theo góc nhìn).
+   - Trong 2D: Mọi đường khuất, đường gióng phụ hoặc vectơ khuất PHẢI đặt `"dashed": true`.
+2. CHỈ TÔ MÀU CÁC ĐOẠN THẲNG HOẶC VECTƠ ĐỀ BÀI NHẮC TRỰC TIẾP:
+   - CHỈ đặt `"highlighted": true` và chọn màu nổi bật (`"#F43F5E"`, `"#38BDF8"`, `"#10B981"`, `"#FBBF24"`, `"#A78BFA"`) cho ĐÚNG các đoạn thẳng hoặc vectơ được đề bài nhắc trực tiếp / yêu cầu tính toán (vd: đề hỏi tính góc giữa hai vectơ `AB` và `SC`, độ dài `AM`, tổng hiệu vectơ `AB + AD + AA'`...).
+   - Các đường phụ dựng thêm, đa giác/đường tròn cơ sở trong 2D, hoặc các cạnh có sẵn của khối 3D KHÔNG được đề bài nhấn mạnh: đặt `"highlighted": false` và `"colorHex": ""` (giữ nét mực trung tính đồng bộ với hình gốc, TUYỆT ĐỐI không tô màu lòe loẹt).
+   - Trong 3D: KHÔNG thêm lại các cạnh sẵn có của khối vào `lines`, TRỪ KHI cạnh đó là đoạn thẳng hoặc vectơ được đề bài nhắc trực tiếp cần tô màu hoặc hiển thị mũi tên vectơ.
+
+=== 3. HỆ THỐNG HÌNH PHẲNG & ĐỒ THỊ 2D (Oxy) ===
 Chọn target="2D" cho các bài toán: khảo sát hàm số / vẽ đồ thị y=f(x), tiếp tuyến, tương giao, tam giác/tứ giác/đường tròn/Elip trên Oxy.
-- `points`: danh sách điểm `{"name":"A","x":0,"y":0,"colorHex":"#38BDF8"}`
+- `points`: danh sách điểm `{"name":"A","x":0,"y":0,"colorHex":""}`
 - `objects`:
-  - `kind`: "segment" | "line" | "ray" | "vector" (dùng `p1`, `p2`, `dashed`)
-  - `kind`: "circle" (dùng `p1` là tâm, và `p2` là điểm trên đường tròn HOẶC `radius` là bán kính số dương)
-  - `kind`: "polygon" (dùng `pointNames`: ["A","B","C"])
+  - `kind`: "segment" | "line" | "ray" | "vector" (dùng `p1`, `p2`, `dashed`, `highlighted`, `colorHex`)
+  - `kind`: "circle" (dùng `p1` là tâm, và `p2` là điểm trên đường tròn HOẶC `radius` là bán kính số dương; để `highlighted: false`, `colorHex: ""` nếu chỉ là hình nền cơ sở)
+  - `kind`: "polygon" (dùng `pointNames`: ["A","B","C"]; để `highlighted: false`, `colorHex: ""` cho đa giác cơ sở)
   - `kind`: "angle" (dùng `p1`, `p2` là đỉnh góc, `p3`)
 - `functions`: biểu thức chuẩn dùng biến `x` (và tham số `m` nếu có), hỗ trợ: `+ - * / ^`, `sin(x)`, `cos(x)`, `tan(x)`, `sqrt(x)`, `cbrt(x)`, `ln(x)`, `log(x)`, `log2(x)`, `log(a; x)`, `e^x`, `|x|`, `pi`. Ví dụ: `"x^3 - 3x + 1"`, `"(2x - 1)/(x - 1)"`.
 
-=== 3. MỤC LỤC PDF ĐỂ GỢI Ý TRANG CÔNG THỨC LIÊN QUAN ===
+=== 4. MỤC LỤC PDF ĐỂ GỢI Ý TRANG CÔNG THỨC LIÊN QUAN ===
 ${buildCompactTocIndex()}
 
 BẮT BUỘC TRẢ VỀ JSON HỢP LỆ DUY NHẤT (không bọc markdown):
 {
   "target": "3D" hoặc "2D",
-  "title": "Tên ngắn gọn hình vẽ (vd: Chóp S.ABCD có SA ⊥ đáy & thiết diện AMN)",
+  "title": "Tên ngắn gọn hình vẽ (vd: Chóp S.ABCD có SA ⊥ đáy & vectơ AM, SB)",
   "problemText": "Nội dung đề bài đã đọc được từ ảnh/văn bản",
-  "drawingSummary": "Liệt kê rõ các hình khối, điểm phụ, đoạn thẳng, mặt phẳng hoặc hàm số đã dựng",
+  "drawingSummary": "Liệt kê rõ các hình khối, điểm phụ, đoạn thẳng/vectơ được tô màu nhấn mạnh và đường khuất nét đứt",
   "solutionHint": "Gợi ý ngắn gọn hướng giải & công thức áp dụng",
   "scene3D": {
     "shapeKey": "pyramid4_sa",
@@ -347,11 +358,15 @@ BẮT BUỘC TRẢ VỀ JSON HỢP LỆ DUY NHẤT (không bọc markdown):
     "b": 4.0,
     "h": 5.0,
     "showAxes": false,
+    "showAltitude": false,
     "originPoint": "A",
     "edgePoints": [{"name":"M","from":"S","to":"C","ratio":0.5}],
     "xyzPoints": [],
-    "lines": [{"p1":"A","p2":"M","style":"solid","colorHex":"#F43F5E"}],
-    "planes": [["A","M","B"]],
+    "lines": [
+      {"p1":"A","p2":"M","style":"vector_dashed","highlighted":true,"colorHex":"#F43F5E"},
+      {"p1":"S","p2":"B","style":"vector_solid","highlighted":true,"colorHex":"#38BDF8"}
+    ],
+    "planes": [],
     "dynamicSection": null
   },
   "scene2D": null,

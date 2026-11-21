@@ -274,22 +274,22 @@ object Geo2DRenderer {
         // 6a. Polygons (filled first)
         for (obj in snap.objects) {
             if (obj is Geo2DObject.Polygon) {
-                drawPolygon(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, scratch)
+                drawPolygon(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, useDarkInk, scratch)
             }
         }
 
         // 6b. Circles
         for (obj in snap.objects) {
             if (obj is Geo2DObject.Circle) {
-                drawCircle(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, scratch)
+                drawCircle(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, useDarkInk, scratch)
             }
         }
 
         // 6c. Infinite Lines & Rays
         for (obj in snap.objects) {
             when (obj) {
-                is Geo2DObject.Line -> drawInfiniteLine(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, scratch)
-                is Geo2DObject.Ray -> drawRay(canvas, width, height, density, cam, obj, ptMap, scratch)
+                is Geo2DObject.Line -> drawInfiniteLine(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, useDarkInk, scratch)
+                is Geo2DObject.Ray -> drawRay(canvas, width, height, density, cam, obj, ptMap, useDarkInk, scratch)
                 else -> Unit
             }
         }
@@ -298,7 +298,7 @@ object Geo2DRenderer {
         for (obj in snap.objects) {
             when (obj) {
                 is Geo2DObject.Segment -> drawSegment(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, useDarkInk, scratch)
-                is Geo2DObject.VectorObj -> drawVector(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, scratch)
+                is Geo2DObject.VectorObj -> drawVector(canvas, width, height, density, cam, obj, ptMap, snap.showMeasurements, useDarkInk, scratch)
                 else -> Unit
             }
         }
@@ -827,6 +827,23 @@ object Geo2DRenderer {
         }
     }
 
+    private fun isNeutralColorHex(hex: String?): Boolean {
+        val t = hex?.trim().orEmpty()
+        return t.isEmpty() || t.equals("default", ignoreCase = true) || t.equals("neutral", ignoreCase = true)
+    }
+
+    private fun resolve2DColor(hex: String, fallback: Int, useDarkInk: Boolean, isDashed: Boolean = false): Int {
+        if (isNeutralColorHex(hex)) {
+            return if (useDarkInk) {
+                if (isDashed) 0xFF475569.toInt() else 0xFF0F172A.toInt()
+            } else {
+                if (isDashed) 0xFF94A3B8.toInt() else 0xFFE2E8F0.toInt()
+            }
+        }
+        val rawColor = parseColor(hex, fallback)
+        return if (useDarkInk && rawColor == 0xFFF8FAFC.toInt()) 0xFF0F172A.toInt() else rawColor
+    }
+
     private fun drawPolygon(
         canvas: Canvas,
         width: Float,
@@ -836,12 +853,14 @@ object Geo2DRenderer {
         poly: Geo2DObject.Polygon,
         ptMap: Map<String, Geo2DPoint>,
         showMeasurements: Boolean,
+        useDarkInk: Boolean,
         scratch: RenderScratch
     ) {
         val pts = poly.pointIds.mapNotNull { ptMap[it] }
         if (pts.size < 3) return
         val sPts = pts.map { worldToScreen(it.x, it.y, cam, width, height) }
-        val baseColor = parseColor(poly.colorHex, 0xFF6366F1.toInt())
+        val isNeutral = isNeutralColorHex(poly.colorHex)
+        val baseColor = resolve2DColor(poly.colorHex, 0xFF6366F1.toInt(), useDarkInk)
 
         val path = scratch.scratchPath
         path.rewind()
@@ -850,9 +869,9 @@ object Geo2DRenderer {
         path.close()
 
         val fillPaint = scratch.fillPaint
-        fillPaint.color = Color.argb(56, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
+        fillPaint.color = Color.argb(if (isNeutral) 18 else 56, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
         val borderPaint = scratch.strokePaint
-        borderPaint.strokeWidth = 2.1f * density
+        borderPaint.strokeWidth = (if (isNeutral) 1.8f else 2.1f) * density
         borderPaint.strokeJoin = Paint.Join.ROUND
         borderPaint.color = baseColor
         borderPaint.pathEffect = null
@@ -909,6 +928,7 @@ object Geo2DRenderer {
         circle: Geo2DObject.Circle,
         ptMap: Map<String, Geo2DPoint>,
         showMeasurements: Boolean,
+        useDarkInk: Boolean,
         scratch: RenderScratch
     ) {
         val cPt = ptMap[circle.centerId] ?: return
@@ -922,12 +942,13 @@ object Geo2DRenderer {
 
         val sc = worldToScreen(cPt.x, cPt.y, cam, width, height)
         val screenR = (worldR * cam.pixelsPerUnit).toFloat()
-        val baseColor = parseColor(circle.colorHex, 0xFF10B981.toInt())
+        val isNeutral = isNeutralColorHex(circle.colorHex)
+        val baseColor = resolve2DColor(circle.colorHex, 0xFF10B981.toInt(), useDarkInk)
 
         val fill = scratch.fillPaint
-        fill.color = Color.argb(32, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
+        fill.color = Color.argb(if (isNeutral) 14 else 32, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
         val stroke = scratch.strokePaint
-        stroke.strokeWidth = 2.2f * density
+        stroke.strokeWidth = (if (isNeutral) 1.9f else 2.2f) * density
         stroke.color = baseColor
         stroke.pathEffect = null
 
@@ -968,6 +989,7 @@ object Geo2DRenderer {
         line: Geo2DObject.Line,
         ptMap: Map<String, Geo2DPoint>,
         showMeasurements: Boolean,
+        useDarkInk: Boolean,
         scratch: RenderScratch
     ) {
         val p1 = ptMap[line.p1Id] ?: return
@@ -982,7 +1004,7 @@ object Geo2DRenderer {
         val uy = dy / len
         val ext = max(width, height) * 2f
 
-        val baseColor = parseColor(line.colorHex, 0xFF38BDF8.toInt())
+        val baseColor = resolve2DColor(line.colorHex, 0xFF38BDF8.toInt(), useDarkInk, line.dashed)
         val paint = if (line.dashed) scratch.dashedStrokePaint else scratch.strokePaint
         paint.strokeWidth = 2.0f * density
         paint.color = baseColor
@@ -1003,6 +1025,7 @@ object Geo2DRenderer {
         cam: Geo2DCamera,
         ray: Geo2DObject.Ray,
         ptMap: Map<String, Geo2DPoint>,
+        useDarkInk: Boolean,
         scratch: RenderScratch
     ) {
         val p1 = ptMap[ray.startId] ?: return
@@ -1019,7 +1042,7 @@ object Geo2DRenderer {
 
         val paint = scratch.strokePaint
         paint.strokeWidth = 2.0f * density
-        paint.color = parseColor(ray.colorHex, 0xFFA78BFA.toInt())
+        paint.color = resolve2DColor(ray.colorHex, 0xFFA78BFA.toInt(), useDarkInk)
         paint.pathEffect = null
         canvas.drawLine(s1.x, s1.y, s1.x + ux * ext, s1.y + uy * ext, paint)
     }
@@ -1040,10 +1063,10 @@ object Geo2DRenderer {
         val p2 = ptMap[seg.p2Id] ?: return
         val s1 = worldToScreen(p1.x, p1.y, cam, width, height)
         val s2 = worldToScreen(p2.x, p2.y, cam, width, height)
-        val rawColor = parseColor(seg.colorHex, 0xFFF8FAFC.toInt())
-        val baseColor = if (transparentBackground && rawColor == 0xFFF8FAFC.toInt()) 0xFF0F172A.toInt() else rawColor
+        val isNeutral = isNeutralColorHex(seg.colorHex)
+        val baseColor = resolve2DColor(seg.colorHex, 0xFFF8FAFC.toInt(), transparentBackground, seg.dashed)
         val paint = if (seg.dashed) scratch.dashedStrokePaint else scratch.strokePaint
-        paint.strokeWidth = 2.2f * density
+        paint.strokeWidth = (if (isNeutral) 1.9f else 2.4f) * density
         paint.strokeCap = Paint.Cap.ROUND
         paint.color = baseColor
         paint.pathEffect = if (seg.dashed) scratch.dash75 else null
@@ -1072,18 +1095,20 @@ object Geo2DRenderer {
         vec: Geo2DObject.VectorObj,
         ptMap: Map<String, Geo2DPoint>,
         showMeasurements: Boolean,
+        useDarkInk: Boolean,
         scratch: RenderScratch
     ) {
         val p1 = ptMap[vec.fromId] ?: return
         val p2 = ptMap[vec.toId] ?: return
         val s1 = worldToScreen(p1.x, p1.y, cam, width, height)
         val s2 = worldToScreen(p2.x, p2.y, cam, width, height)
-        val baseColor = parseColor(vec.colorHex, 0xFFF43F5E.toInt())
-        val paint = scratch.strokePaint
-        paint.strokeWidth = 2.5f * density
+        val isNeutral = isNeutralColorHex(vec.colorHex)
+        val baseColor = resolve2DColor(vec.colorHex, 0xFFF43F5E.toInt(), useDarkInk, vec.dashed)
+        val paint = if (vec.dashed) scratch.dashedStrokePaint else scratch.strokePaint
+        paint.strokeWidth = (if (isNeutral) 2.1f else 2.6f) * density
         paint.strokeCap = Paint.Cap.ROUND
         paint.color = baseColor
-        paint.pathEffect = null
+        paint.pathEffect = if (vec.dashed) scratch.dash75 else null
         canvas.drawLine(s1.x, s1.y, s2.x, s2.y, paint)
         drawArrowHead(canvas, s1.x, s1.y, s2.x, s2.y, baseColor, 12f * density, scratch)
 

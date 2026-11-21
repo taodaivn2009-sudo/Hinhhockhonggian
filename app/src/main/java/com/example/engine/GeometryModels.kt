@@ -200,7 +200,8 @@ data class BuiltScene(
     val metrics: GeometryMetrics,
     val roundBodyHint: RoundBodyHint? = null,
     val dynamicSectionBorder: List<Vec3>? = null,
-    val dynamicSectionArea: Float? = null
+    val dynamicSectionArea: Float? = null,
+    val occluderFaces: List<RenderFace> = emptyList()
 )
 
 sealed class RoundBodyHint {
