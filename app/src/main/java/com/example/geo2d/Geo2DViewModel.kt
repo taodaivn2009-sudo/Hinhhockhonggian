@@ -218,6 +218,22 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         persistence.saveAutoSession(next)
     }
 
+    fun applyAiSnapshot(newSnapshot: Geo2DSnapshot, title: String) {
+        stopParamMAnimIfRunning()
+        val currentSens = _uiState.value.snapshot.sensitivity
+        updateSnapshot(recordHistory = true, autoSave = true) {
+            newSnapshot.copy(sensitivity = currentSens)
+        }
+        _uiState.update {
+            it.copy(
+                activeTab = null,
+                pendingPointIds = emptyList(),
+                draggingPointId = null
+            )
+        }
+        showToast("AI đã dựng hình 2D: $title")
+    }
+
     fun showToast(msg: String) {
         toastJob?.cancel()
         _uiState.update { it.copy(toastMessage = msg) }

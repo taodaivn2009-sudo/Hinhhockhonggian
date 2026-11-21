@@ -30,6 +30,10 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.ai.AiAssistantViewModel
+import com.example.ai.AiDrawTarget
+import com.example.ai.AiResponseParser
+import com.example.ai.AiWorkspaceScreen
 import com.example.docs.MathDocumentsScreen
 import com.example.geo2d.Geo2DPersistence
 import com.example.geo2d.Geo2DStudioScreen
@@ -105,15 +109,18 @@ fun ToolToanRootScreen(
     themeUiState: AppThemeUiState,
     geometryViewModel: GeometryViewModel = viewModel(),
     geo2DViewModel: Geo2DViewModel = viewModel(),
-    updateViewModel: AppUpdateViewModel = viewModel()
+    updateViewModel: AppUpdateViewModel = viewModel(),
+    aiViewModel: AiAssistantViewModel = viewModel()
 ) {
     val context = LocalContext.current
     val workspacePrefs = remember(context) { Geo2DPersistence(context.applicationContext) }
     var activeWorkspace by remember { mutableStateOf(workspacePrefs.loadLastWorkspace()) }
     var pending2DExpr by remember { mutableStateOf<String?>(null) }
+    var pendingPdfPage by remember { mutableStateOf<Int?>(null) }
     val updateUiState by updateViewModel.uiState.collectAsStateWithLifecycle()
     val geoUiState by geometryViewModel.uiState.collectAsStateWithLifecycle()
     val geo2DUiState by geo2DViewModel.uiState.collectAsStateWithLifecycle()
+    val aiUiState by aiViewModel.uiState.collectAsStateWithLifecycle()
 
     val onSelectWorkspace: (MathWorkspace) -> Unit = { target ->
         if (target != activeWorkspace) {
@@ -138,6 +145,39 @@ fun ToolToanRootScreen(
             )
             MathWorkspace.DOCUMENTS -> MathDocumentsScreen(
                 onSwitchWorkspace = onSelectWorkspace,
+                pendingOpenPage = pendingPdfPage,
+                onConsumePendingPage = { pendingPdfPage = null },
+                onAskAiAboutPage = { pageNum ->
+                    aiViewModel.prepareAskAboutPdfPage(pageNum)
+                    onSelectWorkspace(MathWorkspace.AI)
+                },
+                hasUpdateBadge = updateUiState.hasUpdate
+            )
+            MathWorkspace.AI -> AiWorkspaceScreen(
+                aiViewModel = aiViewModel,
+                onSwitchWorkspace = onSelectWorkspace,
+                onOpenPdfPage = { pageNum ->
+                    pendingPdfPage = pageNum
+                    onSelectWorkspace(MathWorkspace.DOCUMENTS)
+                },
+                onApplyDrawingPlan = { plan ->
+                    when (plan.target) {
+                        AiDrawTarget.SPACE_3D -> {
+                            plan.scene3D?.let { spec ->
+                                val snap3D = AiResponseParser.buildGeometrySnapshot(spec)
+                                geometryViewModel.applyAiSnapshot(snap3D, plan.title)
+                                onSelectWorkspace(MathWorkspace.SPACE_3D)
+                            }
+                        }
+                        AiDrawTarget.PLANE_2D -> {
+                            plan.scene2D?.let { spec ->
+                                val snap2D = AiResponseParser.buildGeo2DSnapshot(spec)
+                                geo2DViewModel.applyAiSnapshot(snap2D, plan.title)
+                                onSelectWorkspace(MathWorkspace.PLANE_2D)
+                            }
+                        }
+                    }
+                },
                 hasUpdateBadge = updateUiState.hasUpdate
             )
             MathWorkspace.SETTINGS -> AppSettingsScreen(
@@ -169,6 +209,11 @@ fun ToolToanRootScreen(
                 onCheckUpdateNow = { updateViewModel.checkForUpdates(isAutoStartup = false) },
                 onSaveUpdateRepoAndCheck = { updateViewModel.saveRepoAndCheck(it) },
                 onSkipUpdateVersion = { updateViewModel.skipCurrentAvailableVersion() },
+                aiUiState = aiUiState,
+                onSaveAndVerifyAiKey = { key, model -> aiViewModel.saveAndVerifyApiKey(key, model) },
+                onSaveAiKeyOnly = { key, model -> aiViewModel.saveApiKey(key, model) },
+                onSelectAiModel = { aiViewModel.selectModel(it) },
+                onClearAiKey = { aiViewModel.clearApiKey() },
                 onSwitchWorkspace = onSelectWorkspace
             )
         }

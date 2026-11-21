@@ -2,6 +2,7 @@ package com.example
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.ai.*
 import com.example.data.GeometryPersistence
 import com.example.docs.*
 import com.example.engine.*
@@ -700,6 +701,114 @@ class ExampleRobolectricTest {
 
         prefs.saveNightFilter(true)
         assertTrue(prefs.loadNightFilter())
+    }
+
+    @Test
+    fun `ai key persistence docs qa parser and problem to 3d and 2d drawing builders work accurately`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+
+        // 1. User API key & model preferences persist and mask cleanly
+        val keyPrefs = AiKeyPreferences(context)
+        keyPrefs.clearKey()
+        assertFalse(keyPrefs.load().hasKey)
+
+        keyPrefs.save(AiKeyConfig(apiKey = "AIzaSyDemoKey1234567890", modelId = AiModelPreset.GEMINI_4_ARGON.modelId))
+        val loaded = keyPrefs.load()
+        assertTrue(loaded.hasKey)
+        assertEquals("AIza••••••7890", loaded.maskedKey)
+        assertEquals(AiModelPreset.GEMINI_4_ARGON.modelId, loaded.effectiveModelId)
+        keyPrefs.clearKey()
+        assertFalse(keyPrefs.load().hasKey)
+
+        // 2. Document Q&A structured JSON parsing handles markdown fences and bounds page numbers safely
+        val rawDocsJson = """
+            ```json
+            {
+              "answer": "Khoảng cách giữa 2 đường thẳng chéo nhau trong Oxyz dùng tích hỗn tạp.",
+              "suggestedPages": [
+                {"page": 376, "title": "Tổng hợp khoảng cách Oxyz", "reason": "Công thức khoảng cách 2 đường chéo nhau"},
+                {"page": 999, "title": "Trang không hợp lệ", "reason": "Bị lọc bỏ"}
+              ]
+            }
+            ```
+        """.trimIndent()
+        val docsReply = AiResponseParser.parseDocsReply(rawDocsJson)
+        assertTrue(docsReply.answer.contains("Oxyz"))
+        assertEquals(1, docsReply.suggestedPages.size)
+        assertEquals(376, docsReply.suggestedPages.first().page)
+
+        // 3. Problem-to-3D JSON converts to a real buildable 3D scene with edge points & dynamic cross section
+        val raw3DJson = """
+            {
+              "target": "3D",
+              "title": "Chóp S.ABCD có SA vuông đáy & thiết diện AMN",
+              "problemText": "Cho hình chóp S.ABCD đáy vuông cạnh 4, SA vuông góc đáy, SA = 5. M, N là trung điểm SC, SD.",
+              "drawingSummary": "Dựng chóp S.ABCD, trung điểm M trên SC, N trên SD và thiết diện (AMN).",
+              "solutionHint": "V = 1/3 * S_đáy * SA",
+              "scene3D": {
+                "shapeKey": "pyramid4_sa",
+                "a": 4.0,
+                "h": 5.0,
+                "showAxes": true,
+                "originPoint": "A",
+                "edgePoints": [
+                  {"name": "M", "from": "S", "to": "C", "ratio": 0.5},
+                  {"name": "N", "from": "S", "to": "D", "ratio": 0.5}
+                ],
+                "lines": [
+                  {"p1": "A", "p2": "M", "style": "solid", "colorHex": "#F43F5E"}
+                ],
+                "planes": [["A", "M", "N"]],
+                "dynamicSection": {"p1": "A", "p2": "M", "p3": "N"}
+              },
+              "relatedPages": [{"page": 235, "title": "Thể tích đa diện", "reason": "Thể tích khối chóp"}]
+            }
+        """.trimIndent()
+        val plan3D = AiResponseParser.parseDrawingPlan(raw3DJson)
+        assertTrue(plan3D != null && plan3D.target == AiDrawTarget.SPACE_3D)
+        val snap3D = AiResponseParser.buildGeometrySnapshot(plan3D!!.scene3D!!)
+        assertEquals(ShapeType.PYRAMID4_SA, snap3D.shape)
+        assertTrue(snap3D.showAxes)
+        assertEquals(2, snap3D.customPoints.size)
+        assertEquals(1, snap3D.customLines.size)
+        assertTrue(snap3D.dynamicSection != null)
+        val built3D = ShapeBuilder.build(snap3D)
+        assertTrue("AI-built 3D pyramid must have valid positive volume", built3D.metrics.vol > 0f)
+        assertTrue("AI-built 3D scene must contain M and N vertices", "M" in built3D.pointRegistry && "N" in built3D.pointRegistry)
+
+        // 4. Problem-to-2D JSON converts to real Oxy points, polygon, circle, and validated graph function
+        val raw2DJson = """
+            {
+              "target": "2D",
+              "title": "Tam giác ABC, đường tròn tâm I & đồ thị bậc 3",
+              "problemText": "Cho A(0;0), B(4;0), C(1;3), đường tròn tâm I(2;1) R=2 và đồ thị y = x^3 - 3x + 1.",
+              "drawingSummary": "Dựng tam giác ABC, đường tròn (I; 2) và đồ thị y = x^3 - 3x + 1.",
+              "solutionHint": "Tính đạo hàm y' = 3x^2 - 3.",
+              "scene2D": {
+                "points": [
+                  {"name": "A", "x": 0, "y": 0},
+                  {"name": "B", "x": 4, "y": 0},
+                  {"name": "C", "x": 1, "y": 3},
+                  {"name": "I", "x": 2, "y": 1}
+                ],
+                "objects": [
+                  {"kind": "polygon", "pointNames": ["A", "B", "C"]},
+                  {"kind": "circle", "p1": "I", "radius": 2.0}
+                ],
+                "functions": [
+                  {"expression": "y = x^3 - 3x + 1", "showDerivative": true}
+                ]
+              }
+            }
+        """.trimIndent()
+        val plan2D = AiResponseParser.parseDrawingPlan(raw2DJson)
+        assertTrue(plan2D != null && plan2D.target == AiDrawTarget.PLANE_2D)
+        val snap2D = AiResponseParser.buildGeo2DSnapshot(plan2D!!.scene2D!!)
+        assertEquals(4, snap2D.points.size)
+        assertEquals(2, snap2D.objects.size)
+        assertEquals(1, snap2D.functions.size)
+        assertEquals("x^3 - 3x + 1", snap2D.functions.first().expression)
+        assertTrue(snap2D.functions.first().showDerivative)
     }
 }
 

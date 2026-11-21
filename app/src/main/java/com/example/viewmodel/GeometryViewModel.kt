@@ -224,6 +224,21 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         persistSafeAutoSession(next)
     }
 
+    fun applyAiSnapshot(newSnapshot: GeometrySnapshot, title: String) {
+        val currentSens = _uiState.value.snapshot.sensitivity
+        updateSnapshot(recordHistory = true, autoSave = true) {
+            newSnapshot.copy(sensitivity = currentSens)
+        }
+        _uiState.update {
+            it.copy(
+                activeLeftPane = null,
+                selectedFirstPoint = null,
+                autoRotate = false
+            )
+        }
+        showToast("AI đã dựng hình 3D: $title")
+    }
+
     // ================= TOAST & UI PANELS =================
     fun showToast(msg: String) {
         toastJob?.cancel()

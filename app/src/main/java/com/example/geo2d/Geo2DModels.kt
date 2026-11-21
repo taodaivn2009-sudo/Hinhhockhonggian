@@ -8,6 +8,7 @@ enum class MathWorkspace {
     SPACE_3D,
     PLANE_2D,
     DOCUMENTS,
+    AI,
     SETTINGS
 }
 

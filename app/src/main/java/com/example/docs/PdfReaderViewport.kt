@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
@@ -75,6 +76,7 @@ fun PdfReaderView(
     onPageChanged: (Int) -> Unit,
     onToggleBookmark: (Int) -> Unit,
     onToggleNightFilter: () -> Unit,
+    onAskAiAboutPage: (Int) -> Unit = {},
     onBackToToc: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -271,6 +273,7 @@ fun PdfReaderView(
             nightFilterEnabled = nightFilterEnabled,
             onBackToToc = onBackToToc,
             onOpenJumpDialog = { showJumpDialog = true },
+            onAskAiAboutPage = { onAskAiAboutPage(currentPage1Based) },
             onToggleNightFilter = onToggleNightFilter,
             onToggleBookmark = { onToggleBookmark(currentPage1Based) },
             modifier = Modifier
@@ -462,6 +465,7 @@ private fun PdfReaderTopBar(
     nightFilterEnabled: Boolean,
     onBackToToc: () -> Unit,
     onOpenJumpDialog: () -> Unit,
+    onAskAiAboutPage: () -> Unit,
     onToggleNightFilter: () -> Unit,
     onToggleBookmark: () -> Unit,
     modifier: Modifier = Modifier
@@ -478,7 +482,7 @@ private fun PdfReaderTopBar(
             )
             .padding(horizontal = 6.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         IconButton(
             onClick = onBackToToc,
@@ -514,6 +518,17 @@ private fun PdfReaderTopBar(
                 fontSize = 11.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        IconButton(
+            onClick = onAskAiAboutPage,
+            modifier = Modifier.testTag("pdf_ask_ai_page_btn")
+        ) {
+            Icon(
+                imageVector = Icons.Default.AutoAwesome,
+                contentDescription = "Hỏi AI về trang này",
+                tint = PurpleAccent
             )
         }
 

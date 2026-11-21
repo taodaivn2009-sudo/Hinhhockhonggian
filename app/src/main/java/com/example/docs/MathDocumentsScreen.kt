@@ -37,6 +37,9 @@ import com.example.ui.theme.*
 @Composable
 fun MathDocumentsScreen(
     onSwitchWorkspace: (MathWorkspace) -> Unit,
+    pendingOpenPage: Int? = null,
+    onConsumePendingPage: () -> Unit = {},
+    onAskAiAboutPage: (Int) -> Unit = {},
     hasUpdateBadge: Boolean = false
 ) {
     val context = LocalContext.current
@@ -66,6 +69,14 @@ fun MathDocumentsScreen(
         lastReadPage = safePage
         prefs.saveLastPage(safePage)
         activeReaderTargetPage = safePage
+    }
+
+    LaunchedEffect(pendingOpenPage) {
+        val target = pendingOpenPage
+        if (target != null) {
+            openPdfAt(target)
+            onConsumePendingPage()
+        }
     }
 
     val toggleBookmark: (Int) -> Unit = { page1Based ->
@@ -148,6 +159,7 @@ fun MathDocumentsScreen(
                             },
                             onToggleBookmark = toggleBookmark,
                             onToggleNightFilter = toggleNightFilter,
+                            onAskAiAboutPage = onAskAiAboutPage,
                             onBackToToc = { activeReaderTargetPage = null }
                         )
                     }

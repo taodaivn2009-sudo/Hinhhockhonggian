@@ -113,8 +113,17 @@ fun WorkspaceModeSwitch(
             selected = current == MathWorkspace.DOCUMENTS,
             activeColor = Color(0xFFD97706),
             testTag = "switch_workspace_docs",
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1.15f),
             onClick = { onSelect(MathWorkspace.DOCUMENTS) }
+        )
+        WorkspaceTabChip(
+            icon = Icons.Default.AutoAwesome,
+            label = "AI",
+            selected = current == MathWorkspace.AI,
+            activeColor = PurpleAccent,
+            testTag = "switch_workspace_ai",
+            modifier = Modifier.weight(0.85f),
+            onClick = { onSelect(MathWorkspace.AI) }
         )
         WorkspaceTabChip(
             icon = Icons.Default.Settings,
@@ -123,7 +132,7 @@ fun WorkspaceModeSwitch(
             activeColor = SkyBlue,
             showBadge = hasUpdateBadge,
             testTag = "switch_workspace_settings",
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1.1f),
             onClick = { onSelect(MathWorkspace.SETTINGS) }
         )
     }
@@ -159,26 +168,26 @@ private fun WorkspaceTabChip(
                 fallbackActiveColor = activeColor
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 6.dp)
+            .padding(horizontal = 4.dp, vertical = 6.dp)
             .testTag(testTag),
         contentAlignment = Alignment.Center
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
                 tint = contentTint,
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier.size(13.dp)
             )
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelMedium,
                 color = contentTint,
                 fontWeight = FontWeight.Bold,
-                fontSize = 11.5.sp,
+                fontSize = 11.sp,
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis

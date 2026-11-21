@@ -25,6 +25,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ai.AiAssistantUiState
+import com.example.ai.AiKeySetupSection
 import com.example.engine.SensitivityConfig
 import com.example.geo2d.Geo2DSensitivity
 import com.example.geo2d.Geo2DSensitivityControlsSection
@@ -76,6 +78,11 @@ fun AppSettingsScreen(
     onCheckUpdateNow: () -> Unit,
     onSaveUpdateRepoAndCheck: (String) -> Unit,
     onSkipUpdateVersion: () -> Unit,
+    aiUiState: AiAssistantUiState,
+    onSaveAndVerifyAiKey: (String, String) -> Unit,
+    onSaveAiKeyOnly: (String, String) -> Unit,
+    onSelectAiModel: (String) -> Unit,
+    onClearAiKey: () -> Unit,
     onSwitchWorkspace: (MathWorkspace) -> Unit
 ) {
     val context = LocalContext.current
@@ -154,11 +161,34 @@ fun AppSettingsScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Chủ đề giao diện, độ nhạy cảm ứng & cập nhật GitHub",
+                                text = "Key AI, chủ đề giao diện, độ nhạy cảm ứng & cập nhật GitHub",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = SlateTextSecondary
                             )
                         }
+                    }
+
+                    // 0. Dedicated AI API Key Section ("Mục Key AI")
+                    SettingsGroupCard(
+                        icon = Icons.Default.Key,
+                        iconTint = if (aiUiState.keyConfig.hasKey) EmeraldAccent else AmberAccent,
+                        title = "Mục Key AI (Gemini API)",
+                        subtitle = if (aiUiState.keyConfig.hasKey) {
+                            "Đã lưu Key (${aiUiState.keyConfig.maskedKey}) • ${aiUiState.keyConfig.effectiveModelId}"
+                        } else {
+                            "Điền API Key để hỏi AI tìm tài liệu 388 trang & chụp đề vẽ hình"
+                        }
+                    ) {
+                        AiKeySetupSection(
+                            keyConfig = aiUiState.keyConfig,
+                            isVerifying = aiUiState.isVerifyingKey,
+                            statusMessage = aiUiState.keyStatusMessage,
+                            statusSuccess = aiUiState.keyStatusSuccess,
+                            onSaveAndVerify = onSaveAndVerifyAiKey,
+                            onSaveOnly = onSaveAiKeyOnly,
+                            onSelectModel = onSelectAiModel,
+                            onClearKey = onClearAiKey
+                        )
                     }
 
                     // 1. Theme & Colors Section
