@@ -228,6 +228,26 @@ jobs:
             echo "::warning::sdkmanager not found; using pre-installed Android SDK."
           fi
 
+      - name: Restore Firebase google-services.json (optional secret)
+        shell: bash
+        env:
+          GOOGLE_SERVICES_JSON_RAW: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          set -euo pipefail
+          TARGET="app/google-services.json"
+          if [ -f "${TARGET}" ] && [ -s "${TARGET}" ]; then
+            echo "Using repository ${TARGET}."
+          elif [ -n "${GOOGLE_SERVICES_JSON_B64}" ]; then
+            echo "Restoring ${TARGET} from GOOGLE_SERVICES_JSON_BASE64 secret..."
+            printf '%s' "${GOOGLE_SERVICES_JSON_B64}" | tr -d '\r\n ' | base64 -d > "${TARGET}"
+          elif [ -n "${GOOGLE_SERVICES_JSON_RAW}" ]; then
+            echo "Restoring ${TARGET} from GOOGLE_SERVICES_JSON secret..."
+            printf '%s\n' "${GOOGLE_SERVICES_JSON_RAW}" > "${TARGET}"
+          else
+            echo "::warning::${TARGET} not found in repository or GitHub Secrets; building with fallback resource (add GOOGLE_SERVICES_JSON secret to enable Google Sign-In in CI APKs)."
+          fi
+
       - name: Build debug APK
         shell: bash
         env:
@@ -239,7 +259,7 @@ jobs:
           -PappVersionCode="${APP_VERSION_CODE}"
           -PappVersionName="${APP_VERSION_NAME}"
           -PappGithubRepo="${APP_GITHUB_REPO}"
-          --stacktrace --no-daemon
+          --no-configuration-cache --stacktrace --no-daemon
 
       - name: Verify debug APK
         shell: bash

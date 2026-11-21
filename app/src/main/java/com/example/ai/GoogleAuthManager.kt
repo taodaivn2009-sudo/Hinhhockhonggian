@@ -159,7 +159,9 @@ object GoogleAuthManager {
             return GoogleSignInOutcome.Error("Thiếu cấu hình đăng nhập Google (default_web_client_id).")
         }
         if (clientId.isBlank()) {
-            return GoogleSignInOutcome.Error("Cấu hình Web Client ID trống.")
+            return GoogleSignInOutcome.Error(
+                "Bản APK này chưa được gắn tệp google-services.json (hãy thêm Secret GOOGLE_SERVICES_JSON trên GitHub Actions hoặc dùng API Key riêng bên dưới)."
+            )
         }
 
         val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
