@@ -62,78 +62,119 @@ import com.example.ui.ConstructionReplayBar
 import com.example.ui.ParameterMSliderOverlay
 import com.example.ui.ToastBanner
 import com.example.ui.theme.*
-import com.example.update.AppUpdateUiState
-import com.example.update.UpdateVersionPill
 import java.io.OutputStreamWriter
 import kotlin.math.abs
 import kotlin.math.hypot
 
 /**
- * Shared compact segmented switch between the 3D Space, 2D Plane, and Documents workspaces.
+ * Shared 4-tab unified workspace bar across 3D Space, 2D Plane, Documents, and App Settings.
  */
 @Composable
 fun WorkspaceModeSwitch(
     current: MathWorkspace,
     onSelect: (MathWorkspace) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    hasUpdateBadge: Boolean = false
 ) {
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(SlateDeepest.copy(alpha = 0.94f))
-            .border(1.dp, SlateBorder, RoundedCornerShape(10.dp))
-            .padding(2.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .clip(RoundedCornerShape(13.dp))
+            .background(SlateDeepest.copy(alpha = 0.95f))
+            .border(1.dp, SlateBorder.copy(alpha = 0.9f), RoundedCornerShape(13.dp))
+            .padding(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         WorkspaceTabChip(
+            icon = Icons.Default.Category,
             label = "3D",
             selected = current == MathWorkspace.SPACE_3D,
             activeColor = IndigoPrimary,
             testTag = "switch_workspace_3d",
+            modifier = Modifier.weight(1f),
             onClick = { onSelect(MathWorkspace.SPACE_3D) }
         )
         WorkspaceTabChip(
+            icon = Icons.AutoMirrored.Filled.ShowChart,
             label = "2D",
             selected = current == MathWorkspace.PLANE_2D,
             activeColor = EmeraldDark,
             testTag = "switch_workspace_2d",
+            modifier = Modifier.weight(1f),
             onClick = { onSelect(MathWorkspace.PLANE_2D) }
         )
         WorkspaceTabChip(
+            icon = Icons.Default.MenuBook,
             label = "Tài liệu",
             selected = current == MathWorkspace.DOCUMENTS,
             activeColor = Color(0xFFD97706),
             testTag = "switch_workspace_docs",
+            modifier = Modifier.weight(1f),
             onClick = { onSelect(MathWorkspace.DOCUMENTS) }
+        )
+        WorkspaceTabChip(
+            icon = Icons.Default.Settings,
+            label = "Cài đặt",
+            selected = current == MathWorkspace.SETTINGS,
+            activeColor = SkyBlue,
+            showBadge = hasUpdateBadge,
+            testTag = "switch_workspace_settings",
+            modifier = Modifier.weight(1f),
+            onClick = { onSelect(MathWorkspace.SETTINGS) }
         )
     }
 }
 
 @Composable
 private fun WorkspaceTabChip(
+    icon: ImageVector,
     label: String,
     selected: Boolean,
     activeColor: Color,
     testTag: String,
+    modifier: Modifier = Modifier,
+    showBadge: Boolean = false,
     onClick: () -> Unit
 ) {
     Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
+        modifier = modifier
+            .defaultMinSize(minHeight = 36.dp)
+            .clip(RoundedCornerShape(10.dp))
             .background(if (selected) activeColor else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .padding(horizontal = 6.dp, vertical = 6.dp)
             .testTag(testTag),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = if (selected) Color.White else SlateTextSecondary,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            softWrap = false
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (selected) Color.White else SlateTextSecondary,
+                modifier = Modifier.size(14.dp)
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (selected) Color.White else SlateTextSecondary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.5.sp,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (showBadge) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(EmeraldLight)
+                )
+            }
+        }
     }
 }
 
@@ -142,9 +183,7 @@ fun Geo2DStudioScreen(
     onSwitchWorkspace: (MathWorkspace) -> Unit,
     pendingPlotExpr: String? = null,
     onConsumePendingPlot: () -> Unit = {},
-    updateUiState: AppUpdateUiState = AppUpdateUiState(),
-    onOpenUpdateDialog: () -> Unit = {},
-    onOpenThemeDialog: () -> Unit = {},
+    hasUpdateBadge: Boolean = false,
     viewModel: Geo2DViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -306,14 +345,12 @@ fun Geo2DStudioScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // 2. Top 2D Studio Header with 3D/2D Switcher
+        // 2. Top 2D Studio Header with Unified 4-Tab Switcher
         Geo2DTopHeader(
             uiState = uiState,
             viewModel = viewModel,
             onSwitchWorkspace = onSwitchWorkspace,
-            updateUiState = updateUiState,
-            onOpenUpdateDialog = onOpenUpdateDialog,
-            onOpenThemeDialog = onOpenThemeDialog,
+            hasUpdateBadge = hasUpdateBadge,
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
@@ -356,7 +393,7 @@ fun Geo2DStudioScreen(
             }
         }
         if (hasActiveParamM && uiState.activeTab == null && uiState.replayStep == null) {
-            val topOffset = if (uiState.traceX != null && uiState.traceResults.isNotEmpty()) 130.dp else 60.dp
+            val topOffset = if (uiState.traceX != null && uiState.traceResults.isNotEmpty()) 168.dp else 102.dp
             ParameterMSliderOverlay(
                 paramM = uiState.snapshot.paramM,
                 minVal = uiState.snapshot.paramMMin,
@@ -535,9 +572,7 @@ private fun Geo2DTopHeader(
     uiState: Geo2DUiState,
     viewModel: Geo2DViewModel,
     onSwitchWorkspace: (MathWorkspace) -> Unit,
-    updateUiState: AppUpdateUiState = AppUpdateUiState(),
-    onOpenUpdateDialog: () -> Unit = {},
-    onOpenThemeDialog: () -> Unit = {},
+    hasUpdateBadge: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -545,51 +580,54 @@ private fun Geo2DTopHeader(
             .fillMaxWidth()
             .statusBarsPadding()
             .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
+        // Row 1: Unified 4-Tab Workspace Navigation Bar
+        WorkspaceModeSwitch(
+            current = MathWorkspace.PLANE_2D,
+            hasUpdateBadge = hasUpdateBadge,
+            onSelect = onSwitchWorkspace,
+            modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp)
+        )
+
+        // Row 2: Active Functions Pill + Quick 2D Studio Actions
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().widthIn(max = 680.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            val visibleFnCount = uiState.snapshot.functions.count { (it.visible || it.showDerivative) && it.expression.isNotBlank() }
             Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SlateDark.copy(alpha = 0.90f))
+                    .border(1.dp, if (uiState.activeTab == Geo2DTab.FUNCTIONS) EmeraldAccent else SlateBorder.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
+                    .clickable { viewModel.toggleTab(Geo2DTab.FUNCTIONS) }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                WorkspaceModeSwitch(
-                    current = MathWorkspace.PLANE_2D,
-                    onSelect = onSwitchWorkspace
+                Icon(Icons.AutoMirrored.Filled.ShowChart, contentDescription = null, tint = EmeraldAccent, modifier = Modifier.size(16.dp))
+                Text(
+                    text = if (visibleFnCount > 0) "Đang vẽ $visibleFnCount đồ thị f(x)" else "Nhập hàm số y = f(x)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = SlateTextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
-
-                // Quick Functions Pill
-                val visibleFnCount = uiState.snapshot.functions.count { (it.visible || it.showDerivative) && it.expression.isNotBlank() }
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(SlateDark.copy(alpha = 0.9f))
-                        .border(1.dp, if (uiState.activeTab == Geo2DTab.FUNCTIONS) EmeraldAccent else SlateBorder, RoundedCornerShape(10.dp))
-                        .clickable { viewModel.toggleTab(Geo2DTab.FUNCTIONS) }
-                        .padding(horizontal = 9.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ShowChart, contentDescription = null, tint = EmeraldAccent, modifier = Modifier.size(16.dp))
-                    Text(
-                        text = if (visibleFnCount > 0) "$visibleFnCount đồ thị" else "f(x)",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = SlateTextPrimary,
-                        maxLines = 1
-                    )
-                }
+                Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = EmeraldAccent, modifier = Modifier.size(16.dp))
             }
 
-            // Right Action Strip: Undo, Redo, Replay, Center O, Save
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(SlateDark.copy(alpha = 0.9f))
-                    .border(1.dp, SlateBorder, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SlateDark.copy(alpha = 0.90f))
+                    .border(1.dp, SlateBorder.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 3.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TopIconBtn(Icons.AutoMirrored.Filled.Undo, "Hoàn tác", enabled = uiState.canUndo) { viewModel.undo() }
@@ -600,26 +638,12 @@ private fun Geo2DTopHeader(
             }
         }
 
-        // Compact Theme & GitHub version pills aligned neatly to the right below header
-        if (uiState.traceX == null || uiState.traceResults.isEmpty()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.End),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                ThemePickerButton(onClick = onOpenThemeDialog)
-                UpdateVersionPill(
-                    uiState = updateUiState,
-                    onClick = onOpenUpdateDialog
-                )
-            }
-        }
-
         // Live Trace Readout Pill (when tracing graph)
         if (uiState.traceX != null && uiState.traceResults.isNotEmpty()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .widthIn(max = 680.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(SlateDeepest.copy(alpha = 0.92f))
                     .border(1.dp, CyanAccent.copy(alpha = 0.55f), RoundedCornerShape(10.dp))

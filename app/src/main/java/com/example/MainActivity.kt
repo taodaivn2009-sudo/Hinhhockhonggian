@@ -33,12 +33,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.docs.MathDocumentsScreen
 import com.example.geo2d.Geo2DPersistence
 import com.example.geo2d.Geo2DStudioScreen
+import com.example.geo2d.Geo2DViewModel
 import com.example.geo2d.MathWorkspace
+import com.example.settings.AppSettingsScreen
 import com.example.ui.BottomStudioDock
 import com.example.ui.ConstructionReplayBar
 import com.example.ui.GeometryCanvasView
 import com.example.ui.RightCanvasQuickControls
-import com.example.ui.SensitivityQuickPopover
 import com.example.ui.StudioInspectorSheet
 import com.example.ui.ToastBanner
 import com.example.ui.TopStudioHeader
@@ -47,8 +48,6 @@ import com.example.ui.theme.AppThemeUiState
 import com.example.ui.theme.AppThemeViewModel
 import com.example.ui.theme.Geo3DTheme
 import com.example.ui.theme.ThemePaletteResolver
-import com.example.ui.theme.ThemeStudioDialog
-import com.example.update.AppUpdateUiState
 import com.example.update.AppUpdateViewModel
 import com.example.update.UpdateAvailableBanner
 import com.example.update.UpdateDetailsDialog
@@ -101,6 +100,8 @@ class MainActivity : ComponentActivity() {
 fun ToolToanRootScreen(
     themeViewModel: AppThemeViewModel,
     themeUiState: AppThemeUiState,
+    geometryViewModel: GeometryViewModel = viewModel(),
+    geo2DViewModel: Geo2DViewModel = viewModel(),
     updateViewModel: AppUpdateViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -108,6 +109,8 @@ fun ToolToanRootScreen(
     var activeWorkspace by remember { mutableStateOf(workspacePrefs.loadLastWorkspace()) }
     var pending2DExpr by remember { mutableStateOf<String?>(null) }
     val updateUiState by updateViewModel.uiState.collectAsStateWithLifecycle()
+    val geoUiState by geometryViewModel.uiState.collectAsStateWithLifecycle()
+    val geo2DUiState by geo2DViewModel.uiState.collectAsStateWithLifecycle()
 
     val onSelectWorkspace: (MathWorkspace) -> Unit = { target ->
         if (target != activeWorkspace) {
@@ -120,17 +123,15 @@ fun ToolToanRootScreen(
         when (activeWorkspace) {
             MathWorkspace.SPACE_3D -> GeometryStudioScreen(
                 onSwitchWorkspace = onSelectWorkspace,
-                updateUiState = updateUiState,
-                onOpenUpdateDialog = { updateViewModel.openUpdateDialog() },
-                onOpenThemeDialog = { themeViewModel.openDialog() }
+                hasUpdateBadge = updateUiState.hasUpdate,
+                viewModel = geometryViewModel
             )
             MathWorkspace.PLANE_2D -> Geo2DStudioScreen(
                 onSwitchWorkspace = onSelectWorkspace,
                 pendingPlotExpr = pending2DExpr,
                 onConsumePendingPlot = { pending2DExpr = null },
-                updateUiState = updateUiState,
-                onOpenUpdateDialog = { updateViewModel.openUpdateDialog() },
-                onOpenThemeDialog = { themeViewModel.openDialog() }
+                hasUpdateBadge = updateUiState.hasUpdate,
+                viewModel = geo2DViewModel
             )
             MathWorkspace.DOCUMENTS -> MathDocumentsScreen(
                 onSwitchWorkspace = onSelectWorkspace,
@@ -138,9 +139,23 @@ fun ToolToanRootScreen(
                     pending2DExpr = expr
                     onSelectWorkspace(MathWorkspace.PLANE_2D)
                 },
+                hasUpdateBadge = updateUiState.hasUpdate
+            )
+            MathWorkspace.SETTINGS -> AppSettingsScreen(
+                themeConfig = themeUiState.config,
+                onSelectThemeMode = { themeViewModel.setThemeMode(it) },
+                onSelectThemePreset = { themeViewModel.selectPreset(it) },
+                onSelectAccentColor = { themeViewModel.selectAccentColor(it) },
+                onResetThemeDefault = { themeViewModel.resetToDefault() },
+                sensitivity = geoUiState.snapshot.sensitivity,
+                geometryViewModel = geometryViewModel,
+                sensitivity2D = geo2DUiState.snapshot.sensitivity,
+                geo2DViewModel = geo2DViewModel,
                 updateUiState = updateUiState,
-                onOpenUpdateDialog = { updateViewModel.openUpdateDialog() },
-                onOpenThemeDialog = { themeViewModel.openDialog() }
+                onCheckUpdateNow = { updateViewModel.checkForUpdates(isAutoStartup = false) },
+                onSaveUpdateRepoAndCheck = { updateViewModel.saveRepoAndCheck(it) },
+                onSkipUpdateVersion = { updateViewModel.skipCurrentAvailableVersion() },
+                onSwitchWorkspace = onSelectWorkspace
             )
         }
 
@@ -152,7 +167,7 @@ fun ToolToanRootScreen(
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
-        // Full GitHub Release Update & Install Suggestion Modal
+        // Full GitHub Release Update & Install Suggestion Modal (triggered from banner)
         UpdateDetailsDialog(
             uiState = updateUiState,
             onCheckNow = { updateViewModel.checkForUpdates(isAutoStartup = false) },
@@ -160,25 +175,13 @@ fun ToolToanRootScreen(
             onSkipVersion = { updateViewModel.skipCurrentAvailableVersion() },
             onDismiss = { updateViewModel.closeUpdateDialog() }
         )
-
-        // Theme & Color Studio Modal
-        ThemeStudioDialog(
-            uiState = themeUiState,
-            onSelectMode = { themeViewModel.setThemeMode(it) },
-            onSelectPreset = { themeViewModel.selectPreset(it) },
-            onSelectAccentColor = { themeViewModel.selectAccentColor(it) },
-            onResetDefault = { themeViewModel.resetToDefault() },
-            onDismiss = { themeViewModel.closeDialog() }
-        )
     }
 }
 
 @Composable
 fun GeometryStudioScreen(
     onSwitchWorkspace: (MathWorkspace) -> Unit,
-    updateUiState: AppUpdateUiState = AppUpdateUiState(),
-    onOpenUpdateDialog: () -> Unit = {},
-    onOpenThemeDialog: () -> Unit = {},
+    hasUpdateBadge: Boolean = false,
     viewModel: GeometryViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -186,12 +189,8 @@ fun GeometryStudioScreen(
     val density = LocalDensity.current.density
     var canvasSize by remember { mutableStateOf(IntSize(1080, 1920)) }
 
-    BackHandler(enabled = uiState.replayStep != null || uiState.sensitivityPopoverOpen) {
-        if (uiState.sensitivityPopoverOpen) {
-            viewModel.closeSensitivityPopover()
-        } else if (uiState.replayStep != null) {
-            viewModel.stopReplay(restoreFull = true)
-        }
+    BackHandler(enabled = uiState.replayStep != null) {
+        viewModel.stopReplay(restoreFull = true)
     }
 
     fun writePngToUri(uri: Uri, locationSuffix: String = "") {
@@ -359,19 +358,17 @@ fun GeometryStudioScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // 2. Top Studio Header (3D/2D Switcher + Shape Selector + Live Metrics + Quick Actions)
+        // 2. Top Studio Header (Unified 4-Tab Switcher + Shape Selector + Live Metrics + Camera Presets)
         TopStudioHeader(
             uiState = uiState,
             viewModel = viewModel,
             isCompactWidth = isCompactWidth,
             onSwitchWorkspace = onSwitchWorkspace,
-            updateUiState = updateUiState,
-            onOpenUpdateDialog = onOpenUpdateDialog,
-            onOpenThemeDialog = onOpenThemeDialog,
+            hasUpdateBadge = hasUpdateBadge,
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
-        // 3. Right Floating Quick Controls (Oxyz, Snap, Sensitivity, Auto-Rotate, Zoom +/-)
+        // 3. Right Floating Quick Controls (Oxyz, Snap, Auto-Rotate, Zoom +/-)
         if (!isCompactWidth || uiState.activeLeftPane == null) {
             RightCanvasQuickControls(
                 uiState = uiState,
@@ -380,8 +377,8 @@ fun GeometryStudioScreen(
             )
         }
 
-        // 3b. Tap anywhere on empty area outside open panel/popover to close quickly
-        if (uiState.activeLeftPane != null || uiState.sensitivityPopoverOpen) {
+        // 3b. Tap anywhere on empty area outside open panel to close quickly
+        if (uiState.activeLeftPane != null) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -390,18 +387,10 @@ fun GeometryStudioScreen(
                         indication = null
                     ) {
                         viewModel.closeLeftPane()
-                        viewModel.closeSensitivityPopover()
                     }
                     .testTag("geo3d_dismiss_scrim")
             )
         }
-
-        // 4. Live Floating Sensitivity Quick Popover
-        SensitivityQuickPopover(
-            uiState = uiState,
-            viewModel = viewModel,
-            modifier = Modifier.align(Alignment.CenterEnd)
-        )
 
         // 5. Adaptive Inspector Sheet (Bottom Sheet on mobile, Left Side Panel on tablet)
         StudioInspectorSheet(

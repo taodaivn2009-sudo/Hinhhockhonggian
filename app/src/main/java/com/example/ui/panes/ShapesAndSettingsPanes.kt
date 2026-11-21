@@ -563,20 +563,7 @@ fun SettingsPane(
     var showResetConfirm by remember { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        // 1. Touch & Gesture Sensitivity Controls
-        SettingBox(
-            title = "Tùy chỉnh độ nhạy cảm ứng",
-            titleColor = CyanAccent,
-            borderColor = SkyBlue.copy(alpha = 0.7f),
-            containerColor = SkyBlue.copy(alpha = 0.12f)
-        ) {
-            SensitivityControlsSection(
-                sensitivity = snap.sensitivity,
-                viewModel = viewModel
-            )
-        }
-
-        // 2. Dimensions Sliders
+        // 1. Dimensions Sliders
         SettingBox(title = "Kích thước chuẩn ban đầu") {
             DimensionSliderRow(
                 label = if (snap.shape.isRound) "Đường kính (2R):" else "Cạnh đáy (a):",

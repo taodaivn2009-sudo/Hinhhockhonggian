@@ -7,7 +7,8 @@ import kotlin.math.sqrt
 enum class MathWorkspace {
     SPACE_3D,
     PLANE_2D,
-    DOCUMENTS
+    DOCUMENTS,
+    SETTINGS
 }
 
 data class Vec2(val x: Float, val y: Float) {
@@ -37,7 +38,7 @@ enum class Geo2DTab(val title: String, val shortLabel: String) {
     FUNCTIONS("Đồ Thị Hàm Số y = f(x)", "Hàm số"),
     PRESETS("Hình Mẫu & Nhập Tọa Độ", "Hình mẫu"),
     OBJECTS("Đối Tượng & Đo Đạc", "Đo đạc"),
-    SETTINGS("Cài Đặt Mặt Phẳng Oxy", "Cài đặt")
+    SETTINGS("Cài Đặt Hình & Mặt Phẳng Oxy", "Cài đặt hình")
 }
 
 enum class Geo2DPreset(val title: String, val subtitle: String) {

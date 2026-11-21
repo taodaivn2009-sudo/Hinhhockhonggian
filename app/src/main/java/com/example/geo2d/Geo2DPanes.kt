@@ -994,18 +994,6 @@ fun Geo2DSettingsPane(
             Geo2DSwitchRow("Vẽ tiếp tuyến khi dò đồ thị", s.showTangentOnTrace) { viewModel.toggleTangentOnTrace() }
         }
 
-        SettingBox(title = "Độ nhạy thao tác 2D", titleColor = IndigoSoft) {
-            Geo2DSliderRow("Tốc độ trượt mặt phẳng", s.sensitivity.pan, 0.4f..2.2f) {
-                viewModel.updateSensitivity(pan = it)
-            }
-            Geo2DSliderRow("Tốc độ thu phóng", s.sensitivity.zoom, 0.4f..2.2f) {
-                viewModel.updateSensitivity(zoom = it)
-            }
-            Geo2DSliderRow("Vùng bắt điểm chạm", s.sensitivity.touchRadius, 0.7f..1.7f) {
-                viewModel.updateSensitivity(touchRadius = it)
-            }
-        }
-
         Button(
             onClick = { viewModel.clearAllGeometryAndGraphs() },
             colors = ButtonDefaults.buttonColors(containerColor = RoseAccent.copy(alpha = 0.85f)),
@@ -1015,6 +1003,24 @@ fun Geo2DSettingsPane(
             Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
             Text("Xóa toàn bộ hình & đồ thị 2D", style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+@Composable
+fun Geo2DSensitivityControlsSection(
+    sensitivity: Geo2DSensitivity,
+    viewModel: Geo2DViewModel
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Geo2DSliderRow("Tốc độ trượt mặt phẳng 2D", sensitivity.pan, 0.4f..2.2f) {
+            viewModel.updateSensitivity(pan = it)
+        }
+        Geo2DSliderRow("Tốc độ thu phóng 2D", sensitivity.zoom, 0.4f..2.2f) {
+            viewModel.updateSensitivity(zoom = it)
+        }
+        Geo2DSliderRow("Vùng bắt điểm chạm 2D", sensitivity.touchRadius, 0.7f..1.7f) {
+            viewModel.updateSensitivity(touchRadius = it)
         }
     }
 }

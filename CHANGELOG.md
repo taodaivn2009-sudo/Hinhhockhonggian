@@ -2,7 +2,13 @@
 
 ## Bản cập nhật mới nhất
 
-### Mục mới: Chủ đề & Tùy chỉnh màu sắc giao diện (Sáng / Tối / Tự chọn màu)
+### Viết lại giao diện gọn gàng & Tách riêng Cài đặt ứng dụng / Cài đặt hình
+- **Thanh điều hướng 4 không gian thống nhất:** Làm mới toàn bộ đầu trang trên **3D | 2D | Tài liệu | Cài đặt** với giao diện đồng bộ, gọn thoáng, loại bỏ hoàn toàn các nút nổi chồng chéo trên màn hình vẽ.
+- **Tab Cài đặt ứng dụng chuyên biệt:** Gom toàn bộ cài đặt chung của ứng dụng vào 1 nơi duy nhất — **Chủ đề & Màu sắc giao diện** (Sáng/Tối/Hệ thống, 6 bộ màu gợi ý, thanh pha sắc Hue tự do), **Độ nhạy cảm ứng 3D & 2D**, **Kiểm tra & Cài đặt bản cập nhật từ GitHub** (có chấm xanh báo khi có bản mới) và **Thông tin ứng dụng**.
+- **Tách riêng mục "Cài đặt hình":** Mục **Cài đặt hình** trong 3D và 2D giờ chỉ tập trung vào tùy chỉnh của bản vẽ hiện tại (kích thước `a, b, h`, lưới, nét đứt, đường cao, mặt cắt ngang, hiển thị hệ trục/tiệm cận/cực trị, lưu & xuất file).
+- **Sửa triệt để chế độ Xoay & Xem 3D:** Chuẩn hóa tốc độ xoay và dịch chuyển theo mật độ điểm ảnh (`DPI`) để xoay êm tay trên mọi màn hình, theo dõi chính xác ngón tay khi chuyển giữa phóng to 2 ngón và xoay 1 ngón (không còn giật nhảy góc nhìn), tự động tạm dừng **Tự xoay** khi người dùng chạm tay xoay thủ công, phân tách rõ ràng giữa **Xoay & Xem** và **Tự xoay**, đồng thời bổ sung thanh góc nhìn nhanh 1 chạm (**3D · Trước · Trên · Bên**).
+
+### Chủ đề & Tùy chỉnh màu sắc giao diện (Sáng / Tối / Tự chọn màu)
 - **3 chế độ hiển thị:** Hỗ trợ chuyển nhanh giữa chế độ **Tối**, **Sáng** và **Theo hệ thống**, tự động đổi cả giao diện điều khiển, thanh trạng thái Android lẫn nền lưới 3D/2D và nét vẽ tương phản cao.
 - **6 chủ đề gợi ý thiết kế sẵn:** *Thiên Văn Tối*, *Giấy Trắng Học Tập* (như vở toán in), *Bảng Xanh Lớp Học*, *Giấy Kem Nắng Ấm*, *Ngân Hà Tím* và *Bầu Trời Sáng*.
 - **Tự chọn màu nhấn chủ đạo:** 8 bảng màu nhanh cùng **thanh trượt pha sắc màu tự do (Hue 0°–360°)** kèm khung xem trước đồ thị trực tiếp, tự động lưu lại cho các lần mở app sau.

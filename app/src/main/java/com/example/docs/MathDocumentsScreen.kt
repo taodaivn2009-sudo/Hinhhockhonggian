@@ -30,8 +30,6 @@ import androidx.compose.ui.unit.sp
 import com.example.geo2d.MathWorkspace
 import com.example.geo2d.WorkspaceModeSwitch
 import com.example.ui.theme.*
-import com.example.update.AppUpdateUiState
-import com.example.update.UpdateVersionPill
 import java.util.Locale
 
 /**
@@ -43,9 +41,7 @@ import java.util.Locale
 fun MathDocumentsScreen(
     onSwitchWorkspace: (MathWorkspace) -> Unit,
     onPlotTrigIn2D: (String) -> Unit,
-    updateUiState: AppUpdateUiState = AppUpdateUiState(),
-    onOpenUpdateDialog: () -> Unit = {},
-    onOpenThemeDialog: () -> Unit = {}
+    hasUpdateBadge: Boolean = false
 ) {
     var selectedCategory by remember { mutableStateOf(TrigDocCategory.ALL) }
     var searchQuery by remember { mutableStateOf("") }
@@ -97,55 +93,19 @@ fun MathDocumentsScreen(
                 .fillMaxSize()
                 .statusBarsPadding()
         ) {
-            // Top Header with unified 3D | 2D | Tài liệu switcher
-            Row(
+            // Unified Top Navigation Bar (3D | 2D | Tài liệu | Cài đặt)
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                contentAlignment = Alignment.Center
             ) {
                 WorkspaceModeSwitch(
                     current = MathWorkspace.DOCUMENTS,
-                    onSelect = onSwitchWorkspace
+                    hasUpdateBadge = hasUpdateBadge,
+                    onSelect = onSwitchWorkspace,
+                    modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp)
                 )
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(SlateDark)
-                            .border(1.dp, AmberAccent.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MenuBook,
-                            contentDescription = null,
-                            tint = AmberAccent,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Text(
-                            text = "Lượng Giác",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = SlateTextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    ThemePickerButton(onClick = onOpenThemeDialog)
-
-                    UpdateVersionPill(
-                        uiState = updateUiState,
-                        onClick = onOpenUpdateDialog
-                    )
-                }
             }
 
             // Search Bar

@@ -1,6 +1,5 @@
 package com.example.ui
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -10,7 +9,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -21,7 +19,6 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,14 +32,10 @@ import androidx.compose.ui.unit.sp
 import com.example.engine.*
 import com.example.geo2d.MathWorkspace
 import com.example.geo2d.WorkspaceModeSwitch
-import com.example.ui.panes.SensitivityControlsSection
 import com.example.ui.panes.ShapePreviewThumbnail
 import com.example.ui.theme.*
-import com.example.update.AppUpdateUiState
-import com.example.update.UpdateVersionPill
 import com.example.viewmodel.GeometryViewModel
 import java.util.Locale
-import kotlin.math.abs
 
 @Composable
 fun TopStudioHeader(
@@ -50,9 +43,7 @@ fun TopStudioHeader(
     viewModel: GeometryViewModel,
     isCompactWidth: Boolean,
     onSwitchWorkspace: (MathWorkspace) -> Unit,
-    updateUiState: AppUpdateUiState = AppUpdateUiState(),
-    onOpenUpdateDialog: () -> Unit = {},
-    onOpenThemeDialog: () -> Unit = {},
+    hasUpdateBadge: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val m = uiState.scene.metrics
@@ -64,35 +55,38 @@ fun TopStudioHeader(
             .fillMaxWidth()
             .statusBarsPadding()
             .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp)
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        // Row 1: 3D/2D Mode Switcher + Current Shape Selector Pill + Quick Undo/Redo/Reset/Save Actions
+        // Row 1: Unified 4-Tab Workspace Navigation Bar (3D | 2D | Tài liệu | Cài đặt)
+        WorkspaceModeSwitch(
+            current = MathWorkspace.SPACE_3D,
+            hasUpdateBadge = hasUpdateBadge,
+            onSelect = onSwitchWorkspace,
+            modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp)
+        )
+
+        // Row 2: Active Shape Selector Pill + Quick Studio Action Strip
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().widthIn(max = 680.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            WorkspaceModeSwitch(
-                current = MathWorkspace.SPACE_3D,
-                onSelect = onSwitchWorkspace
-            )
-
-            // Interactive Shape Title Pill (opens Shapes pane)
             Row(
                 modifier = Modifier
                     .weight(1f)
                     .testTag("top_shape_selector_pill")
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(SlateDark.copy(alpha = 0.88f))
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SlateDark.copy(alpha = 0.90f))
                     .border(
                         width = 1.dp,
-                        color = if (uiState.activeLeftPane == LeftPane.SHAPES) CyanAccent else SlateBorder.copy(alpha = 0.75f),
-                        shape = RoundedCornerShape(11.dp)
+                        color = if (uiState.activeLeftPane == LeftPane.SHAPES) CyanAccent else SlateBorder.copy(alpha = 0.8f),
+                        shape = RoundedCornerShape(12.dp)
                     )
                     .clickable { viewModel.toggleLeftPane(LeftPane.SHAPES) }
-                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                    .padding(horizontal = 9.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(7.dp)
             ) {
                 ShapePreviewThumbnail(
                     shape = uiState.snapshot.shape,
@@ -125,12 +119,11 @@ fun TopStudioHeader(
                 )
             }
 
-            // Right Studio Action Strip
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(SlateDark.copy(alpha = 0.88f))
-                    .border(1.dp, SlateBorder.copy(alpha = 0.75f), RoundedCornerShape(11.dp))
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SlateDark.copy(alpha = 0.90f))
+                    .border(1.dp, SlateBorder.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
                     .padding(horizontal = 3.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(1.dp)
@@ -184,19 +177,21 @@ fun TopStudioHeader(
             }
         }
 
-        // Row 2: Live Metrics Bar (tapping opens Formulas pane) + Active Mode Banner
+        // Row 3: Live Metrics Pill + 1-Tap Camera Angle Presets (when in Rotate & View mode)
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().widthIn(max = 680.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
                 modifier = Modifier
+                    .weight(1f, fill = false)
                     .testTag("live_metrics_pill")
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(SlateDeepest.copy(alpha = 0.86f))
-                    .border(1.dp, SlateBorder.copy(alpha = 0.85f), RoundedCornerShape(9.dp))
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(SlateDeepest.copy(alpha = 0.88f))
+                    .border(1.dp, SlateBorder.copy(alpha = 0.85f), RoundedCornerShape(10.dp))
                     .clickable { viewModel.toggleLeftPane(LeftPane.FORMULAS) }
+                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 9.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp)
@@ -214,39 +209,36 @@ fun TopStudioHeader(
                 MetricPill("V", f2(m.vol), AmberAccent)
             }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                // Active Sensitivity Indicator Pill (only when non-default)
-                val s = uiState.snapshot.sensitivity
-                val isCustomSens = abs(s.rotation - 1f) > 0.05f || abs(s.zoom - 1f) > 0.05f || abs(s.drag - 1f) > 0.05f || abs(s.touchRadius - 1f) > 0.05f
-                if (isCustomSens) {
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(9.dp))
-                            .background(SkyBlue.copy(alpha = 0.24f))
-                            .border(1.dp, CyanAccent.copy(alpha = 0.7f), RoundedCornerShape(9.dp))
-                            .clickable { viewModel.toggleSensitivityPopover() }
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(Icons.Default.Speed, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(13.dp))
-                        Text(
-                            text = String.format(Locale.US, "%.1fx", s.rotation),
-                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
-                            color = CyanAccent
-                        )
+            if (uiState.interactionMode == InteractionMode.VIEW) {
+                Spacer(Modifier.width(6.dp))
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(SlateDark.copy(alpha = 0.88f))
+                        .border(1.dp, SlateBorder.copy(alpha = 0.8f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 3.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    CameraViewPreset.entries.forEach { preset ->
+                        Box(
+                            modifier = Modifier
+                                .testTag("camera_preset_${preset.name.lowercase()}")
+                                .clip(RoundedCornerShape(7.dp))
+                                .clickable { viewModel.setCameraPreset(preset) }
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = preset.label,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = CyanAccent,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 10.sp
+                            )
+                        }
                     }
                 }
-
-                ThemePickerButton(onClick = onOpenThemeDialog)
-
-                UpdateVersionPill(
-                    uiState = updateUiState,
-                    onClick = onOpenUpdateDialog
-                )
             }
         }
     }
@@ -264,7 +256,7 @@ private fun TopIconBtn(
     Box(
         modifier = Modifier
             .testTag(testTag)
-            .size(38.dp)
+            .size(36.dp)
             .clip(RoundedCornerShape(8.dp))
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
@@ -273,7 +265,7 @@ private fun TopIconBtn(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = if (enabled) tint else SlateTextSecondary.copy(alpha = 0.3f),
-            modifier = Modifier.size(19.dp)
+            modifier = Modifier.size(18.dp)
         )
     }
 }
@@ -308,8 +300,8 @@ fun RightCanvasQuickControls(
         modifier = modifier
             .padding(end = 8.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(SlateDark.copy(alpha = 0.84f))
-            .border(1.dp, SlateBorder.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+            .background(SlateDark.copy(alpha = 0.88f))
+            .border(1.dp, SlateBorder.copy(alpha = 0.75f), RoundedCornerShape(14.dp))
             .padding(vertical = 5.dp, horizontal = 3.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -333,17 +325,8 @@ fun RightCanvasQuickControls(
             onClick = { viewModel.toggleSnapEnabled() }
         )
         QuickCanvasButton(
-            icon = Icons.Default.Speed,
-            label = "Nhạy",
-            active = uiState.sensitivityPopoverOpen,
-            activeColor = SkyBlue,
-            testTag = "quick_sensitivity_btn",
-            contentDescription = "Mở tùy chỉnh nhanh độ nhạy xoay, zoom và kéo điểm",
-            onClick = { viewModel.toggleSensitivityPopover() }
-        )
-        QuickCanvasButton(
             icon = if (uiState.autoRotate) Icons.Default.Pause else Icons.Default.Autorenew,
-            label = "Xoay",
+            label = "Tự xoay",
             active = uiState.autoRotate,
             activeColor = IndigoPrimary,
             testTag = "quick_autorotate_btn",
@@ -385,7 +368,7 @@ private fun QuickCanvasButton(
     Column(
         modifier = Modifier
             .testTag(testTag)
-            .size(width = 44.dp, height = if (label != null) 44.dp else 36.dp)
+            .size(width = 48.dp, height = if (label != null) 46.dp else 38.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(if (active) activeColor.copy(alpha = 0.88f) else Color.Transparent)
             .border(1.dp, if (active) Color.White.copy(alpha = 0.35f) else Color.Transparent, RoundedCornerShape(10.dp))
@@ -396,79 +379,16 @@ private fun QuickCanvasButton(
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
-            tint = if (active) SlateTextPrimary else SlateTextLight,
+            tint = if (active) Color.White else SlateTextLight,
             modifier = Modifier.size(18.dp)
         )
         if (label != null) {
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
-                color = if (active) SlateTextPrimary else SlateTextSecondary,
-                fontSize = 9.sp,
+                color = if (active) Color.White else SlateTextSecondary,
+                fontSize = 8.5.sp,
                 maxLines = 1
-            )
-        }
-    }
-}
-
-@Composable
-fun SensitivityQuickPopover(
-    uiState: GeometryUiState,
-    viewModel: GeometryViewModel,
-    modifier: Modifier = Modifier
-) {
-    BackHandler(enabled = uiState.sensitivityPopoverOpen) {
-        viewModel.closeSensitivityPopover()
-    }
-
-    AnimatedVisibility(
-        visible = uiState.sensitivityPopoverOpen,
-        enter = fadeIn() + expandVertically(expandFrom = Alignment.CenterVertically),
-        exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.CenterVertically),
-        modifier = modifier
-            .padding(end = 68.dp, start = 12.dp)
-            .widthIn(max = 290.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .clip(RoundedCornerShape(14.dp))
-                .background(SlateDark.copy(alpha = 0.95f))
-                .border(1.dp, CyanAccent.copy(alpha = 0.8f), RoundedCornerShape(14.dp))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) {}
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Icon(Icons.Default.Speed, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(17.dp))
-                    Text("Tùy chỉnh độ nhạy", style = MaterialTheme.typography.titleSmall, color = SlateTextPrimary)
-                }
-                IconButton(
-                    onClick = { viewModel.closeSensitivityPopover() },
-                    modifier = Modifier.size(28.dp).testTag("close_sensitivity_popover_btn")
-                ) {
-                    Icon(Icons.Default.Close, contentDescription = "Đóng tùy chỉnh độ nhạy", tint = SlateTextSecondary, modifier = Modifier.size(16.dp))
-                }
-            }
-
-            Text(
-                text = "Thử xoay/zoom trực tiếp trên hình để chọn mức vừa tay nhất.",
-                style = MaterialTheme.typography.bodySmall,
-                color = SlateTextSecondary,
-                fontSize = 10.5.sp
-            )
-
-            SensitivityControlsSection(
-                sensitivity = uiState.snapshot.sensitivity,
-                viewModel = viewModel,
-                compact = true
             )
         }
     }
@@ -485,7 +405,7 @@ fun ToastBanner(
         exit = fadeOut(),
         modifier = modifier
             .statusBarsPadding()
-            .padding(top = 98.dp)
+            .padding(top = 136.dp)
     ) {
         Box(
             modifier = Modifier
@@ -497,7 +417,7 @@ fun ToastBanner(
             Text(
                 text = message ?: "",
                 style = MaterialTheme.typography.labelMedium,
-                color = SlateTextPrimary,
+                color = Color.White,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -533,7 +453,7 @@ fun BottomStudioDock(
                 Text(
                     text = statusText ?: "",
                     style = MaterialTheme.typography.labelSmall,
-                    color = SlateTextPrimary,
+                    color = Color.White,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
@@ -612,7 +532,7 @@ fun BottomStudioDock(
             }
         }
 
-        // 3. Tier 1: Direct 3D Interaction Mode Strip (Hidden while bottom sheet is open on compact screen)
+        // 3. Tier 1: Direct 3D Interaction Mode Strip (Hidden while bottom sheet is open)
         AnimatedVisibility(visible = uiState.activeLeftPane == null) {
             Row(
                 modifier = Modifier
@@ -626,7 +546,7 @@ fun BottomStudioDock(
             ) {
                 ModePillButton(
                     icon = Icons.Default.RotateRight,
-                    label = "Xoay",
+                    label = "Xoay & Xem",
                     active = uiState.interactionMode == InteractionMode.VIEW,
                     activeBg = IndigoPrimary,
                     testTag = "mode_view_btn",
@@ -675,7 +595,7 @@ fun BottomStudioDock(
             }
         }
 
-        // 4. Tier 2: Main 5-Tab Studio Navigation Bar (Always accessible, clear labels)
+        // 4. Tier 2: Main 5-Tab 3D Figure Navigation Bar (Shape-specific controls only)
         Row(
             modifier = Modifier
                 .widthIn(max = 520.dp)
@@ -713,7 +633,7 @@ fun BottomStudioDock(
             )
             StudioBottomTab(
                 icon = Icons.Default.Tune,
-                label = "Cài đặt",
+                label = "Cài đặt hình",
                 active = uiState.activeLeftPane == LeftPane.SETTINGS,
                 testTag = "rail_settings_btn",
                 modifier = Modifier.weight(1f),
@@ -755,13 +675,13 @@ private fun ModePillButton(
         Icon(
             imageVector = icon,
             contentDescription = label,
-            tint = if (active) SlateTextPrimary else SlateTextSecondary,
+            tint = if (active) Color.White else SlateTextSecondary,
             modifier = Modifier.size(15.dp)
         )
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = if (active) SlateTextPrimary else SlateTextLight,
+            color = if (active) Color.White else SlateTextLight,
             fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
             fontSize = 11.sp
         )
@@ -798,7 +718,7 @@ private fun StudioBottomTab(
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = if (active) SlateTextPrimary else SlateTextSecondary,
+                tint = if (active) Color.White else SlateTextSecondary,
                 modifier = Modifier.size(18.dp)
             )
         }
@@ -807,7 +727,7 @@ private fun StudioBottomTab(
             text = label,
             style = MaterialTheme.typography.labelSmall,
             color = if (active) CyanAccent else SlateTextSecondary,
-            fontSize = 10.sp,
+            fontSize = 9.5.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -833,7 +753,7 @@ private fun SubDragChip(
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = if (active) SlateTextPrimary else SlateTextLight,
+            color = if (active) Color.White else SlateTextLight,
             fontWeight = FontWeight.Bold
         )
     }

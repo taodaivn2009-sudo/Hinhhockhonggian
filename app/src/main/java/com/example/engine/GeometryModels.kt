@@ -48,8 +48,15 @@ enum class LeftPane(val title: String) {
     SHAPES("Chọn Khối Hình Học"),
     DRAW("Kẻ Thêm Điểm / Đường / Mặt"),
     COORDS("Hệ Tọa Độ & Máy Tính Oxyz"),
-    SETTINGS("Kích Thước & Cài Đặt Hiển Thị"),
+    SETTINGS("Cài Đặt Hình Khối 3D"),
     FORMULAS("Công Thức & Số Liệu Thực Tế")
+}
+
+enum class CameraViewPreset(val label: String) {
+    PERSPECTIVE("3D"),
+    FRONT("Trước"),
+    TOP("Trên"),
+    SIDE("Bên")
 }
 
 enum class InteractionMode {

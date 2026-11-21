@@ -541,4 +541,59 @@ class ExampleRobolectricTest {
         assertEquals(AppThemePreset.WARM_SAND_LIGHT, loadedCfg.preset)
         assertEquals(roseAccent, loadedCfg.customAccentArgb)
     }
+
+    @Test
+    fun `3d rotate and view mode normalizes dpi pauses autorotate clamps pan and switches presets`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val vm = com.example.viewmodel.GeometryViewModel(app)
+
+        // 1. DPI-normalized orbit: 100px at 1x density equals 300px at 3x density
+        vm.resetCamera()
+        val baseCam = vm.uiState.value.snapshot.camera
+        vm.orbitCamera(deltaX = 100f, deltaY = 40f, density = 1f)
+        val after1x = vm.uiState.value.snapshot.camera
+
+        vm.resetCamera()
+        vm.orbitCamera(deltaX = 300f, deltaY = 120f, density = 3f)
+        val after3x = vm.uiState.value.snapshot.camera
+        assertEquals(after1x.theta, after3x.theta, 1e-4f)
+        assertEquals(after1x.phi, after3x.phi, 1e-4f)
+        assertTrue("Dragging horizontally must rotate camera theta", kotlin.math.abs(after1x.theta - baseCam.theta) > 0.5f)
+
+        // 2. Manual orbit automatically pauses autoRotate so it never fights user touch
+        vm.toggleAutoRotate(true)
+        assertTrue(vm.uiState.value.autoRotate)
+        vm.orbitCamera(deltaX = 24f, deltaY = 0f, density = 2f)
+        assertFalse("Manual orbit should auto-pause autoRotate", vm.uiState.value.autoRotate)
+
+        // 3. Two-finger pan clamps camera target inside safe bounds
+        vm.toggleAutoRotate(true)
+        vm.zoomAndPanCamera(
+            zoomFactor = 1f,
+            panX = 50000f,
+            panY = 50000f,
+            viewportWidth = 1000f,
+            viewportHeight = 1000f,
+            density = 2f
+        )
+        val clamped = vm.uiState.value.snapshot.camera.target
+        assertTrue(clamped.x in -10f..10f)
+        assertTrue(clamped.y in -4f..12f)
+        assertTrue(clamped.z in -10f..10f)
+        assertFalse("Manual zoom/pan should auto-pause autoRotate", vm.uiState.value.autoRotate)
+
+        // 4. Quick CameraViewPreset switches angles cleanly
+        vm.setCameraPreset(CameraViewPreset.TOP)
+        assertEquals(0.10f, vm.uiState.value.snapshot.camera.phi, 0.01f)
+        vm.setCameraPreset(CameraViewPreset.FRONT)
+        assertEquals((PI / 2.0).toFloat() - 0.08f, vm.uiState.value.snapshot.camera.phi, 0.01f)
+        vm.setCameraPreset(CameraViewPreset.SIDE)
+        assertEquals((PI / 2.0).toFloat(), vm.uiState.value.snapshot.camera.theta, 0.01f)
+
+        // 5. Dedicated App Settings workspace persists cleanly
+        val wsPrefs = Geo2DPersistence(app)
+        wsPrefs.saveLastWorkspace(MathWorkspace.SETTINGS)
+        assertEquals(MathWorkspace.SETTINGS, wsPrefs.loadLastWorkspace())
+    }
 }
+

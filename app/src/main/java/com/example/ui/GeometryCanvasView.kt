@@ -75,8 +75,12 @@ fun GeometryCanvasView(
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         val startPos = down.position
-                        var movedDistance = 0f
+                        val touchSlop = 6f * density
+                        var activePointerId = down.id
+                        var lastPos = startPos
+                        var totalDistance = 0f
                         var isMultiTouch = false
+                        var isOrbiting = false
                         var dragCaptured = false
                         val mode = currentUiState.interactionMode
 
@@ -90,16 +94,21 @@ fun GeometryCanvasView(
                             )
                         }
 
-                        var lastPos = startPos
                         while (true) {
                             val event = awaitPointerEvent()
                             val activePointers = event.changes.filter { it.pressed }
                             if (activePointers.isEmpty()) break
 
                             if (activePointers.size >= 2) {
-                                // Two-finger pinch zoom + pan works in ALL modes
+                                // Two-finger pinch zoom + pan works smoothly in ALL modes
                                 if (dragCaptured) {
-                                    viewModel.onDragEnd(lastPos.x, lastPos.y, canvasSize.width.toFloat(), canvasSize.height.toFloat(), density)
+                                    viewModel.onDragEnd(
+                                        lastPos.x,
+                                        lastPos.y,
+                                        canvasSize.width.toFloat(),
+                                        canvasSize.height.toFloat(),
+                                        density
+                                    )
                                     dragCaptured = false
                                 }
                                 isMultiTouch = true
@@ -111,16 +120,30 @@ fun GeometryCanvasView(
                                         panX = pan.x,
                                         panY = pan.y,
                                         viewportWidth = canvasSize.width.toFloat().coerceAtLeast(1f),
-                                        viewportHeight = canvasSize.height.toFloat().coerceAtLeast(1f)
+                                        viewportHeight = canvasSize.height.toFloat().coerceAtLeast(1f),
+                                        density = density
                                     )
                                 }
+                                // Keep anchor synced so lifting 1 finger never jumps
+                                val first = activePointers.first()
+                                activePointerId = first.id
+                                lastPos = first.position
                                 activePointers.forEach { if (it.positionChanged()) it.consume() }
-                            } else if (!isMultiTouch) {
+                            } else {
                                 val change = activePointers.first()
+                                // If the active pointer switched (e.g. after lifting a finger from pinch),
+                                // re-anchor cleanly with zero delta jump!
+                                if (change.id != activePointerId) {
+                                    activePointerId = change.id
+                                    lastPos = change.position
+                                    continue
+                                }
+
                                 val curPos = change.position
                                 val dx = curPos.x - lastPos.x
                                 val dy = curPos.y - lastPos.y
-                                movedDistance += hypot(dx, dy)
+                                val stepDist = hypot(dx, dy)
+                                totalDistance += stepDist
                                 lastPos = curPos
 
                                 if (dragCaptured) {
@@ -132,10 +155,13 @@ fun GeometryCanvasView(
                                         density = density
                                     )
                                     change.consume()
-                                } else if (mode == InteractionMode.VIEW || mode == InteractionMode.DRAG_POINT) {
-                                    // Orbit camera when dragging empty canvas
-                                    if (movedDistance > 3f) {
-                                        viewModel.orbitCamera(dx, dy)
+                                } else {
+                                    // Smooth 1-finger orbit works in VIEW mode and whenever dragging empty space in any mode
+                                    if (!isOrbiting && totalDistance >= touchSlop) {
+                                        isOrbiting = true
+                                    }
+                                    if (isOrbiting && stepDist > 0.05f) {
+                                        viewModel.orbitCamera(dx, dy, density)
                                         change.consume()
                                     }
                                 }
@@ -143,8 +169,14 @@ fun GeometryCanvasView(
                         }
 
                         if (dragCaptured) {
-                            viewModel.onDragEnd(lastPos.x, lastPos.y, canvasSize.width.toFloat(), canvasSize.height.toFloat(), density)
-                        } else if (!isMultiTouch && movedDistance < 14f * density) {
+                            viewModel.onDragEnd(
+                                lastPos.x,
+                                lastPos.y,
+                                canvasSize.width.toFloat(),
+                                canvasSize.height.toFloat(),
+                                density
+                            )
+                        } else if (!isMultiTouch && !isOrbiting) {
                             viewModel.onCanvasTap(
                                 sx = startPos.x,
                                 sy = startPos.y,
@@ -152,7 +184,7 @@ fun GeometryCanvasView(
                                 height = canvasSize.height.toFloat(),
                                 density = density
                             )
-                        } else if (isMultiTouch || movedDistance >= 3f) {
+                        } else {
                             viewModel.commitCameraGesture()
                         }
                     }

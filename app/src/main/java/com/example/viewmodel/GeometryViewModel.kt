@@ -618,15 +618,24 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         return t
     }
 
-    fun orbitCamera(deltaX: Float, deltaY: Float) {
+    fun orbitCamera(deltaX: Float, deltaY: Float, density: Float = 1f) {
+        val safeDensity = density.coerceAtLeast(1f)
+        val dxDp = deltaX / safeDensity
+        val dyDp = deltaY / safeDensity
         _uiState.update { st ->
             val cam = st.snapshot.camera
             val sens = st.snapshot.sensitivity.rotation
+            // DPI-normalized orbit (~165° per 250dp drag at 1.0x sensitivity)
+            val radPerDp = 0.0115f * sens
             val nextCam = cam.copy(
-                theta = wrapTheta(cam.theta - deltaX * 0.0085f * sens),
-                phi = (cam.phi - deltaY * 0.0085f * sens).coerceIn(0.12f, PI.toFloat() - 0.12f)
+                theta = wrapTheta(cam.theta - dxDp * radPerDp),
+                phi = (cam.phi - dyDp * radPerDp).coerceIn(0.08f, PI.toFloat() - 0.08f)
             )
-            st.copy(snapshot = st.snapshot.copy(camera = nextCam))
+            st.copy(
+                autoRotate = false,
+                tooltip = null,
+                snapshot = st.snapshot.copy(camera = nextCam)
+            )
         }
     }
 
@@ -635,25 +644,36 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         panX: Float,
         panY: Float,
         viewportWidth: Float,
-        viewportHeight: Float
+        viewportHeight: Float,
+        density: Float = 1f
     ) {
+        val safeDensity = density.coerceAtLeast(1f)
         _uiState.update { st ->
             val cam = st.snapshot.camera
             val zoomSens = st.snapshot.sensitivity.zoom
-            val scaledZoom = (1f + (zoomFactor - 1f) * zoomSens).coerceIn(0.55f, 1.85f)
-            val nextRadius = (cam.radius / scaledZoom).coerceIn(3.5f, 28f)
+            val scaledZoom = (1f + (zoomFactor - 1f) * zoomSens).coerceIn(0.65f, 1.55f)
+            val nextRadius = (cam.radius / scaledZoom).coerceIn(3.2f, 28f)
             val proj = CameraProjection(cam.cameraPosition(), cam.target, viewportWidth, viewportHeight)
-            val panScale = nextRadius * 0.0014f * zoomSens
-            val nextTarget = cam.target - proj.right * (panX * panScale) + proj.up * (panY * panScale)
-            val nextCam = cam.copy(radius = nextRadius, target = nextTarget)
-            st.copy(snapshot = st.snapshot.copy(camera = nextCam))
+            val panScale = nextRadius * 0.0026f * zoomSens / safeDensity
+            val rawTarget = cam.target - proj.right * (panX * panScale) + proj.up * (panY * panScale)
+            val clampedTarget = Vec3(
+                x = rawTarget.x.coerceIn(-10f, 10f),
+                y = rawTarget.y.coerceIn(-4f, 12f),
+                z = rawTarget.z.coerceIn(-10f, 10f)
+            )
+            val nextCam = cam.copy(radius = nextRadius, target = clampedTarget)
+            st.copy(
+                autoRotate = false,
+                tooltip = null,
+                snapshot = st.snapshot.copy(camera = nextCam)
+            )
         }
     }
 
     fun stepZoom(zoomIn: Boolean) {
         val snap = _uiState.value.snapshot
         val factor = if (zoomIn) (1f + 0.18f * snap.sensitivity.zoom) else 1f / (1f + 0.18f * snap.sensitivity.zoom)
-        val nextRadius = (snap.camera.radius / factor).coerceIn(3.5f, 28f)
+        val nextRadius = (snap.camera.radius / factor).coerceIn(3.2f, 28f)
         val nextSnap = snap.copy(camera = snap.camera.copy(radius = nextRadius))
         _uiState.update { it.copy(snapshot = nextSnap) }
         scheduleDebouncedAutoSave(nextSnap)
@@ -672,8 +692,21 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         scheduleDebouncedAutoSave(_uiState.value.snapshot)
     }
 
+    fun setCameraPreset(preset: CameraViewPreset) {
+        val baseRadius = _uiState.value.snapshot.camera.radius.coerceIn(7f, 18f)
+        val target = Vec3(0f, 1.8f, 0f)
+        val nextCam = when (preset) {
+            CameraViewPreset.PERSPECTIVE -> CameraOrbitState.DEFAULT
+            CameraViewPreset.FRONT -> CameraOrbitState(target = target, radius = baseRadius, theta = 0f, phi = (PI / 2.0).toFloat() - 0.08f)
+            CameraViewPreset.TOP -> CameraOrbitState(target = target, radius = baseRadius, theta = 0f, phi = 0.10f)
+            CameraViewPreset.SIDE -> CameraOrbitState(target = target, radius = baseRadius, theta = (PI / 2.0).toFloat(), phi = (PI / 2.0).toFloat() - 0.08f)
+        }
+        _uiState.update { it.copy(autoRotate = false, tooltip = null) }
+        updateViewSnapshot { it.copy(camera = nextCam) }
+    }
+
     fun resetCamera() {
-        updateViewSnapshot { it.copy(camera = CameraOrbitState.DEFAULT) }
+        setCameraPreset(CameraViewPreset.PERSPECTIVE)
     }
 
     // ================= CUSTOM ELEMENTS (DRAW & COORDS) =================
