@@ -80,6 +80,14 @@ fun AiKeySetupSection(
     onSignOutGoogle: () -> Unit,
     onTestGoogleAi: () -> Unit = {},
     keyConfig: AiKeyConfig,
+    displayModels: List<AiSyncedModel> = AiModelPreset.entries.map { it.toSyncedModel() },
+    isSyncedFromAccount: Boolean = false,
+    isSyncingModels: Boolean = false,
+    modelSyncStatusMessage: String? = null,
+    modelSyncSuccess: Boolean = false,
+    onSyncModels: (overrideApiKey: String?) -> Unit = {},
+    onAddCustomModel: (String) -> Unit = {},
+    onRemoveCustomModel: (String) -> Unit = {},
     isVerifying: Boolean,
     statusMessage: String?,
     statusSuccess: Boolean,
@@ -92,7 +100,6 @@ fun AiKeySetupSection(
 ) {
     val context = LocalContext.current
     var keyDraft by remember(keyConfig.apiKey) { mutableStateOf(keyConfig.apiKey) }
-    var modelDraft by remember(keyConfig.modelId) { mutableStateOf(keyConfig.effectiveModelId) }
     var showKeyPlain by remember { mutableStateOf(false) }
     var expandManualKey by remember(googleUser != null, keyConfig.hasKey) {
         mutableStateOf(googleUser == null && keyConfig.hasKey)
@@ -170,61 +177,21 @@ fun AiKeySetupSection(
             }
         }
 
-        // 2. Shared Gemini Model Selector (applies to BOTH Google Gemini & Manual API Key)
+        // 2. Dynamic Gemini Model Selector & Account Sync (applies to BOTH Google Gemini & Manual API Key)
         HorizontalDivider(color = SlateBorder.copy(alpha = 0.45f))
 
-        Text(
-            text = "Chọn mô hình Gemini",
-            style = MaterialTheme.typography.labelMedium,
-            color = SlateTextPrimary,
-            fontWeight = FontWeight.Bold
+        AiModelPickerSection(
+            models = displayModels,
+            selectedModelId = keyConfig.effectiveModelId,
+            isSyncedFromAccount = isSyncedFromAccount,
+            isSyncingModels = isSyncingModels,
+            syncStatusMessage = modelSyncStatusMessage,
+            syncSuccess = modelSyncSuccess,
+            onSyncModels = { onSyncModels(keyDraft.trim().ifEmpty { null }) },
+            onSelectModel = onSelectModel,
+            onAddCustomModel = onAddCustomModel,
+            onRemoveCustomModel = onRemoveCustomModel
         )
-
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            AiModelPreset.entries.forEach { preset ->
-                val active = modelDraft.equals(preset.modelId, ignoreCase = true)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (active) CyanAccent.copy(alpha = 0.15f) else SlateDeepest.copy(alpha = 0.55f))
-                        .border(
-                            1.dp,
-                            if (active) CyanAccent else SlateBorder,
-                            RoundedCornerShape(12.dp)
-                        )
-                        .clickable {
-                            modelDraft = preset.modelId
-                            onSelectModel(preset.modelId)
-                        }
-                        .padding(horizontal = 12.dp, vertical = 10.dp)
-                        .testTag("ai_model_preset_${preset.modelId}"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(if (active) CyanAccent else SlateBorder)
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = preset.title,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = if (active) CyanAccent else SlateTextPrimary,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = preset.subtitle,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = SlateTextSecondary,
-                            fontSize = 11.sp
-                        )
-                    }
-                }
-            }
-        }
 
         // 3. OPTIONAL SECONDARY FALLBACK: Manual Gemini API Key
         HorizontalDivider(color = SlateBorder.copy(alpha = 0.45f))
@@ -257,9 +224,12 @@ fun AiKeySetupSection(
                 )
                 Text(
                     text = when {
-                        googleUser != null && keyConfig.hasKey -> "Đang ưu tiên Google Gemini · Key riêng đã lưu (${keyConfig.maskedKey})"
+                        googleUser != null && keyConfig.hasKey && keyConfig.providerMode == AiProviderMode.PERSONAL_API_KEY ->
+                            "Đang dùng API Key riêng (${keyConfig.maskedKey})"
+                        googleUser != null && keyConfig.hasKey ->
+                            "Đang ưu tiên Google Gemini · Key riêng đã lưu (${keyConfig.maskedKey})"
                         keyConfig.hasKey -> "Đã lưu Key (${keyConfig.maskedKey})"
-                        else -> "Không cần nhập nếu bạn đã đăng nhập Google ở trên"
+                        else -> "Dán khóa AI Studio (AIza...) để tự động đồng bộ toàn bộ mô hình trong tài khoản"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = SlateTextSecondary,
@@ -315,7 +285,7 @@ fun AiKeySetupSection(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = { onSaveAndVerify(keyDraft, modelDraft) },
+                        onClick = { onSaveAndVerify(keyDraft, keyConfig.effectiveModelId) },
                         enabled = keyDraft.trim().isNotEmpty() && !isVerifying,
                         colors = ButtonDefaults.buttonColors(containerColor = CyanAccent, contentColor = Color.Black),
                         shape = RoundedCornerShape(12.dp),
@@ -331,14 +301,14 @@ fun AiKeySetupSection(
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(Modifier.width(8.dp))
-                            Text("Đang kiểm tra...", fontWeight = FontWeight.Bold)
+                            Text("Đang đồng bộ...", fontWeight = FontWeight.Bold)
                         } else {
-                            Text("Lưu & Kiểm tra Key", fontWeight = FontWeight.Bold)
+                            Text("Lưu & Đồng bộ Key", fontWeight = FontWeight.Bold)
                         }
                     }
 
                     OutlinedButton(
-                        onClick = { onSaveOnly(keyDraft, modelDraft) },
+                        onClick = { onSaveOnly(keyDraft, keyConfig.effectiveModelId) },
                         enabled = keyDraft.trim().isNotEmpty() && !isVerifying,
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
@@ -379,26 +349,6 @@ fun AiKeySetupSection(
                         modifier = Modifier.testTag("ai_key_status_message")
                     )
                 }
-
-                OutlinedTextField(
-                    value = modelDraft,
-                    onValueChange = {
-                        modelDraft = it
-                        if (it.trim().isNotEmpty()) onSelectModel(it.trim())
-                    },
-                    label = { Text("Mã mô hình (tùy chỉnh nếu cần)") },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = CyanAccent,
-                        unfocusedBorderColor = SlateBorder,
-                        focusedTextColor = SlateTextPrimary,
-                        unfocusedTextColor = SlateTextPrimary
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("ai_custom_model_input")
-                )
 
                 Row(
                     modifier = Modifier

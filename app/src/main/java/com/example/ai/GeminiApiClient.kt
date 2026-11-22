@@ -5,6 +5,9 @@ import android.util.Base64
 import com.example.docs.PDF_TOTAL_PAGES
 import com.example.docs.PdfCurriculumRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -12,6 +15,7 @@ import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
+import java.net.URLEncoder
 
 /**
  * Lightweight, zero-bloat Gemini Developer API client using end-user provided API key
@@ -24,21 +28,186 @@ import java.net.URL
 object GeminiApiClient {
 
     private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+    private const val VERTEX_V1_BASE = "https://aiplatform.googleapis.com/v1/publishers/google"
+    private const val VERTEX_V1BETA1_BASE = "https://aiplatform.googleapis.com/v1beta1/publishers/google"
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val READ_TIMEOUT_MS = 85_000
 
-    suspend fun verifyApiKey(apiKey: String): Result<String> = withContext(Dispatchers.IO) {
+    /**
+     * Vertex AI Express Mode keys start with `AQ.` and authenticate against `aiplatform.googleapis.com`,
+     * whereas Google AI Studio / Gemini Developer API keys typically start with `AIza` and call
+     * `generativelanguage.googleapis.com`.
+     */
+    fun isVertexExpressKey(apiKey: String): Boolean = apiKey.trim().startsWith("AQ.")
+
+    suspend fun verifyApiKey(
+        apiKey: String,
+        preferredModelId: String = AiModelPreset.GEMINI_3_8_FLASH.modelId
+    ): Result<AiModelSyncResult> = syncAccountModels(apiKey, preferredModelId)
+
+    /**
+     * Fetches the live catalog of Gemini models enabled in the user's account using their API key:
+     * - Standard Gemini Developer API key (`AIza...`): paginates `GET /v1beta/models?pageSize=100`
+     *   to retrieve EVERY `generateContent`-capable model enabled on their account.
+     * - Vertex AI Express Mode key (`AQ....`): tries Vertex AI publisher model listing (`v1beta1` & `v1`);
+     *   if Express key restricts catalog listing, probes live availability via `:countTokens` so the user
+     *   gets verified models plus clear guidance to add any model ID or use an AI Studio key.
+     */
+    suspend fun syncAccountModels(
+        apiKey: String,
+        preferredModelId: String = AiModelPreset.GEMINI_3_8_FLASH.modelId,
+        extraModelIds: List<String> = emptyList()
+    ): Result<AiModelSyncResult> = withContext(Dispatchers.IO) {
         val cleanKey = apiKey.trim()
         if (cleanKey.isEmpty()) {
-            return@withContext Result.failure(IllegalArgumentException("Vui lòng nhập API Key trước khi kiểm tra."))
+            return@withContext Result.failure(IllegalArgumentException("Vui lòng nhập API Key trước khi đồng bộ mô hình."))
         }
-        runCatching {
-            val url = URL("$BASE_URL/models?pageSize=5")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
+
+        // 1. Try Gemini Developer API live model listing first (returns full account catalog for AIza... keys)
+        val devListResult = fetchAllPaginatedModels(
+            endpointBase = "$BASE_URL/models",
+            apiKey = cleanKey,
+            source = "api"
+        )
+        val devModels = devListResult.getOrNull().orEmpty()
+        if (devModels.isNotEmpty()) {
+            val sorted = AiResponseParser.sortSyncedModels(devModels)
+            return@withContext Result.success(
+                AiModelSyncResult(
+                    models = sorted,
+                    sourceLabel = "Google AI Studio API",
+                    message = "Đã đồng bộ thành công ${sorted.size} mô hình khả dụng từ tài khoản của bạn!"
+                )
+            )
+        }
+
+        // 2. Vertex AI Express Mode keys (`AQ....`)
+        if (isVertexExpressKey(cleanKey)) {
+            val vertexBetaList = fetchAllPaginatedModels(
+                endpointBase = "$VERTEX_V1BETA1_BASE/models",
+                apiKey = cleanKey,
+                source = "vertex"
+            ).getOrNull().orEmpty()
+            val vertexModels = if (vertexBetaList.isNotEmpty()) {
+                vertexBetaList
+            } else {
+                fetchAllPaginatedModels(
+                    endpointBase = "$VERTEX_V1_BASE/models",
+                    apiKey = cleanKey,
+                    source = "vertex"
+                ).getOrNull().orEmpty()
+            }
+            if (vertexModels.isNotEmpty()) {
+                val sorted = AiResponseParser.sortSyncedModels(vertexModels)
+                return@withContext Result.success(
+                    AiModelSyncResult(
+                        models = sorted,
+                        sourceLabel = "Vertex AI Express",
+                        message = "Đã đồng bộ thành công ${sorted.size} mô hình từ Vertex AI Express!"
+                    )
+                )
+            }
+
+            // Vertex AI Express keys often allow `:generateContent` / `:countTokens` while blocking `GET .../models`.
+            // Probe live availability on candidate models so the key is verified end-to-end.
+            val candidates = LinkedHashMap<String, AiSyncedModel>()
+            AiModelPreset.entries.forEach { preset ->
+                candidates[preset.modelId.lowercase()] = preset.toSyncedModel(source = "vertex")
+            }
+            val cleanPreferred = preferredModelId.trim().removePrefix("models/")
+            if (cleanPreferred.isNotEmpty()) {
+                candidates.putIfAbsent(
+                    cleanPreferred.lowercase(),
+                    AiSyncedModel(
+                        modelId = cleanPreferred,
+                        displayName = AiResponseParser.formatModelDisplayName(cleanPreferred),
+                        description = "Mô hình đã xác thực trên Vertex AI Express",
+                        source = "vertex"
+                    )
+                )
+            }
+            extraModelIds.forEach { raw ->
+                val cid = raw.trim().removePrefix("models/")
+                if (cid.isNotEmpty()) {
+                    candidates.putIfAbsent(
+                        cid.lowercase(),
+                        AiSyncedModel(
+                            modelId = cid,
+                            displayName = AiResponseParser.formatModelDisplayName(cid),
+                            description = "Mô hình tùy chỉnh đã xác thực",
+                            source = "custom"
+                        )
+                    )
+                }
+            }
+
+            var lastVertexError: String? = null
+            val verified = coroutineScope {
+                candidates.values.map { candidate ->
+                    async(Dispatchers.IO) {
+                        val check = probeVertexExpressModel(cleanKey, candidate.modelId)
+                        if (check.isSuccess) {
+                            candidate
+                        } else {
+                            if (lastVertexError == null) lastVertexError = check.exceptionOrNull()?.localizedMessage
+                            null
+                        }
+                    }
+                }.awaitAll().filterNotNull()
+            }
+
+            if (verified.isNotEmpty()) {
+                val sorted = AiResponseParser.sortSyncedModels(verified)
+                return@withContext Result.success(
+                    AiModelSyncResult(
+                        models = sorted,
+                        sourceLabel = "Vertex AI Express",
+                        message = "Đã xác thực khóa Vertex AI Express (${sorted.size} mô hình hoạt động). Lưu ý: Google không mở API liệt kê danh sách cho khóa dạng 'AQ.' — hãy thêm mã mô hình bất kỳ ở ô bên dưới hoặc dùng khóa AI Studio ('AIza...') để tự động tải toàn bộ danh sách."
+                    )
+                )
+            }
+
+            return@withContext Result.failure(
+                IllegalStateException(
+                    lastVertexError
+                        ?: devListResult.exceptionOrNull()?.localizedMessage
+                        ?: "Không thể xác thực khóa Vertex AI Express (AQ.). Hãy kiểm tra lại khóa hoặc thử khóa AI Studio (AIza...)."
+                )
+            )
+        }
+
+        // 3. Standard key failed to list models -> return the real API error
+        Result.failure(
+            devListResult.exceptionOrNull()
+                ?: IllegalStateException("Tài khoản API Key không trả về mô hình nào hỗ trợ tạo nội dung.")
+        )
+    }
+
+    private fun fetchAllPaginatedModels(
+        endpointBase: String,
+        apiKey: String,
+        source: String,
+        maxPages: Int = 6
+    ): Result<List<AiSyncedModel>> = runCatching {
+        val collected = mutableListOf<AiSyncedModel>()
+        var pageToken: String? = null
+        var pageCount = 0
+
+        while (pageCount < maxPages) {
+            pageCount++
+            val urlString = buildString {
+                append(endpointBase)
+                append("?pageSize=100")
+                if (!pageToken.isNullOrBlank()) {
+                    append("&pageToken=")
+                    append(URLEncoder.encode(pageToken, "UTF-8"))
+                }
+            }
+            val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = CONNECT_TIMEOUT_MS
                 readTimeout = 20_000
-                setRequestProperty("x-goog-api-key", cleanKey)
+                setRequestProperty("x-goog-api-key", apiKey)
                 setRequestProperty("Accept", "application/json")
             }
             try {
@@ -47,13 +216,59 @@ object GeminiApiClient {
                 if (code !in 200..299) {
                     throw IllegalStateException(formatHttpError(code, body))
                 }
-                val json = JSONObject(body)
-                val count = json.optJSONArray("models")?.length() ?: 0
-                "Kết nối API Key thành công! Đã xác thực ($count+ mô hình khả dụng)."
+                val (pageModels, nextToken) = AiResponseParser.parseGeminiModelsListJson(body, source = source)
+                collected.addAll(pageModels)
+                if (nextToken.isNullOrBlank()) break
+                pageToken = nextToken
             } finally {
                 conn.disconnect()
             }
         }
+        collected
+    }
+
+    private fun probeVertexExpressModel(apiKey: String, modelId: String): Result<Unit> = runCatching {
+        val safeModel = modelId.trim().removePrefix("publishers/google/models/").removePrefix("models/")
+        val payload = JSONObject().put(
+            "contents",
+            JSONArray().put(
+                JSONObject().apply {
+                    put("role", "user")
+                    put("parts", JSONArray().put(JSONObject().put("text", "ping")))
+                }
+            )
+        ).toString().toByteArray(Charsets.UTF_8)
+
+        val endpoints = listOf(
+            "$VERTEX_V1_BASE/models/$safeModel:countTokens",
+            "$VERTEX_V1BETA1_BASE/models/$safeModel:countTokens"
+        )
+        var lastCode = 0
+        var lastBody = ""
+        for (endpoint in endpoints) {
+            val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 10_000
+                readTimeout = 12_000
+                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                setRequestProperty("x-goog-api-key", apiKey)
+            }
+            try {
+                conn.outputStream.use { out ->
+                    out.write(payload)
+                    out.flush()
+                }
+                lastCode = conn.responseCode
+                lastBody = readStream(if (lastCode in 200..299) conn.inputStream else conn.errorStream)
+                if (lastCode in 200..299 || lastCode == 429) {
+                    return@runCatching
+                }
+            } finally {
+                conn.disconnect()
+            }
+        }
+        throw IllegalStateException(formatHttpError(lastCode, lastBody))
     }
 
     suspend fun askDocumentAssistant(
@@ -170,47 +385,69 @@ object GeminiApiClient {
     }
 
     private fun executeGenerateContent(apiKey: String, modelId: String, payload: JSONObject): String {
-        val safeModel = modelId.trim().removePrefix("models/").ifEmpty { AiModelPreset.GEMINI_3_8_FLASH.modelId }
-        val url = URL("$BASE_URL/models/$safeModel:generateContent")
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            doOutput = true
-            connectTimeout = CONNECT_TIMEOUT_MS
-            readTimeout = READ_TIMEOUT_MS
-            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-            setRequestProperty("x-goog-api-key", apiKey)
+        val safeModel = modelId.trim()
+            .removePrefix("publishers/google/models/")
+            .removePrefix("models/")
+            .ifEmpty { AiModelPreset.GEMINI_3_8_FLASH.modelId }
+        val endpoints = if (isVertexExpressKey(apiKey)) {
+            listOf(
+                "$VERTEX_V1_BASE/models/$safeModel:generateContent",
+                "$VERTEX_V1BETA1_BASE/models/$safeModel:generateContent"
+            )
+        } else {
+            listOf("$BASE_URL/models/$safeModel:generateContent")
         }
-        try {
-            conn.outputStream.use { out ->
-                out.write(payload.toString().toByteArray(Charsets.UTF_8))
-                out.flush()
+
+        val payloadBytes = payload.toString().toByteArray(Charsets.UTF_8)
+        var lastError: IllegalStateException? = null
+
+        for ((idx, endpoint) in endpoints.withIndex()) {
+            val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = CONNECT_TIMEOUT_MS
+                readTimeout = READ_TIMEOUT_MS
+                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                setRequestProperty("x-goog-api-key", apiKey)
             }
-            val code = conn.responseCode
-            val body = readStream(if (code in 200..299) conn.inputStream else conn.errorStream)
-            if (code !in 200..299) {
-                throw IllegalStateException(formatHttpError(code, body))
-            }
-            val root = JSONObject(body)
-            val candidates = root.optJSONArray("candidates")
-            val first = candidates?.optJSONObject(0)
-            val parts = first?.optJSONObject("content")?.optJSONArray("parts")
-            val textBuilder = StringBuilder()
-            if (parts != null) {
-                for (i in 0 until parts.length()) {
-                    val t = parts.optJSONObject(i)?.optString("text").orEmpty()
-                    if (t.isNotEmpty()) textBuilder.append(t)
+            try {
+                conn.outputStream.use { out ->
+                    out.write(payloadBytes)
+                    out.flush()
                 }
+                val code = conn.responseCode
+                val body = readStream(if (code in 200..299) conn.inputStream else conn.errorStream)
+                if (code !in 200..299) {
+                    val err = IllegalStateException(formatHttpError(code, body))
+                    if (idx < endpoints.lastIndex && (code == 404 || code == 400)) {
+                        lastError = err
+                        continue
+                    }
+                    throw err
+                }
+                val root = JSONObject(body)
+                val candidates = root.optJSONArray("candidates")
+                val first = candidates?.optJSONObject(0)
+                val parts = first?.optJSONObject("content")?.optJSONArray("parts")
+                val textBuilder = StringBuilder()
+                if (parts != null) {
+                    for (i in 0 until parts.length()) {
+                        val t = parts.optJSONObject(i)?.optString("text").orEmpty()
+                        if (t.isNotEmpty()) textBuilder.append(t)
+                    }
+                }
+                val result = textBuilder.toString().trim()
+                if (result.isEmpty()) {
+                    throw IllegalStateException("AI trả về nội dung trống. Vui lòng thử lại.")
+                }
+                return result
+            } catch (e: SocketTimeoutException) {
+                throw IllegalStateException("Kết nối tới AI bị quá thời gian chờ. Hãy kiểm tra mạng và thử lại.")
+            } finally {
+                conn.disconnect()
             }
-            val result = textBuilder.toString().trim()
-            if (result.isEmpty()) {
-                throw IllegalStateException("AI trả về nội dung trống. Vui lòng thử lại.")
-            }
-            return result
-        } catch (e: SocketTimeoutException) {
-            throw IllegalStateException("Kết nối tới AI bị quá thời gian chờ. Hãy kiểm tra mạng và thử lại.")
-        } finally {
-            conn.disconnect()
         }
+        throw lastError ?: IllegalStateException("Không thể kết nối tới mô hình $safeModel.")
     }
 
     private fun bitmapToInlineDataPart(source: Bitmap, maxDim: Int): JSONObject {

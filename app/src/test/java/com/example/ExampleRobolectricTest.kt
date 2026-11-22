@@ -1131,6 +1131,90 @@ class ExampleRobolectricTest {
         assertEquals("Google Gemini", stateUsingGoogle.activeProviderShortLabel)
         prefs.clearKey()
     }
+
+    @Test
+    fun `account model sync parser sorting vertex key detection and persistence work accurately`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+
+        // 1. Key type detection separates Vertex AI Express keys (AQ.) from standard AI Studio keys (AIza...)
+        assertTrue(GeminiApiClient.isVertexExpressKey("AQ.Ab8RN6SampleVertexExpressKey"))
+        assertFalse(GeminiApiClient.isVertexExpressKey("AIzaSySampleAiStudioKey123456"))
+
+        // 2. Live models list JSON parser filters generateContent models, strips prefixes, extracts nextPageToken, and sorts newest first
+        val sampleCatalogJson = """
+            {
+              "models": [
+                {
+                  "name": "models/text-embedding-004",
+                  "displayName": "Text Embedding 004",
+                  "supportedGenerationMethods": ["embedContent"]
+                },
+                {
+                  "name": "models/gemini-3.5-flash-lite",
+                  "displayName": "Gemini 3.5 Flash-Lite",
+                  "description": "Fast lightweight model",
+                  "inputTokenLimit": 1048576,
+                  "outputTokenLimit": 65536,
+                  "supportedGenerationMethods": ["generateContent", "countTokens"]
+                },
+                {
+                  "name": "models/gemini-4-neon",
+                  "displayName": "Gemini 4 Neon",
+                  "description": "Next-gen reasoning",
+                  "inputTokenLimit": 2097152,
+                  "outputTokenLimit": 65536,
+                  "supportedGenerationMethods": ["generateContent"]
+                },
+                {
+                  "name": "models/gemini-3.8-flash",
+                  "displayName": "Gemini 3.8 Flash",
+                  "description": "Balanced speed & accuracy",
+                  "inputTokenLimit": 1048576,
+                  "outputTokenLimit": 65536,
+                  "supportedGenerationMethods": ["generateContent"]
+                },
+                {
+                  "name": "publishers/google/models/gemma-3-27b-it",
+                  "supportedGenerationMethods": ["generateContent"],
+                  "inputTokenLimit": 128000
+                }
+              ],
+              "nextPageToken": "page_2_token"
+            }
+        """.trimIndent()
+
+        val (parsed, nextPage) = AiResponseParser.parseGeminiModelsListJson(sampleCatalogJson, source = "api")
+        assertEquals("page_2_token", nextPage)
+        assertEquals("Embedding-only model must be excluded", 4, parsed.size)
+        assertTrue(parsed.none { it.modelId.contains("embedding") })
+
+        val sorted = AiResponseParser.sortSyncedModels(parsed)
+        assertEquals("gemini-4-neon", sorted[0].modelId)
+        assertEquals("2M token", sorted[0].formattedContextWindow)
+        assertEquals("gemini-3.8-flash", sorted[1].modelId)
+        assertEquals("1M token", sorted[1].formattedContextWindow)
+        assertEquals("gemini-3.5-flash-lite", sorted[2].modelId)
+        assertEquals("gemma-3-27b-it", sorted[3].modelId)
+        assertEquals("Gemma 3 27b IT", sorted[3].displayName)
+        assertEquals("128K token", sorted[3].formattedContextWindow)
+
+        // 3. Persistence round-trip for synced models + custom model add/remove
+        val prefs = AiKeyPreferences(context)
+        prefs.saveSyncedModels(sorted, updatedAtMillis = 123456789L)
+        val reloaded = prefs.loadSyncedModels()
+        assertEquals(4, reloaded.size)
+        assertEquals("gemini-4-neon", reloaded.first().modelId)
+        assertEquals(123456789L, prefs.loadSyncedModelsUpdatedAt())
+
+        val afterAdd = prefs.addCustomModel("models/gemini-4-custom-preview")
+        assertEquals("gemini-4-custom-preview", afterAdd.first().modelId)
+        assertEquals("custom", afterAdd.first().source)
+        assertEquals(5, prefs.loadSyncedModels().size)
+
+        val afterRemove = prefs.removeCustomModel("gemini-4-custom-preview")
+        assertEquals(4, afterRemove.size)
+        assertTrue(afterRemove.none { it.modelId == "gemini-4-custom-preview" })
+    }
 }
 
 

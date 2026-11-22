@@ -13,6 +13,9 @@ import com.google.firebase.appcheck.FirebaseAppCheck
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -157,6 +160,108 @@ object FirebaseAiClient {
         } catch (e: Throwable) {
             Log.e(FIREBASE_AI_TAG, "Firebase AI ping failed for $safeModel", e)
             Result.failure(IllegalStateException(formatFirebaseAiError(e, safeModel), e))
+        }
+    }
+
+    /**
+     * Probes live availability of models on Firebase AI Logic (`Firebase.ai`) using lightweight
+     * `countTokens("ping")` calls in parallel. Note: Firebase AI Logic SDK does not expose a
+     * server-side listModels() endpoint; full catalog discovery comes from Gemini Developer API (`AIza...`).
+     */
+    suspend fun probeAvailableModels(
+        extraModelIds: List<String> = emptyList()
+    ): Result<AiModelSyncResult> = withContext(Dispatchers.IO) {
+        try {
+            if (FirebaseApp.getApps(FirebaseApp.getInstance().applicationContext).isEmpty()) {
+                return@withContext Result.failure(
+                    IllegalStateException("Firebase chưa được khởi tạo trong bản APK này.")
+                )
+            }
+        } catch (e: Throwable) {
+            return@withContext Result.failure(
+                IllegalStateException("Bản APK chưa có cấu hình Firebase hợp lệ (${e.localizedMessage ?: e.javaClass.simpleName}).")
+            )
+        }
+
+        val appCheckProvider = activeAppCheckProviderLabel()
+        try {
+            withTimeout(15_000L) {
+                FirebaseAppCheck.getInstance().getAppCheckToken(false).await()
+            }
+        } catch (e: TimeoutCancellationException) {
+            return@withContext Result.failure(
+                IllegalStateException("Xác thực App Check ($appCheckProvider) quá thời gian (15 giây). Hãy kiểm tra mạng và thử lại.")
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(FIREBASE_AI_TAG, "App Check token retrieval failed during model probe", e)
+            return@withContext Result.failure(
+                IllegalStateException("Lỗi xác thực App Check ($appCheckProvider): ${e.localizedMessage ?: e.javaClass.simpleName}")
+            )
+        }
+
+        val candidates = LinkedHashMap<String, AiSyncedModel>()
+        AiModelPreset.entries.forEach { preset ->
+            candidates[preset.modelId.lowercase()] = preset.toSyncedModel(source = "firebase")
+        }
+        extraModelIds.forEach { raw ->
+            val cid = sanitizeModelId(raw)
+            if (cid.isNotEmpty()) {
+                candidates.putIfAbsent(
+                    cid.lowercase(),
+                    AiSyncedModel(
+                        modelId = cid,
+                        displayName = AiResponseParser.formatModelDisplayName(cid),
+                        description = "Mô hình tùy chỉnh đã xác thực",
+                        source = "custom"
+                    )
+                )
+            }
+        }
+
+        var firstError: Throwable? = null
+        val available = coroutineScope {
+            candidates.values.map { candidate ->
+                async(Dispatchers.IO) {
+                    try {
+                        val model = Firebase.ai.generativeModel(modelName = candidate.modelId)
+                        withTimeout(12_000L) {
+                            model.countTokens("ping")
+                        }
+                        candidate
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        val msg = e.localizedMessage.orEmpty()
+                        if (msg.contains("429") || msg.contains("quota", ignoreCase = true)) {
+                            candidate
+                        } else {
+                            if (firstError == null) firstError = e
+                            null
+                        }
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
+
+        if (available.isNotEmpty()) {
+            val sorted = AiResponseParser.sortSyncedModels(available)
+            Result.success(
+                AiModelSyncResult(
+                    models = sorted,
+                    sourceLabel = "Google Gemini (Firebase)",
+                    message = "Đã kiểm tra ${sorted.size} mô hình hoạt động trên Google Gemini. Để tự động tải toàn bộ các mô hình khác trong tài khoản Google AI Studio của bạn, hãy dán API Key (dạng 'AIza...') bên dưới rồi bấm Đồng bộ mô hình (hoặc thêm trực tiếp mã mô hình tùy chỉnh)."
+                )
+            )
+        } else {
+            val err = firstError
+            Result.failure(
+                IllegalStateException(
+                    if (err != null) formatFirebaseAiError(err, AiModelPreset.GEMINI_3_8_FLASH.modelId)
+                    else "Không thể kiểm tra danh sách mô hình trên Google Gemini. Hãy kiểm tra kết nối mạng."
+                )
+            )
         }
     }
 

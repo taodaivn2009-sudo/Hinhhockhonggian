@@ -33,7 +33,36 @@ enum class AiModelPreset(
     companion object {
         fun fromId(id: String?): AiModelPreset? = entries.firstOrNull { it.modelId.equals(id?.trim(), ignoreCase = true) }
     }
+
+    fun toSyncedModel(source: String = "preset"): AiSyncedModel = AiSyncedModel(
+        modelId = modelId,
+        displayName = title,
+        description = subtitle,
+        source = source
+    )
 }
+
+data class AiSyncedModel(
+    val modelId: String,
+    val displayName: String,
+    val description: String = "",
+    val inputTokenLimit: Int = 0,
+    val outputTokenLimit: Int = 0,
+    val source: String = "preset" // "api" | "vertex" | "firebase" | "custom" | "preset"
+) {
+    val formattedContextWindow: String
+        get() = when {
+            inputTokenLimit >= 1_000_000 -> "${inputTokenLimit / 1_000_000}M token"
+            inputTokenLimit >= 1_000 -> "${inputTokenLimit / 1_000}K token"
+            else -> ""
+        }
+}
+
+data class AiModelSyncResult(
+    val models: List<AiSyncedModel>,
+    val sourceLabel: String,
+    val message: String
+)
 
 enum class AiSubTab(val key: String, val label: String) {
     DOCS_QA("docs_qa", "Hỏi tài liệu"),
@@ -96,10 +125,88 @@ class AiKeyPreferences(context: Context) {
             .apply()
     }
 
+    fun loadSyncedModels(): List<AiSyncedModel> {
+        val raw = prefs.getString(KEY_SYNCED_MODELS, null).orEmpty()
+        if (raw.isBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optString("modelId").trim()
+                    if (id.isEmpty()) continue
+                    add(
+                        AiSyncedModel(
+                            modelId = id,
+                            displayName = o.optString("displayName").trim().ifEmpty {
+                                AiResponseParser.formatModelDisplayName(id)
+                            },
+                            description = o.optString("description").trim(),
+                            inputTokenLimit = o.optInt("inputTokenLimit", 0),
+                            outputTokenLimit = o.optInt("outputTokenLimit", 0),
+                            source = o.optString("source", "api").trim().ifEmpty { "api" }
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun loadSyncedModelsUpdatedAt(): Long = prefs.getLong(KEY_SYNCED_MODELS_AT, 0L)
+
+    fun saveSyncedModels(models: List<AiSyncedModel>, updatedAtMillis: Long = System.currentTimeMillis()) {
+        val arr = JSONArray()
+        models.forEach { m ->
+            arr.put(
+                JSONObject().apply {
+                    put("modelId", m.modelId)
+                    put("displayName", m.displayName)
+                    put("description", m.description)
+                    put("inputTokenLimit", m.inputTokenLimit)
+                    put("outputTokenLimit", m.outputTokenLimit)
+                    put("source", m.source)
+                }
+            )
+        }
+        prefs.edit()
+            .putString(KEY_SYNCED_MODELS, arr.toString())
+            .putLong(KEY_SYNCED_MODELS_AT, updatedAtMillis)
+            .apply()
+    }
+
+    fun addCustomModel(rawModelId: String): List<AiSyncedModel> {
+        val cleanId = rawModelId.trim()
+            .removePrefix("publishers/google/models/")
+            .removePrefix("models/")
+            .trim()
+        if (cleanId.isEmpty()) return loadSyncedModels()
+        val existing = loadSyncedModels().ifEmpty { AiModelPreset.entries.map { it.toSyncedModel() } }
+        val withoutDup = existing.filterNot { it.modelId.equals(cleanId, ignoreCase = true) }
+        val customEntry = AiSyncedModel(
+            modelId = cleanId,
+            displayName = AiModelPreset.fromId(cleanId)?.title ?: AiResponseParser.formatModelDisplayName(cleanId),
+            description = AiModelPreset.fromId(cleanId)?.subtitle ?: "Mô hình tùy chỉnh do bạn thêm",
+            source = "custom"
+        )
+        val updated = listOf(customEntry) + withoutDup
+        saveSyncedModels(updated)
+        return updated
+    }
+
+    fun removeCustomModel(modelId: String): List<AiSyncedModel> {
+        val updated = loadSyncedModels().filterNot {
+            it.source == "custom" && it.modelId.equals(modelId.trim(), ignoreCase = true)
+        }
+        saveSyncedModels(updated)
+        return updated
+    }
+
     companion object {
         private const val KEY_API_KEY = "gemini_user_api_key"
         private const val KEY_MODEL_ID = "gemini_model_id"
         private const val KEY_PROVIDER_MODE = "gemini_provider_mode"
+        private const val KEY_SYNCED_MODELS = "gemini_synced_models_v1"
+        private const val KEY_SYNCED_MODELS_AT = "gemini_synced_models_updated_at"
     }
 }
 
@@ -231,6 +338,134 @@ object AiResponseParser {
             runCatching { return JSONObject(unwrapped.substring(start, end + 1)) }
         }
         return null
+    }
+
+    fun formatModelDisplayName(modelId: String): String {
+        val clean = modelId.trim()
+            .removePrefix("publishers/google/models/")
+            .removePrefix("models/")
+        if (clean.isEmpty()) return modelId
+        return clean.split('-', '_')
+            .filter { it.isNotBlank() }
+            .joinToString(" ") { token ->
+                when (token.lowercase()) {
+                    "exp" -> "Exp"
+                    "it" -> "IT"
+                    "tts" -> "TTS"
+                    "ocr" -> "OCR"
+                    else -> token.replaceFirstChar { ch ->
+                        if (ch.isLowerCase()) ch.titlecase() else ch.toString()
+                    }
+                }
+            }
+    }
+
+    /**
+     * Parses live model catalog JSON from either:
+     * - Gemini Developer API (`GET /v1beta/models`) -> `models[]`
+     * - Vertex AI Publisher Models (`GET /v1beta1/publishers/google/models`) -> `publisherModels[]` / `models[]`
+     * Filters to text/multimodal generation models (`generateContent`) and excludes embedding/image-only models.
+     */
+    fun parseGeminiModelsListJson(
+        jsonBody: String,
+        source: String = "api"
+    ): Pair<List<AiSyncedModel>, String?> {
+        val root = runCatching { JSONObject(jsonBody) }.getOrNull() ?: return emptyList<AiSyncedModel>() to null
+        val arr = root.optJSONArray("models")
+            ?: root.optJSONArray("publisherModels")
+            ?: return emptyList<AiSyncedModel>() to null
+        val nextPageToken = root.optString("nextPageToken", "").trim().ifEmpty { null }
+
+        val parsed = buildList {
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val rawName = item.optString("name", "").trim()
+                val cleanId = rawName
+                    .removePrefix("publishers/google/models/")
+                    .removePrefix("models/")
+                    .trim()
+                if (cleanId.isEmpty()) continue
+
+                val methodsArr = item.optJSONArray("supportedGenerationMethods")
+                if (methodsArr != null) {
+                    var supportsGenerateContent = false
+                    for (j in 0 until methodsArr.length()) {
+                        if (methodsArr.optString(j).equals("generateContent", ignoreCase = true)) {
+                            supportsGenerateContent = true
+                            break
+                        }
+                    }
+                    if (!supportsGenerateContent) continue
+                } else {
+                    val lower = cleanId.lowercase()
+                    if (lower.contains("embedding") || lower.startsWith("imagen") || lower.startsWith("veo") || lower.startsWith("aqa")) {
+                        continue
+                    }
+                }
+
+                // Exclude pure embedding/aqa/tts/robotics models even if generateContent appears in metadata
+                val lowerId = cleanId.lowercase()
+                if (lowerId.contains("embedding") || lowerId == "aqa") continue
+
+                val displayName = item.optString("displayName", "").trim()
+                    .ifEmpty { AiModelPreset.fromId(cleanId)?.title ?: formatModelDisplayName(cleanId) }
+                val description = item.optString("description", "").trim()
+                    .ifEmpty { AiModelPreset.fromId(cleanId)?.subtitle.orEmpty() }
+                val inputLimit = item.optInt("inputTokenLimit", 0)
+                val outputLimit = item.optInt("outputTokenLimit", 0)
+
+                add(
+                    AiSyncedModel(
+                        modelId = cleanId,
+                        displayName = displayName,
+                        description = description,
+                        inputTokenLimit = inputLimit,
+                        outputTokenLimit = outputLimit,
+                        source = source
+                    )
+                )
+            }
+        }
+        return parsed to nextPageToken
+    }
+
+    /**
+     * Deduplicates and sorts synced models so the newest, most capable Gemini models appear first,
+     * followed by Flash/Pro/Lite variants and other families (e.g. Gemma).
+     */
+    fun sortSyncedModels(models: List<AiSyncedModel>): List<AiSyncedModel> {
+        val dedup = LinkedHashMap<String, AiSyncedModel>()
+        for (m in models) {
+            val key = m.modelId.trim().lowercase()
+            if (key.isEmpty()) continue
+            val existing = dedup[key]
+            if (existing == null || (existing.source == "preset" && m.source != "preset")) {
+                dedup[key] = m
+            }
+        }
+        val versionRegex = Regex("""(\d+)(?:\.(\d+))?""")
+        return dedup.values.sortedWith(
+            compareByDescending<AiSyncedModel> { it.source == "custom" }
+                .thenByDescending { it.modelId.lowercase().startsWith("gemini") }
+                .thenByDescending { m ->
+                    val match = versionRegex.find(m.modelId)
+                    val major = match?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                    val minor = match?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 0
+                    major * 100 + minor
+                }
+                .thenByDescending { m ->
+                    val low = m.modelId.lowercase()
+                    when {
+                        low.contains("latest") -> 1
+                        low.contains("exp") || low.contains("preview") -> 2
+                        low.contains("lite") -> 3
+                        low.contains("flash") -> 5
+                        low.contains("pro") || low.contains("argon") -> 4
+                        else -> 2
+                    }
+                }
+                .thenBy { it.modelId.lowercase() }
+        )
     }
 
     /**
