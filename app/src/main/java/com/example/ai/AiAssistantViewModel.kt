@@ -501,7 +501,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         if (candidateKey.isEmpty() && !state.isSignedInWithGoogle) {
             _uiState.update {
                 it.copy(
-                    modelSyncStatusMessage = "Hãy đăng nhập Google hoặc nhập API Key (AIza...) rồi bấm Đồng bộ mô hình.",
+                    modelSyncStatusMessage = "Hãy đăng nhập Google hoặc nhập API Key (AIza... hoặc AQ....) rồi bấm Đồng bộ mô hình.",
                     modelSyncSuccess = false
                 )
             }

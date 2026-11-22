@@ -251,7 +251,7 @@ object FirebaseAiClient {
                 AiModelSyncResult(
                     models = sorted,
                     sourceLabel = "Google Gemini (Firebase)",
-                    message = "Đã kiểm tra ${sorted.size} mô hình hoạt động trên Google Gemini. Để tự động tải toàn bộ các mô hình khác trong tài khoản Google AI Studio của bạn, hãy dán API Key (dạng 'AIza...') bên dưới rồi bấm Đồng bộ mô hình (hoặc thêm trực tiếp mã mô hình tùy chỉnh)."
+                    message = "Đã kiểm tra ${sorted.size} mô hình hoạt động trên Google Gemini. Để tự động tải toàn bộ các mô hình khác trong tài khoản Google AI Studio của bạn, hãy dán API Key (dạng 'AIza...' hoặc 'AQ....') bên dưới rồi bấm Đồng bộ mô hình (hoặc thêm trực tiếp mã mô hình tùy chỉnh)."
                 )
             )
         } else {

@@ -17,6 +17,7 @@ import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
 import java.net.UnknownHostException
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Lightweight, zero-bloat Gemini Developer API client using end-user provided API key
@@ -35,12 +36,21 @@ object GeminiApiClient {
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val READ_TIMEOUT_MS = 85_000
 
+    private enum class ApiBackend { GEMINI_DEV, VERTEX_EXPRESS }
+
+    private val preferredBackendByKey = ConcurrentHashMap<String, ApiBackend>()
+
     /**
-     * Vertex AI Express Mode keys start with `AQ.` and authenticate against `aiplatform.googleapis.com`,
-     * whereas Google AI Studio / Gemini Developer API keys typically start with `AIza` and call
-     * `generativelanguage.googleapis.com`.
+     * Newer Google AI Studio authorization keys AND Vertex AI Express Mode keys both start with `AQ.`.
+     * We always try Gemini Developer API (`generativelanguage.googleapis.com`) FIRST for every key
+     * (including `AQ.`), and only fall back to Vertex AI Express (`aiplatform.googleapis.com`) if an `AQ.`
+     * key is rejected with HTTP 401/403 on `generativelanguage.googleapis.com`.
      */
     fun isVertexExpressKey(apiKey: String): Boolean = AiResponseParser.sanitizeApiKey(apiKey).startsWith("AQ.")
+
+    internal fun clearBackendCacheForTest() {
+        preferredBackendByKey.clear()
+    }
 
     suspend fun verifyApiKey(
         apiKey: String,
@@ -49,11 +59,10 @@ object GeminiApiClient {
 
     /**
      * Fetches the live catalog of Gemini models enabled in the user's account using their API key:
-     * - Standard Gemini Developer API key (`AIza...`): paginates `GET /v1beta/models` (with `/v1/models` fallback)
-     *   to retrieve EVERY `generateContent`-capable model enabled on their account.
-     * - Vertex AI Express Mode key (`AQ....`): tries Vertex AI publisher model listing (`v1` & `v1beta1`,
-     *   both with and without `pageSize`); if listing is restricted on the Express key, probes live availability
-     *   via `:countTokens`.
+     * 1. Always tries Gemini Developer API (`GET /v1beta/models`, then `/v1/models`) FIRST — works for both
+     *    legacy `AIza...` keys and modern Google AI Studio `AQ.` authorization keys.
+     * 2. Only if Gemini Developer API fails and the key starts with `AQ.`, falls back to Vertex AI Express
+     *    (`aiplatform.googleapis.com`) model listing and `:countTokens` live probing.
      */
     suspend fun syncAccountModels(
         apiKey: String,
@@ -65,24 +74,21 @@ object GeminiApiClient {
             return@withContext Result.failure(IllegalArgumentException("Vui lòng nhập API Key trước khi đồng bộ mô hình."))
         }
 
-        // 1. Try Gemini Developer API live model listing (v1beta, then v1 fallback)
+        // 1. Try Gemini Developer API live model listing (v1beta, then v1 fallback) for ALL key formats (AIza... and AQ.)
         val devBetaResult = fetchAllPaginatedModels(
             endpointBase = "$BASE_URL/models",
             apiKey = cleanKey,
             source = "api"
         )
         val devModels = devBetaResult.getOrNull().orEmpty().ifEmpty {
-            if (!isVertexExpressKey(cleanKey)) {
-                fetchAllPaginatedModels(
-                    endpointBase = "$BASE_V1_URL/models",
-                    apiKey = cleanKey,
-                    source = "api"
-                ).getOrNull().orEmpty()
-            } else {
-                emptyList()
-            }
+            fetchAllPaginatedModels(
+                endpointBase = "$BASE_V1_URL/models",
+                apiKey = cleanKey,
+                source = "api"
+            ).getOrNull().orEmpty()
         }
         if (devModels.isNotEmpty()) {
+            preferredBackendByKey[cleanKey] = ApiBackend.GEMINI_DEV
             val sorted = AiResponseParser.sortSyncedModels(devModels)
             return@withContext Result.success(
                 AiModelSyncResult(
@@ -93,7 +99,7 @@ object GeminiApiClient {
             )
         }
 
-        // 2. Vertex AI Express Mode keys (`AQ....`)
+        // 2. Fallback to Vertex AI Express ONLY for `AQ.` keys when Gemini Developer API did not return models
         if (isVertexExpressKey(cleanKey)) {
             val vertexEndpoints = listOf(
                 "$VERTEX_V1_BASE/models" to true,
@@ -115,6 +121,7 @@ object GeminiApiClient {
                 }
             }
             if (vertexModels.isNotEmpty()) {
+                preferredBackendByKey[cleanKey] = ApiBackend.VERTEX_EXPRESS
                 val sorted = AiResponseParser.sortSyncedModels(vertexModels)
                 return@withContext Result.success(
                     AiModelSyncResult(
@@ -173,19 +180,28 @@ object GeminiApiClient {
             }
 
             if (verified.isNotEmpty()) {
+                preferredBackendByKey[cleanKey] = ApiBackend.VERTEX_EXPRESS
                 val sorted = AiResponseParser.sortSyncedModels(verified)
                 return@withContext Result.success(
                     AiModelSyncResult(
                         models = sorted,
                         sourceLabel = "Vertex AI Express",
-                        message = "Đã xác thực khóa Vertex AI Express (${sorted.size} mô hình hoạt động). Lưu ý: Khóa dạng 'AQ.' không hỗ trợ liệt kê toàn bộ danh sách — bạn có thể thêm mã mô hình bất kỳ ở ô bên dưới hoặc dùng khóa AI Studio ('AIza...') để tự động tải tất cả."
+                        message = "Đã xác thực khóa Vertex AI Express (${sorted.size} mô hình hoạt động). Bạn có thể thêm mã mô hình bất kỳ ở ô bên dưới nếu muốn dùng thêm mô hình khác."
                     )
                 )
             }
 
+            // Prefer reporting the Gemini Developer API error if Vertex failed only because Agent Platform/aiplatform API isn't enabled
+            val devErr = devBetaResult.exceptionOrNull()?.localizedMessage.orEmpty()
+            val vertexErr = lastVertexError.orEmpty()
+            val detail = when {
+                devErr.isNotBlank() -> devErr
+                vertexErr.isNotBlank() -> vertexErr
+                else -> "Không thể xác thực API Key trên cả Google AI Studio lẫn Vertex AI."
+            }
             return@withContext Result.failure(
                 IllegalStateException(
-                    "Khóa Vertex AI Express ('AQ.') không tải được danh sách mô hình tự động. Hãy tạo khóa Google AI Studio (bắt đầu bằng 'AIza...', miễn phí không cần Visa tại aistudio.google.com/apikey) để đồng bộ toàn bộ mô hình, hoặc bấm 'Thêm mã mô hình tùy chỉnh' để nhập đúng mã mô hình Vertex của bạn. (${lastVertexError ?: devBetaResult.exceptionOrNull()?.localizedMessage.orEmpty()})"
+                    "Không tải được danh sách mô hình từ API Key này. Hãy kiểm tra lại khóa tạo tại aistudio.google.com/apikey và đảm bảo dự án đã bật Gemini API. ($detail)"
                 )
             )
         }
@@ -499,21 +515,84 @@ object GeminiApiClient {
             .removePrefix("publishers/google/models/")
             .removePrefix("models/")
             .ifEmpty { AiModelPreset.GEMINI_3_8_FLASH.modelId }
-        val endpoints = if (isVertexExpressKey(apiKey)) {
-            listOf(
-                "$VERTEX_V1_BASE/models/$safeModel:generateContent",
-                "$VERTEX_V1BETA1_BASE/models/$safeModel:generateContent"
-            )
-        } else {
-            listOf(
-                "$BASE_URL/models/$safeModel:generateContent",
-                "$BASE_V1_URL/models/$safeModel:generateContent"
-            )
-        }
+
+        val geminiDevEndpoints = listOf(
+            "$BASE_URL/models/$safeModel:generateContent",
+            "$BASE_V1_URL/models/$safeModel:generateContent"
+        )
+        val vertexEndpoints = listOf(
+            "$VERTEX_V1_BASE/models/$safeModel:generateContent",
+            "$VERTEX_V1BETA1_BASE/models/$safeModel:generateContent"
+        )
 
         val payloadBytes = payload.toString().toByteArray(Charsets.UTF_8)
-        var lastError: HttpStatusException? = null
+        val cachedBackend = preferredBackendByKey[apiKey]
+        val canTryVertex = isVertexExpressKey(apiKey)
 
+        // If this AQ. key was previously verified as Vertex AI Express, try Vertex first
+        if (cachedBackend == ApiBackend.VERTEX_EXPRESS && canTryVertex) {
+            return try {
+                postGenerateContentGroup(vertexEndpoints, apiKey, payloadBytes)
+            } catch (vertexErr: HttpStatusException) {
+                if (vertexErr.statusCode == 401 || vertexErr.statusCode == 403) {
+                    try {
+                        val text = postGenerateContentGroup(geminiDevEndpoints, apiKey, payloadBytes)
+                        preferredBackendByKey[apiKey] = ApiBackend.GEMINI_DEV
+                        text
+                    } catch (devErr: HttpStatusException) {
+                        if (devErr.statusCode == 404) {
+                            preferredBackendByKey[apiKey] = ApiBackend.GEMINI_DEV
+                            throw devErr
+                        }
+                        throw vertexErr
+                    }
+                } else {
+                    throw vertexErr
+                }
+            }
+        }
+
+        // Default for ALL keys (both legacy `AIza...` and modern Google AI Studio `AQ.` keys):
+        // Try Gemini Developer API (`generativelanguage.googleapis.com`) FIRST!
+        return try {
+            val text = postGenerateContentGroup(geminiDevEndpoints, apiKey, payloadBytes)
+            preferredBackendByKey[apiKey] = ApiBackend.GEMINI_DEV
+            text
+        } catch (devErr: HttpStatusException) {
+            if (devErr.statusCode == 404) {
+                // Key is valid on Gemini Developer API; only the modelId doesn't exist -> let auto-recovery sync & swap model!
+                preferredBackendByKey[apiKey] = ApiBackend.GEMINI_DEV
+                throw devErr
+            }
+            if ((devErr.statusCode == 401 || devErr.statusCode == 403) &&
+                canTryVertex &&
+                cachedBackend != ApiBackend.GEMINI_DEV
+            ) {
+                // Only fall back to Vertex AI Express if Gemini Developer API rejected auth/service on an `AQ.` key
+                try {
+                    val text = postGenerateContentGroup(vertexEndpoints, apiKey, payloadBytes)
+                    preferredBackendByKey[apiKey] = ApiBackend.VERTEX_EXPRESS
+                    text
+                } catch (vertexErr: HttpStatusException) {
+                    if (vertexErr.statusCode == 404) {
+                        preferredBackendByKey[apiKey] = ApiBackend.VERTEX_EXPRESS
+                        throw vertexErr
+                    }
+                    // If Vertex also returned 401/403 (e.g. Agent Platform API disabled), report the original Gemini API error
+                    throw devErr
+                }
+            } else {
+                throw devErr
+            }
+        }
+    }
+
+    private fun postGenerateContentGroup(
+        endpoints: List<String>,
+        apiKey: String,
+        payloadBytes: ByteArray
+    ): String {
+        var lastError: HttpStatusException? = null
         for ((idx, endpoint) in endpoints.withIndex()) {
             val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -562,7 +641,7 @@ object GeminiApiClient {
                 conn.disconnect()
             }
         }
-        throw lastError ?: IllegalStateException("Không thể kết nối tới mô hình $safeModel.")
+        throw lastError ?: IllegalStateException("Không thể kết nối tới máy chủ Google AI.")
     }
 
     private fun bitmapToInlineDataPart(source: Bitmap, maxDim: Int): JSONObject {
@@ -600,10 +679,19 @@ object GeminiApiClient {
         }.getOrDefault("")
 
         return when (code) {
-            400, 401, 403 -> "API Key không hợp lệ hoặc không có quyền truy cập (HTTP $code). ${apiMsg.take(160)}"
-            404 -> "Không tìm thấy mô hình đã chọn (HTTP 404). Hãy đổi sang mô hình khác trong Mục Key. ${apiMsg.take(120)}"
+            403 -> {
+                if (apiMsg.contains("has not been used in project", ignoreCase = true) ||
+                    apiMsg.contains("is disabled", ignoreCase = true)
+                ) {
+                    "Dự án của API Key này chưa bật Gemini API (HTTP 403). Hãy tạo API Key trực tiếp tại aistudio.google.com/apikey (mặc định đã bật sẵn) hoặc bật Generative Language API trong Google Cloud. Chi tiết: ${apiMsg.take(240)}"
+                } else {
+                    "API Key không hợp lệ hoặc không có quyền truy cập (HTTP 403). ${apiMsg.take(240)}"
+                }
+            }
+            400, 401 -> "API Key không hợp lệ hoặc yêu cầu bị từ chối (HTTP $code). ${apiMsg.take(240)}"
+            404 -> "Không tìm thấy mô hình đã chọn (HTTP 404). Hãy đổi sang mô hình khác trong Mục Key. ${apiMsg.take(180)}"
             429 -> "API Key đã vượt quá giới hạn lượt gọi (HTTP 429). Vui lòng đợi ít phút rồi thử lại."
-            else -> "Lỗi máy chủ AI (HTTP $code). ${apiMsg.take(160)}"
+            else -> "Lỗi máy chủ AI (HTTP $code). ${apiMsg.take(240)}"
         }.trim()
     }
 

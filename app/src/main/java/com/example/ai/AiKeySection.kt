@@ -234,7 +234,7 @@ fun AiKeySetupSection(
                         googleUser != null && keyConfig.hasKey ->
                             "Đang ưu tiên Google Gemini · Key riêng đã lưu (${keyConfig.maskedKey})"
                         keyConfig.hasKey -> "Đã lưu Key (${keyConfig.maskedKey})"
-                        else -> "Dán khóa AI Studio (AIza...) để tự động đồng bộ toàn bộ mô hình trong tài khoản"
+                        else -> "Dán khóa Google AI Studio (AIza... hoặc AQ....) để tự động đồng bộ toàn bộ mô hình"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = SlateTextSecondary,
@@ -254,7 +254,7 @@ fun AiKeySetupSection(
                     value = keyDraft,
                     onValueChange = { keyDraft = it },
                     label = { Text("Gemini API Key") },
-                    placeholder = { Text("Dán API Key (vd: AIzaSy...)") },
+                    placeholder = { Text("Dán API Key (vd: AIza... hoặc AQ....)") },
                     leadingIcon = {
                         Icon(Icons.Default.Key, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(18.dp))
                     },
