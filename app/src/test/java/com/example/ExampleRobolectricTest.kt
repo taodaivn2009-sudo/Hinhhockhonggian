@@ -1214,6 +1214,27 @@ class ExampleRobolectricTest {
         val afterRemove = prefs.removeCustomModel("gemini-4-custom-preview")
         assertEquals(4, afterRemove.size)
         assertTrue(afterRemove.none { it.modelId == "gemini-4-custom-preview" })
+
+        // 4. API key sanitization strips env prefixes, quotes, and embedded whitespace/newlines
+        assertEquals(
+            "AIzaSyCleanKey12345",
+            AiResponseParser.sanitizeApiKey("  GEMINI_API_KEY=\"AIzaSyClean\nKey 12345\"  ")
+        )
+        assertEquals(
+            "AQ.VertexClean999",
+            AiResponseParser.sanitizeApiKey("API_KEY='AQ.Vertex\r\nClean999'")
+        )
+
+        // 5. Best chat model selection skips specialized non-chat models (tts/audio/image/embedding) and favors standard Gemini Flash
+        val mixedCatalog = listOf(
+            AiSyncedModel(modelId = "gemini-4-tts-preview", displayName = "Gemini 4 TTS"),
+            AiSyncedModel(modelId = "imagen-4-generate", displayName = "Imagen 4"),
+            AiSyncedModel(modelId = "gemini-3.5-flash", displayName = "Gemini 3.5 Flash"),
+            AiSyncedModel(modelId = "gemini-3.5-pro-preview", displayName = "Gemini 3.5 Pro Preview"),
+            AiSyncedModel(modelId = "gemma-3-27b-it", displayName = "Gemma 3 27b IT")
+        )
+        val best = AiResponseParser.pickBestChatModel(mixedCatalog)
+        assertEquals("gemini-3.5-flash", best?.modelId)
     }
 }
 

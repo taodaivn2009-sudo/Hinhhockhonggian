@@ -106,31 +106,53 @@ fun AiWorkspaceScreen(
                             .padding(horizontal = 12.dp, vertical = 6.dp)
                     )
 
-                    // Compact signed-in Google account strip with real avatar on Docs Q&A / Problem Draw tabs
+                    // Compact active AI provider & model strip on Docs Q&A / Problem Draw tabs
                     val signedInUser = uiState.googleUser
-                    if (signedInUser != null && uiState.activeSubTab != AiSubTab.API_KEY) {
+                    if (uiState.isAiReady && uiState.activeSubTab != AiSubTab.API_KEY) {
+                        val accentColor = if (uiState.useGoogleGeminiActive) EmeraldAccent else CyanAccent
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .widthIn(max = 720.dp)
                                 .padding(horizontal = 12.dp, vertical = 2.dp)
                                 .clip(RoundedCornerShape(14.dp))
-                                .background(EmeraldAccent.copy(alpha = 0.12f))
-                                .border(1.dp, EmeraldAccent.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                                .background(accentColor.copy(alpha = 0.12f))
+                                .border(1.dp, accentColor.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
                                 .clickable { aiViewModel.selectSubTab(AiSubTab.API_KEY) }
                                 .padding(horizontal = 10.dp, vertical = 6.dp)
                                 .testTag("ai_signed_in_account_strip"),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            GoogleAccountAvatar(
-                                user = signedInUser,
-                                size = 30.dp,
-                                showVerifiedBadge = true
-                            )
+                            if (signedInUser != null && uiState.useGoogleGeminiActive) {
+                                GoogleAccountAvatar(
+                                    user = signedInUser,
+                                    size = 30.dp,
+                                    showVerifiedBadge = true
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .size(30.dp)
+                                        .clip(CircleShape)
+                                        .background(CyanAccent.copy(alpha = 0.22f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Key,
+                                        contentDescription = null,
+                                        tint = CyanAccent,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = signedInUser.displayName,
+                                    text = if (uiState.useGoogleGeminiActive && signedInUser != null) {
+                                        signedInUser.displayName
+                                    } else {
+                                        "API Key riêng (${uiState.keyConfig.maskedKey})"
+                                    },
                                     style = MaterialTheme.typography.labelMedium,
                                     color = SlateTextPrimary,
                                     fontWeight = FontWeight.Bold,
@@ -145,7 +167,7 @@ fun AiWorkspaceScreen(
                                 )
                             }
                             Text(
-                                text = "Tài khoản",
+                                text = "Đổi mô hình",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = CyanAccent,
                                 fontWeight = FontWeight.SemiBold

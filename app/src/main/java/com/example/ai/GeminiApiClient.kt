@@ -16,6 +16,7 @@ import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
+import java.net.UnknownHostException
 
 /**
  * Lightweight, zero-bloat Gemini Developer API client using end-user provided API key
@@ -28,6 +29,7 @@ import java.net.URLEncoder
 object GeminiApiClient {
 
     private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+    private const val BASE_V1_URL = "https://generativelanguage.googleapis.com/v1"
     private const val VERTEX_V1_BASE = "https://aiplatform.googleapis.com/v1/publishers/google"
     private const val VERTEX_V1BETA1_BASE = "https://aiplatform.googleapis.com/v1beta1/publishers/google"
     private const val CONNECT_TIMEOUT_MS = 15_000
@@ -38,7 +40,7 @@ object GeminiApiClient {
      * whereas Google AI Studio / Gemini Developer API keys typically start with `AIza` and call
      * `generativelanguage.googleapis.com`.
      */
-    fun isVertexExpressKey(apiKey: String): Boolean = apiKey.trim().startsWith("AQ.")
+    fun isVertexExpressKey(apiKey: String): Boolean = AiResponseParser.sanitizeApiKey(apiKey).startsWith("AQ.")
 
     suspend fun verifyApiKey(
         apiKey: String,
@@ -47,29 +49,39 @@ object GeminiApiClient {
 
     /**
      * Fetches the live catalog of Gemini models enabled in the user's account using their API key:
-     * - Standard Gemini Developer API key (`AIza...`): paginates `GET /v1beta/models?pageSize=100`
+     * - Standard Gemini Developer API key (`AIza...`): paginates `GET /v1beta/models` (with `/v1/models` fallback)
      *   to retrieve EVERY `generateContent`-capable model enabled on their account.
-     * - Vertex AI Express Mode key (`AQ....`): tries Vertex AI publisher model listing (`v1beta1` & `v1`);
-     *   if Express key restricts catalog listing, probes live availability via `:countTokens` so the user
-     *   gets verified models plus clear guidance to add any model ID or use an AI Studio key.
+     * - Vertex AI Express Mode key (`AQ....`): tries Vertex AI publisher model listing (`v1` & `v1beta1`,
+     *   both with and without `pageSize`); if listing is restricted on the Express key, probes live availability
+     *   via `:countTokens`.
      */
     suspend fun syncAccountModels(
         apiKey: String,
         preferredModelId: String = AiModelPreset.GEMINI_3_8_FLASH.modelId,
         extraModelIds: List<String> = emptyList()
     ): Result<AiModelSyncResult> = withContext(Dispatchers.IO) {
-        val cleanKey = apiKey.trim()
+        val cleanKey = AiResponseParser.sanitizeApiKey(apiKey)
         if (cleanKey.isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("Vui lòng nhập API Key trước khi đồng bộ mô hình."))
         }
 
-        // 1. Try Gemini Developer API live model listing first (returns full account catalog for AIza... keys)
-        val devListResult = fetchAllPaginatedModels(
+        // 1. Try Gemini Developer API live model listing (v1beta, then v1 fallback)
+        val devBetaResult = fetchAllPaginatedModels(
             endpointBase = "$BASE_URL/models",
             apiKey = cleanKey,
             source = "api"
         )
-        val devModels = devListResult.getOrNull().orEmpty()
+        val devModels = devBetaResult.getOrNull().orEmpty().ifEmpty {
+            if (!isVertexExpressKey(cleanKey)) {
+                fetchAllPaginatedModels(
+                    endpointBase = "$BASE_V1_URL/models",
+                    apiKey = cleanKey,
+                    source = "api"
+                ).getOrNull().orEmpty()
+            } else {
+                emptyList()
+            }
+        }
         if (devModels.isNotEmpty()) {
             val sorted = AiResponseParser.sortSyncedModels(devModels)
             return@withContext Result.success(
@@ -83,19 +95,24 @@ object GeminiApiClient {
 
         // 2. Vertex AI Express Mode keys (`AQ....`)
         if (isVertexExpressKey(cleanKey)) {
-            val vertexBetaList = fetchAllPaginatedModels(
-                endpointBase = "$VERTEX_V1BETA1_BASE/models",
-                apiKey = cleanKey,
-                source = "vertex"
-            ).getOrNull().orEmpty()
-            val vertexModels = if (vertexBetaList.isNotEmpty()) {
-                vertexBetaList
-            } else {
-                fetchAllPaginatedModels(
-                    endpointBase = "$VERTEX_V1_BASE/models",
+            val vertexEndpoints = listOf(
+                "$VERTEX_V1_BASE/models" to true,
+                "$VERTEX_V1_BASE/models" to false,
+                "$VERTEX_V1BETA1_BASE/models" to true,
+                "$VERTEX_V1BETA1_BASE/models" to false
+            )
+            var vertexModels: List<AiSyncedModel> = emptyList()
+            for ((ep, usePageSize) in vertexEndpoints) {
+                val res = fetchAllPaginatedModels(
+                    endpointBase = ep,
                     apiKey = cleanKey,
-                    source = "vertex"
+                    source = "vertex",
+                    includePageSize = usePageSize
                 ).getOrNull().orEmpty()
+                if (res.isNotEmpty()) {
+                    vertexModels = res
+                    break
+                }
             }
             if (vertexModels.isNotEmpty()) {
                 val sorted = AiResponseParser.sortSyncedModels(vertexModels)
@@ -109,7 +126,6 @@ object GeminiApiClient {
             }
 
             // Vertex AI Express keys often allow `:generateContent` / `:countTokens` while blocking `GET .../models`.
-            // Probe live availability on candidate models so the key is verified end-to-end.
             val candidates = LinkedHashMap<String, AiSyncedModel>()
             AiModelPreset.entries.forEach { preset ->
                 candidates[preset.modelId.lowercase()] = preset.toSyncedModel(source = "vertex")
@@ -162,23 +178,21 @@ object GeminiApiClient {
                     AiModelSyncResult(
                         models = sorted,
                         sourceLabel = "Vertex AI Express",
-                        message = "Đã xác thực khóa Vertex AI Express (${sorted.size} mô hình hoạt động). Lưu ý: Google không mở API liệt kê danh sách cho khóa dạng 'AQ.' — hãy thêm mã mô hình bất kỳ ở ô bên dưới hoặc dùng khóa AI Studio ('AIza...') để tự động tải toàn bộ danh sách."
+                        message = "Đã xác thực khóa Vertex AI Express (${sorted.size} mô hình hoạt động). Lưu ý: Khóa dạng 'AQ.' không hỗ trợ liệt kê toàn bộ danh sách — bạn có thể thêm mã mô hình bất kỳ ở ô bên dưới hoặc dùng khóa AI Studio ('AIza...') để tự động tải tất cả."
                     )
                 )
             }
 
             return@withContext Result.failure(
                 IllegalStateException(
-                    lastVertexError
-                        ?: devListResult.exceptionOrNull()?.localizedMessage
-                        ?: "Không thể xác thực khóa Vertex AI Express (AQ.). Hãy kiểm tra lại khóa hoặc thử khóa AI Studio (AIza...)."
+                    "Khóa Vertex AI Express ('AQ.') không tải được danh sách mô hình tự động. Hãy tạo khóa Google AI Studio (bắt đầu bằng 'AIza...', miễn phí không cần Visa tại aistudio.google.com/apikey) để đồng bộ toàn bộ mô hình, hoặc bấm 'Thêm mã mô hình tùy chỉnh' để nhập đúng mã mô hình Vertex của bạn. (${lastVertexError ?: devBetaResult.exceptionOrNull()?.localizedMessage.orEmpty()})"
                 )
             )
         }
 
-        // 3. Standard key failed to list models -> return the real API error
+        // 3. Standard key failed to list models -> return the real API/network error clearly
         Result.failure(
-            devListResult.exceptionOrNull()
+            devBetaResult.exceptionOrNull()
                 ?: IllegalStateException("Tài khoản API Key không trả về mô hình nào hỗ trợ tạo nội dung.")
         )
     }
@@ -187,6 +201,7 @@ object GeminiApiClient {
         endpointBase: String,
         apiKey: String,
         source: String,
+        includePageSize: Boolean = true,
         maxPages: Int = 6
     ): Result<List<AiSyncedModel>> = runCatching {
         val collected = mutableListOf<AiSyncedModel>()
@@ -197,10 +212,12 @@ object GeminiApiClient {
             pageCount++
             val urlString = buildString {
                 append(endpointBase)
-                append("?pageSize=100")
-                if (!pageToken.isNullOrBlank()) {
-                    append("&pageToken=")
-                    append(URLEncoder.encode(pageToken, "UTF-8"))
+                val params = mutableListOf<String>()
+                if (includePageSize) params.add("pageSize=100")
+                if (!pageToken.isNullOrBlank()) params.add("pageToken=${URLEncoder.encode(pageToken, "UTF-8")}")
+                if (params.isNotEmpty()) {
+                    append("?")
+                    append(params.joinToString("&"))
                 }
             }
             val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
@@ -220,6 +237,10 @@ object GeminiApiClient {
                 collected.addAll(pageModels)
                 if (nextToken.isNullOrBlank()) break
                 pageToken = nextToken
+            } catch (e: UnknownHostException) {
+                throw IllegalStateException("Không có kết nối Internet hoặc không truy cập được máy chủ Google AI. Hãy kiểm tra Wi-Fi/4G.")
+            } catch (e: SocketTimeoutException) {
+                throw IllegalStateException("Kết nối tới máy chủ Google AI bị quá thời gian chờ. Hãy thử lại.")
             } finally {
                 conn.disconnect()
             }
@@ -277,9 +298,10 @@ object GeminiApiClient {
         question: String,
         history: List<AiChatMessage>,
         attachedPageBitmap: Bitmap? = null,
-        attachedPageNumber: Int? = null
+        attachedPageNumber: Int? = null,
+        onAutoResolvedModel: (AiSyncedModel, List<AiSyncedModel>) -> Unit = { _, _ -> }
     ): Result<AiDocsReply> = withContext(Dispatchers.IO) {
-        val cleanKey = apiKey.trim()
+        val cleanKey = AiResponseParser.sanitizeApiKey(apiKey)
         if (cleanKey.isEmpty()) {
             return@withContext Result.failure(IllegalStateException("Chưa có API Key. Hãy nhập key trong Mục Key để hỏi AI."))
         }
@@ -321,7 +343,13 @@ object GeminiApiClient {
                 })
             }
 
-            val rawResponseText = executeGenerateContent(cleanKey, modelId, payload)
+            val rawResponseText = executeWithModelAutoRecovery(
+                apiKey = cleanKey,
+                modelId = modelId,
+                payload = payload,
+                systemText = systemText,
+                onAutoResolvedModel = onAutoResolvedModel
+            )
             AiResponseParser.parseDocsReply(rawResponseText)
         }
     }
@@ -330,9 +358,10 @@ object GeminiApiClient {
         apiKey: String,
         modelId: String,
         problemBitmap: Bitmap?,
-        problemNote: String
+        problemNote: String,
+        onAutoResolvedModel: (AiSyncedModel, List<AiSyncedModel>) -> Unit = { _, _ -> }
     ): Result<AiDrawingPlan> = withContext(Dispatchers.IO) {
-        val cleanKey = apiKey.trim()
+        val cleanKey = AiResponseParser.sanitizeApiKey(apiKey)
         if (cleanKey.isEmpty()) {
             return@withContext Result.failure(IllegalStateException("Chưa có API Key. Hãy nhập key trong Mục Key để quét đề bài."))
         }
@@ -358,10 +387,11 @@ object GeminiApiClient {
             }
             parts.put(JSONObject().put("text", promptLine))
 
+            val systemText = buildProblemDrawSystemPrompt()
             val payload = JSONObject().apply {
                 put(
                     "systemInstruction",
-                    JSONObject().put("parts", JSONArray().put(JSONObject().put("text", buildProblemDrawSystemPrompt())))
+                    JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemText)))
                 )
                 put(
                     "contents",
@@ -378,10 +408,90 @@ object GeminiApiClient {
                 })
             }
 
-            val rawResponseText = executeGenerateContent(cleanKey, modelId, payload)
+            val rawResponseText = executeWithModelAutoRecovery(
+                apiKey = cleanKey,
+                modelId = modelId,
+                payload = payload,
+                systemText = systemText,
+                onAutoResolvedModel = onAutoResolvedModel
+            )
             AiResponseParser.parseDrawingPlan(rawResponseText)
                 ?: throw IllegalStateException("AI không trả về dữ liệu dựng hình hợp lệ. Hãy thử chụp ảnh rõ nét hơn hoặc mô tả thêm đề bài.")
         }
+    }
+
+    private class HttpStatusException(val statusCode: Int, message: String) : IllegalStateException(message)
+
+    /**
+     * Executes generateContent with automatic recovery:
+     * 1. If the selected model returns HTTP 404 on the user's API key (e.g., default preset not enabled on their account),
+     *    syncs the account's live models once, picks the best chat/vision model, persists it via [onAutoResolvedModel], and retries!
+     * 2. If a synced model (e.g., Gemma or an experimental variant) returns HTTP 400 rejecting `systemInstruction`
+     *    or `responseMimeType: application/json`, automatically retries with a compatible merged-prompt payload.
+     */
+    private suspend fun executeWithModelAutoRecovery(
+        apiKey: String,
+        modelId: String,
+        payload: JSONObject,
+        systemText: String,
+        onAutoResolvedModel: (AiSyncedModel, List<AiSyncedModel>) -> Unit
+    ): String {
+        return try {
+            executeGenerateContentWithCompat(apiKey, modelId, payload, systemText)
+        } catch (e: HttpStatusException) {
+            if (e.statusCode != 404) throw e
+            val synced = syncAccountModels(apiKey).getOrNull()?.models.orEmpty()
+            val best = AiResponseParser.pickBestChatModel(synced)
+            if (best != null && !best.modelId.equals(modelId.trim().removePrefix("models/"), ignoreCase = true)) {
+                onAutoResolvedModel(best, synced)
+                executeGenerateContentWithCompat(apiKey, best.modelId, payload, systemText)
+            } else {
+                throw e
+            }
+        }
+    }
+
+    private fun executeGenerateContentWithCompat(
+        apiKey: String,
+        modelId: String,
+        payload: JSONObject,
+        systemText: String
+    ): String {
+        return try {
+            executeGenerateContent(apiKey, modelId, payload)
+        } catch (e: HttpStatusException) {
+            val msg = e.message.orEmpty()
+            val isSchemaOrSystemUnsupported = e.statusCode == 400 && (
+                msg.contains("system", ignoreCase = true) ||
+                    msg.contains("developer instruction", ignoreCase = true) ||
+                    msg.contains("responseMimeType", ignoreCase = true) ||
+                    msg.contains("JSON mode", ignoreCase = true) ||
+                    msg.contains("not enabled", ignoreCase = true)
+                )
+            if (!isSchemaOrSystemUnsupported) throw e
+            val compatPayload = buildCompatPayload(payload, systemText)
+            executeGenerateContent(apiKey, modelId, compatPayload)
+        }
+    }
+
+    private fun buildCompatPayload(original: JSONObject, systemText: String): JSONObject {
+        val copy = JSONObject(original.toString())
+        copy.remove("systemInstruction")
+        copy.optJSONObject("generationConfig")?.remove("responseMimeType")
+        val contents = copy.optJSONArray("contents")
+        if (contents != null && contents.length() > 0) {
+            val firstTurn = contents.optJSONObject(0)
+            val firstParts = firstTurn?.optJSONArray("parts")
+            if (firstParts != null) {
+                val mergedParts = JSONArray()
+                mergedParts.put(JSONObject().put("text", "$systemText\n\n---\n"))
+                for (i in 0 until firstParts.length()) {
+                    mergedParts.put(firstParts.get(i))
+                }
+                firstTurn.put("parts", mergedParts)
+            }
+        }
+        return copy
     }
 
     private fun executeGenerateContent(apiKey: String, modelId: String, payload: JSONObject): String {
@@ -395,11 +505,14 @@ object GeminiApiClient {
                 "$VERTEX_V1BETA1_BASE/models/$safeModel:generateContent"
             )
         } else {
-            listOf("$BASE_URL/models/$safeModel:generateContent")
+            listOf(
+                "$BASE_URL/models/$safeModel:generateContent",
+                "$BASE_V1_URL/models/$safeModel:generateContent"
+            )
         }
 
         val payloadBytes = payload.toString().toByteArray(Charsets.UTF_8)
-        var lastError: IllegalStateException? = null
+        var lastError: HttpStatusException? = null
 
         for ((idx, endpoint) in endpoints.withIndex()) {
             val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
@@ -418,7 +531,7 @@ object GeminiApiClient {
                 val code = conn.responseCode
                 val body = readStream(if (code in 200..299) conn.inputStream else conn.errorStream)
                 if (code !in 200..299) {
-                    val err = IllegalStateException(formatHttpError(code, body))
+                    val err = HttpStatusException(code, formatHttpError(code, body))
                     if (idx < endpoints.lastIndex && (code == 404 || code == 400)) {
                         lastError = err
                         continue
@@ -441,6 +554,8 @@ object GeminiApiClient {
                     throw IllegalStateException("AI trả về nội dung trống. Vui lòng thử lại.")
                 }
                 return result
+            } catch (e: UnknownHostException) {
+                throw IllegalStateException("Không có kết nối Internet hoặc không truy cập được máy chủ Google AI. Hãy kiểm tra Wi-Fi/4G.")
             } catch (e: SocketTimeoutException) {
                 throw IllegalStateException("Kết nối tới AI bị quá thời gian chờ. Hãy kiểm tra mạng và thử lại.")
             } finally {

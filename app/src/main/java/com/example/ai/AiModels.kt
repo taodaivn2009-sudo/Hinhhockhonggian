@@ -85,7 +85,7 @@ data class AiKeyConfig(
     val modelId: String = AiModelPreset.GEMINI_3_8_FLASH.modelId,
     val providerMode: AiProviderMode = AiProviderMode.GOOGLE_GEMINI
 ) {
-    val trimmedKey: String get() = apiKey.trim()
+    val trimmedKey: String get() = AiResponseParser.sanitizeApiKey(apiKey)
     val hasKey: Boolean get() = trimmedKey.isNotEmpty()
     val effectiveModelId: String get() = modelId.trim().ifEmpty { AiModelPreset.GEMINI_3_8_FLASH.modelId }
 
@@ -466,6 +466,42 @@ object AiResponseParser {
                 }
                 .thenBy { it.modelId.lowercase() }
         )
+    }
+
+    /**
+     * Cleans user-pasted API keys by stripping accidental env prefixes (`GEMINI_API_KEY=`),
+     * surrounding quotes, and any embedded whitespace or newlines that would break HTTP headers.
+     */
+    fun sanitizeApiKey(raw: String): String {
+        var cleaned = raw.trim()
+        val prefixRegex = Regex("""^(?:export\s+)?(?:GEMINI_API_KEY|GOOGLE_API_KEY|API_KEY)\s*=\s*""", RegexOption.IGNORE_CASE)
+        cleaned = cleaned.replaceFirst(prefixRegex, "").trim()
+        cleaned = cleaned.trim('"', '\'', '`', ' ')
+        return cleaned.replace(Regex("""\s+"""), "")
+    }
+
+    /**
+     * Selects the best default text+vision chat model from a synced model list, avoiding
+     * specialized audio/TTS/image/video/robotics/embedding variants.
+     */
+    fun pickBestChatModel(models: List<AiSyncedModel>): AiSyncedModel? {
+        if (models.isEmpty()) return null
+        val sorted = sortSyncedModels(models)
+        val excludedTokens = listOf("tts", "audio", "image", "imagen", "veo", "lyria", "embedding", "robotics", "computer-use", "live", "aqa")
+        fun isStandardChatModel(m: AiSyncedModel): Boolean {
+            val id = m.modelId.lowercase()
+            return excludedTokens.none { id.contains(it) }
+        }
+        return sorted.firstOrNull { m ->
+            val id = m.modelId.lowercase()
+            id.startsWith("gemini") && id.contains("flash") && !id.contains("lite") && isStandardChatModel(m)
+        } ?: sorted.firstOrNull { m ->
+            val id = m.modelId.lowercase()
+            id.startsWith("gemini") && id.contains("flash") && isStandardChatModel(m)
+        } ?: sorted.firstOrNull { m ->
+            m.modelId.lowercase().startsWith("gemini") && isStandardChatModel(m)
+        } ?: sorted.firstOrNull { isStandardChatModel(it) }
+            ?: sorted.first()
     }
 
     /**

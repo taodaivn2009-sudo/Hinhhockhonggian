@@ -101,8 +101,13 @@ fun AiKeySetupSection(
     val context = LocalContext.current
     var keyDraft by remember(keyConfig.apiKey) { mutableStateOf(keyConfig.apiKey) }
     var showKeyPlain by remember { mutableStateOf(false) }
-    var expandManualKey by remember(googleUser != null, keyConfig.hasKey) {
-        mutableStateOf(googleUser == null && keyConfig.hasKey)
+    var expandManualKey by remember {
+        mutableStateOf(googleUser == null || keyConfig.hasKey)
+    }
+    LaunchedEffect(statusMessage, statusSuccess) {
+        if (!statusMessage.isNullOrBlank() && !statusSuccess) {
+            expandManualKey = true
+        }
     }
 
     Column(

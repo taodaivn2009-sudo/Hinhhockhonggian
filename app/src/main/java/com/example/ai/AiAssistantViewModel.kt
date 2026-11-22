@@ -387,15 +387,23 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     // ================= MANUAL API KEY FALLBACK =================
 
     fun saveApiKey(rawKey: String, modelId: String = _uiState.value.keyConfig.effectiveModelId) {
+        val cleanKey = AiResponseParser.sanitizeApiKey(rawKey)
         val current = _uiState.value.keyConfig
-        val next = current.copy(apiKey = rawKey.trim(), modelId = modelId.trim())
+        val next = current.copy(
+            apiKey = cleanKey,
+            modelId = modelId.trim(),
+            providerMode = if (cleanKey.isNotEmpty()) AiProviderMode.PERSONAL_API_KEY else AiProviderMode.GOOGLE_GEMINI
+        )
         keyPrefs.save(next)
         _uiState.update {
             it.copy(
                 keyConfig = next,
-                keyStatusMessage = if (next.hasKey) "Đã lưu API Key (${next.maskedKey})." else "Đã xóa API Key.",
+                keyStatusMessage = if (next.hasKey) "Đã lưu và bật API Key riêng (${next.maskedKey}). Đang đồng bộ mô hình..." else "Đã xóa API Key.",
                 keyStatusSuccess = next.hasKey
             )
+        }
+        if (cleanKey.isNotEmpty()) {
+            syncAccountModels(cleanKey)
         }
     }
 
@@ -454,16 +462,39 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    private fun applyAutoResolvedModel(bestModel: AiSyncedModel, syncedFromServer: List<AiSyncedModel>) {
+        val existingCustom = _uiState.value.syncedModels.filter { it.source == "custom" }
+        val merged = AiResponseParser.sortSyncedModels(existingCustom + syncedFromServer)
+        val now = System.currentTimeMillis()
+        keyPrefs.saveSyncedModels(merged, now)
+        val nextConfig = _uiState.value.keyConfig.copy(
+            modelId = bestModel.modelId,
+            providerMode = AiProviderMode.PERSONAL_API_KEY
+        )
+        keyPrefs.save(nextConfig)
+        _uiState.update { cur ->
+            cur.copy(
+                keyConfig = nextConfig,
+                syncedModels = merged,
+                syncedModelsUpdatedAt = now,
+                modelSyncStatusMessage = "Đã tự động đồng bộ ${merged.size} mô hình và chuyển sang '${bestModel.modelId}'.",
+                modelSyncSuccess = true
+            )
+        }
+    }
+
     /**
      * Synchronizes live models available in the user's account:
      * - If an API key is available (either saved or typed in draft), fetches the full catalog via REST
-     *   (supports both `AIza...` AI Studio keys and `AQ....` Vertex AI Express keys).
+     *   (supports both `AIza...` AI Studio keys and `AQ....` Vertex AI Express keys), automatically
+     *   activates `PERSONAL_API_KEY`, and selects a valid model from the account if the previous model isn't available.
      * - Else if signed in with Google (Firebase AI Logic), probes live availability on `Firebase.ai`.
      */
     fun syncAccountModels(overrideApiKey: String? = null) {
         if (_uiState.value.isSyncingModels) return
         val state = _uiState.value
-        val candidateKey = overrideApiKey?.trim()?.ifEmpty { null } ?: state.keyConfig.trimmedKey
+        val cleanedOverride = overrideApiKey?.let { AiResponseParser.sanitizeApiKey(it) }.orEmpty()
+        val candidateKey = cleanedOverride.ifEmpty { state.keyConfig.trimmedKey }
         val existingCustomModels = state.syncedModels.filter { it.source == "custom" }
         val customIds = existingCustomModels.map { it.modelId }
 
@@ -494,24 +525,11 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             try {
                 val syncResult = withTimeout(30_000L) {
                     if (candidateKey.isNotEmpty()) {
-                        val apiRes = GeminiApiClient.syncAccountModels(
+                        GeminiApiClient.syncAccountModels(
                             apiKey = candidateKey,
                             preferredModelId = state.keyConfig.effectiveModelId,
                             extraModelIds = customIds
                         )
-                        if (apiRes.isSuccess) {
-                            apiRes
-                        } else if (state.isSignedInWithGoogle && state.useGoogleGeminiActive) {
-                            val fbRes = FirebaseAiClient.probeAvailableModels(extraModelIds = customIds)
-                            fbRes.map { fb ->
-                                val apiErr = apiRes.exceptionOrNull()?.localizedMessage?.take(120).orEmpty()
-                                fb.copy(
-                                    message = "${fb.message} (Lưu ý: API Key đã lưu báo lỗi: $apiErr)"
-                                )
-                            }
-                        } else {
-                            apiRes
-                        }
                     } else {
                         FirebaseAiClient.probeAvailableModels(extraModelIds = customIds)
                     }
@@ -521,27 +539,62 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     val merged = AiResponseParser.sortSyncedModels(existingCustomModels + result.models)
                     val now = System.currentTimeMillis()
                     keyPrefs.saveSyncedModels(merged, now)
+
+                    val curConfig = _uiState.value.keyConfig
+                    val currentId = curConfig.effectiveModelId
+                    val isCurrentValid = result.models.any { it.modelId.equals(currentId, ignoreCase = true) } ||
+                        existingCustomModels.any { it.modelId.equals(currentId, ignoreCase = true) }
+                    val autoPicked = if (!isCurrentValid) AiResponseParser.pickBestChatModel(result.models) else null
+                    val finalModelId = autoPicked?.modelId ?: currentId
+
+                    val nextConfig = if (candidateKey.isNotEmpty()) {
+                        curConfig.copy(
+                            apiKey = candidateKey,
+                            modelId = finalModelId,
+                            providerMode = AiProviderMode.PERSONAL_API_KEY
+                        )
+                    } else {
+                        curConfig.copy(modelId = finalModelId)
+                    }
+                    keyPrefs.save(nextConfig)
+
+                    val statusMsg = buildString {
+                        append(result.message)
+                        if (autoPicked != null) {
+                            append(" Đã tự động chọn '${autoPicked.modelId}'.")
+                        }
+                    }
+
                     _uiState.update { cur ->
                         cur.copy(
+                            keyConfig = nextConfig,
                             syncedModels = merged,
                             syncedModelsUpdatedAt = now,
-                            modelSyncStatusMessage = result.message,
+                            keyStatusMessage = if (candidateKey.isNotEmpty()) statusMsg else cur.keyStatusMessage,
+                            keyStatusSuccess = if (candidateKey.isNotEmpty()) true else cur.keyStatusSuccess,
+                            modelSyncStatusMessage = statusMsg,
                             modelSyncSuccess = true
                         )
                     }
                 }.onFailure { err ->
                     Log.e(TAG, "Account model sync failed", err)
+                    val errText = err.localizedMessage ?: "Đồng bộ danh sách mô hình thất bại."
                     _uiState.update {
                         it.copy(
-                            modelSyncStatusMessage = err.localizedMessage ?: "Đồng bộ danh sách mô hình thất bại.",
+                            keyStatusMessage = if (candidateKey.isNotEmpty()) errText else it.keyStatusMessage,
+                            keyStatusSuccess = if (candidateKey.isNotEmpty()) false else it.keyStatusSuccess,
+                            modelSyncStatusMessage = errText,
                             modelSyncSuccess = false
                         )
                     }
                 }
             } catch (e: TimeoutCancellationException) {
+                val timeoutMsg = "Quá thời gian đồng bộ mô hình (30 giây). Hãy kiểm tra kết nối mạng."
                 _uiState.update {
                     it.copy(
-                        modelSyncStatusMessage = "Quá thời gian đồng bộ mô hình (30 giây). Hãy kiểm tra kết nối mạng.",
+                        keyStatusMessage = if (candidateKey.isNotEmpty()) timeoutMsg else it.keyStatusMessage,
+                        keyStatusSuccess = if (candidateKey.isNotEmpty()) false else it.keyStatusSuccess,
+                        modelSyncStatusMessage = timeoutMsg,
                         modelSyncSuccess = false
                     )
                 }
@@ -549,9 +602,12 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 throw e
             } catch (e: Throwable) {
                 Log.e(TAG, "Unexpected account model sync error", e)
+                val msg = "Lỗi đồng bộ mô hình: ${e.localizedMessage ?: e.javaClass.simpleName}"
                 _uiState.update {
                     it.copy(
-                        modelSyncStatusMessage = "Lỗi đồng bộ mô hình: ${e.localizedMessage ?: e.javaClass.simpleName}",
+                        keyStatusMessage = if (candidateKey.isNotEmpty()) msg else it.keyStatusMessage,
+                        keyStatusSuccess = if (candidateKey.isNotEmpty()) false else it.keyStatusSuccess,
+                        modelSyncStatusMessage = msg,
                         modelSyncSuccess = false
                     )
                 }
@@ -573,17 +629,24 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun saveAndVerifyApiKey(rawKey: String, modelId: String) {
-        val trimmed = rawKey.trim()
+        val trimmed = AiResponseParser.sanitizeApiKey(rawKey)
         val current = _uiState.value.keyConfig
         val existingCustomModels = _uiState.value.syncedModels.filter { it.source == "custom" }
-        val next = current.copy(apiKey = trimmed, modelId = modelId.trim())
+        val next = current.copy(
+            apiKey = trimmed,
+            modelId = modelId.trim(),
+            providerMode = if (trimmed.isNotEmpty()) AiProviderMode.PERSONAL_API_KEY else AiProviderMode.GOOGLE_GEMINI
+        )
         keyPrefs.save(next)
         _uiState.update {
             it.copy(
                 keyConfig = next,
                 isVerifyingKey = true,
                 isSyncingModels = true,
-                keyStatusMessage = null
+                keyStatusMessage = "Đang kiểm tra API Key & đồng bộ danh sách mô hình...",
+                keyStatusSuccess = true,
+                modelSyncStatusMessage = "Đang đồng bộ danh sách mô hình từ API Key...",
+                modelSyncSuccess = true
             )
         }
         viewModelScope.launch {
@@ -598,48 +661,79 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     val merged = AiResponseParser.sortSyncedModels(existingCustomModels + syncResult.models)
                     val now = System.currentTimeMillis()
                     keyPrefs.saveSyncedModels(merged, now)
+
+                    val currentId = next.effectiveModelId
+                    val isCurrentValid = syncResult.models.any { it.modelId.equals(currentId, ignoreCase = true) } ||
+                        existingCustomModels.any { it.modelId.equals(currentId, ignoreCase = true) }
+                    val autoPicked = if (!isCurrentValid) AiResponseParser.pickBestChatModel(syncResult.models) else null
+                    val finalModelId = autoPicked?.modelId ?: currentId
+                    val verifiedConfig = next.copy(
+                        modelId = finalModelId,
+                        providerMode = AiProviderMode.PERSONAL_API_KEY
+                    )
+                    keyPrefs.save(verifiedConfig)
+
+                    val finalMessage = buildString {
+                        append(syncResult.message)
+                        if (autoPicked != null) {
+                            append(" Đã tự động chọn '${autoPicked.modelId}' và chuyển sang dùng API Key riêng.")
+                        } else {
+                            append(" Đã chuyển sang dùng API Key riêng.")
+                        }
+                    }
+
                     _uiState.update {
                         it.copy(
+                            keyConfig = verifiedConfig,
                             isVerifyingKey = false,
                             isSyncingModels = false,
                             syncedModels = merged,
                             syncedModelsUpdatedAt = now,
-                            keyStatusMessage = syncResult.message,
+                            keyStatusMessage = finalMessage,
                             keyStatusSuccess = true,
-                            modelSyncStatusMessage = syncResult.message,
+                            modelSyncStatusMessage = finalMessage,
                             modelSyncSuccess = true
                         )
                     }
                 }.onFailure { err ->
                     Log.e(TAG, "API key verification failed", err)
+                    val errText = err.localizedMessage ?: "Kiểm tra API Key thất bại."
                     _uiState.update {
                         it.copy(
                             isVerifyingKey = false,
                             isSyncingModels = false,
-                            keyStatusMessage = err.localizedMessage ?: "Kiểm tra API Key thất bại.",
-                            keyStatusSuccess = false
+                            keyStatusMessage = errText,
+                            keyStatusSuccess = false,
+                            modelSyncStatusMessage = errText,
+                            modelSyncSuccess = false
                         )
                     }
                 }
             } catch (e: TimeoutCancellationException) {
+                val timeoutMsg = "Quá thời gian kiểm tra kết nối (30 giây). Hãy kiểm tra mạng."
                 _uiState.update {
                     it.copy(
                         isVerifyingKey = false,
                         isSyncingModels = false,
-                        keyStatusMessage = "Quá thời gian kiểm tra kết nối. Hãy kiểm tra mạng.",
-                        keyStatusSuccess = false
+                        keyStatusMessage = timeoutMsg,
+                        keyStatusSuccess = false,
+                        modelSyncStatusMessage = timeoutMsg,
+                        modelSyncSuccess = false
                     )
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
                 Log.e(TAG, "Unexpected API key verification failure", e)
+                val msg = "Lỗi kiểm tra API Key: ${e.localizedMessage ?: e.javaClass.simpleName}"
                 _uiState.update {
                     it.copy(
                         isVerifyingKey = false,
                         isSyncingModels = false,
-                        keyStatusMessage = "Lỗi kiểm tra API Key: ${e.localizedMessage ?: e.javaClass.simpleName}",
-                        keyStatusSuccess = false
+                        keyStatusMessage = msg,
+                        keyStatusSuccess = false,
+                        modelSyncStatusMessage = msg,
+                        modelSyncSuccess = false
                     )
                 }
             } finally {
@@ -782,7 +876,13 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                             question = question,
                             history = historySnapshot,
                             attachedPageBitmap = pageBmp,
-                            attachedPageNumber = explicitPage
+                            attachedPageNumber = explicitPage,
+                            onAutoResolvedModel = { bestModel, synced ->
+                                applyAutoResolvedModel(bestModel, synced)
+                                _uiState.update {
+                                    it.copy(docsStatusText = "Đã chuyển sang ${bestModel.modelId}, đang trả lời...")
+                                }
+                            }
                         )
                     }
                 }
@@ -993,7 +1093,13 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                             apiKey = cfg.trimmedKey,
                             modelId = cfg.effectiveModelId,
                             problemBitmap = state.problemBitmap,
-                            problemNote = state.problemNote
+                            problemNote = state.problemNote,
+                            onAutoResolvedModel = { bestModel, synced ->
+                                applyAutoResolvedModel(bestModel, synced)
+                                _uiState.update {
+                                    it.copy(problemStatusText = "Đã chuyển sang ${bestModel.modelId}, đang dựng hình...")
+                                }
+                            }
                         )
                     }
                 }
