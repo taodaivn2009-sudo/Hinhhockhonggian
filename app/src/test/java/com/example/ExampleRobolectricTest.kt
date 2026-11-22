@@ -1054,6 +1054,83 @@ class ExampleRobolectricTest {
         assertTrue("Geo2DPersistence must preserve VectorObj.dashed", restoredVec.dashed)
         assertEquals("#F43F5E", restoredVec.colorHex)
     }
+
+    @Test
+    fun `ai chat history sanitization streaming preview and provider switching stay resilient`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+
+        // 1. History after an error turn must NOT leave a dangling user turn before next sendMessage
+        val historyWithError = listOf(
+            AiChatMessage("u1", isUser = true, text = "Câu hỏi 1"),
+            AiChatMessage("e1", isUser = false, text = "App Check 403", isError = true)
+        )
+        assertTrue(
+            "History ending in a failed turn must sanitize to empty so next turn starts cleanly",
+            AiResponseParser.sanitizeChatHistory(historyWithError).isEmpty()
+        )
+
+        // Mixed valid + error + leading model turns must collapse into strict user -> model alternation
+        val mixedHistory = listOf(
+            AiChatMessage("m0", isUser = false, text = "Orphan model"),
+            AiChatMessage("u1", isUser = true, text = "Hỏi 1"),
+            AiChatMessage("a1", isUser = false, text = "Đáp 1"),
+            AiChatMessage("u2", isUser = true, text = "Hỏi 2 lỗi"),
+            AiChatMessage("e2", isUser = false, text = "Timeout", isError = true),
+            AiChatMessage("u3", isUser = true, text = "Hỏi 3"),
+            AiChatMessage("a3", isUser = false, text = "Đáp 3"),
+            AiChatMessage("u4", isUser = true, text = "Hỏi 4 chưa có đáp")
+        )
+        val clean = AiResponseParser.sanitizeChatHistory(mixedHistory)
+        assertEquals(4, clean.size)
+        assertTrue(clean[0].isUser && clean[0].text == "Hỏi 1")
+        assertTrue(!clean[1].isUser && clean[1].text == "Đáp 1")
+        assertTrue(clean[2].isUser && clean[2].text == "Hỏi 3")
+        assertTrue(!clean[3].isUser && clean[3].text == "Đáp 3")
+
+        // 2. Streaming JSON preview extracts Vietnamese answer cleanly before JSON closes
+        val partialJson = """{"answer": "Công thức khoảng cách:\n d = |u, v| / \"chuẩn\""""
+        val preview = AiResponseParser.extractStreamingAnswerPreview(partialJson)
+        assertEquals("Công thức khoảng cách:\n d = |u, v| / \"chuẩn\"", preview)
+
+        // 3. Drawing plan parser tolerates lowercase scene3d and missing target
+        val lenientJson = """
+            {
+              "title": "Hình lập phương",
+              "scene3d": {
+                "shapeKey": "cube",
+                "a": 4.0
+              }
+            }
+        """.trimIndent()
+        val parsedLenient = AiResponseParser.parseDrawingPlan(lenientJson)
+        assertTrue(parsedLenient != null && parsedLenient.target == AiDrawTarget.SPACE_3D)
+        assertEquals("cube", parsedLenient!!.scene3D!!.shapeKey)
+
+        // 4. Provider mode switching works when both Google Sign-In & personal API key are configured
+        val profile = GoogleUserProfile("u1", "Jansen", "jansen@gmail.com", null)
+        val prefs = AiKeyPreferences(context)
+        val keyOnlyMode = AiKeyConfig(
+            apiKey = "AIzaSyTestKey12345",
+            modelId = AiModelPreset.GEMINI_3_8_FLASH.modelId,
+            providerMode = AiProviderMode.PERSONAL_API_KEY
+        )
+        prefs.save(keyOnlyMode)
+        val reloaded = prefs.load()
+        assertEquals(AiProviderMode.PERSONAL_API_KEY, reloaded.providerMode)
+
+        val stateUsingKey = AiAssistantUiState(googleUser = profile, keyConfig = reloaded)
+        assertTrue(stateUsingKey.canSwitchProvider)
+        assertFalse(stateUsingKey.useGoogleGeminiActive)
+        assertEquals("API Key riêng", stateUsingKey.activeProviderShortLabel)
+
+        val stateUsingGoogle = AiAssistantUiState(
+            googleUser = profile,
+            keyConfig = reloaded.copy(providerMode = AiProviderMode.GOOGLE_GEMINI)
+        )
+        assertTrue(stateUsingGoogle.useGoogleGeminiActive)
+        assertEquals("Google Gemini", stateUsingGoogle.activeProviderShortLabel)
+        prefs.clearKey()
+    }
 }
 
 

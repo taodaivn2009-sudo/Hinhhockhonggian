@@ -12,6 +12,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -20,7 +22,10 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material3.*
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -132,9 +137,9 @@ fun AiWorkspaceScreen(
                                     maxLines = 1
                                 )
                                 Text(
-                                    text = "Google Gemini · ${uiState.keyConfig.effectiveModelId}",
+                                    text = "${uiState.activeProviderShortLabel} · ${uiState.keyConfig.effectiveModelId}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = EmeraldLight,
+                                    color = if (uiState.useGoogleGeminiActive) EmeraldLight else CyanAccent,
                                     fontSize = 11.sp,
                                     maxLines = 1
                                 )
@@ -152,6 +157,8 @@ fun AiWorkspaceScreen(
                         AiSubTab.DOCS_QA -> AiDocsQaTab(
                             uiState = uiState,
                             onSendQuestion = { aiViewModel.askDocumentQuestion(it) },
+                            onCancelQuestion = { aiViewModel.cancelDocumentQuestion() },
+                            onRetryLastQuestion = { aiViewModel.retryLastDocumentQuestion() },
                             onClearAttachedPage = { aiViewModel.setAttachedPdfPage(null) },
                             onClearChat = { aiViewModel.clearChatHistory() },
                             onOpenPdfPage = onOpenPdfPage,
@@ -166,6 +173,7 @@ fun AiWorkspaceScreen(
                             onNoteChange = { aiViewModel.updateProblemNote(it) },
                             onClearInput = { aiViewModel.clearProblemInput() },
                             onAnalyzeClick = { aiViewModel.analyzeProblemForDrawing() },
+                            onCancelAnalyze = { aiViewModel.cancelProblemAnalysis() },
                             onApplyDrawingPlan = onApplyDrawingPlan,
                             onOpenPdfPage = onOpenPdfPage,
                             onGoToKeyTab = { aiViewModel.selectSubTab(AiSubTab.API_KEY) },
@@ -219,10 +227,12 @@ fun AiWorkspaceScreen(
                                 AiKeySetupSection(
                                     googleUser = uiState.googleUser,
                                     isSigningIn = uiState.isSigningIn,
+                                    isTestingGoogleAi = uiState.isTestingGoogleAi,
                                     authStatusMessage = uiState.authStatusMessage,
                                     authStatusSuccess = uiState.authStatusSuccess,
                                     onSignInWithGoogle = triggerGoogleSignIn,
                                     onSignOutGoogle = { aiViewModel.signOutGoogle(context) },
+                                    onTestGoogleAi = { aiViewModel.testGoogleGeminiConnection() },
                                     keyConfig = uiState.keyConfig,
                                     isVerifying = uiState.isVerifyingKey,
                                     statusMessage = uiState.keyStatusMessage,
@@ -230,6 +240,7 @@ fun AiWorkspaceScreen(
                                     onSaveAndVerify = { key, model -> aiViewModel.saveAndVerifyApiKey(key, model) },
                                     onSaveOnly = { key, model -> aiViewModel.saveApiKey(key, model) },
                                     onSelectModel = { aiViewModel.selectModel(it) },
+                                    onSelectProviderMode = { aiViewModel.selectProviderMode(it) },
                                     onClearKey = { aiViewModel.clearApiKey() }
                                 )
                             }
@@ -330,6 +341,8 @@ private fun AiSubTabBar(
 private fun AiDocsQaTab(
     uiState: AiAssistantUiState,
     onSendQuestion: (String) -> Unit,
+    onCancelQuestion: () -> Unit,
+    onRetryLastQuestion: () -> Unit,
     onClearAttachedPage: () -> Unit,
     onClearChat: () -> Unit,
     onOpenPdfPage: (Int) -> Unit,
@@ -340,9 +353,11 @@ private fun AiDocsQaTab(
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
-    LaunchedEffect(uiState.messages.size) {
-        if (uiState.messages.isNotEmpty()) {
-            listState.animateScrollToItem(uiState.messages.lastIndex)
+    // Scroll accurately to the TRUE last item (including loading/streaming bubble) whenever chat updates
+    LaunchedEffect(uiState.messages.size, uiState.isAskingDocs, uiState.streamingDocsAnswer.length / 40) {
+        val total = listState.layoutInfo.totalItemsCount
+        if (total > 0) {
+            listState.animateScrollToItem(total - 1)
         }
     }
 
@@ -452,34 +467,72 @@ private fun AiDocsQaTab(
                 }
 
                 items(uiState.messages, key = { it.id }) { msg ->
+                    val isLatestError = msg.isError && msg.id == uiState.messages.lastOrNull()?.id && !uiState.isAskingDocs
                     AiChatBubbleCard(
                         message = msg,
                         onOpenPdfPage = onOpenPdfPage,
+                        onRetry = if (isLatestError && !uiState.lastFailedDocsQuestion.isNullOrBlank()) onRetryLastQuestion else null,
+                        onOpenSettings = if (isLatestError) onGoToKeyTab else null,
                         modifier = Modifier.widthIn(max = 720.dp)
                     )
                 }
 
                 if (uiState.isAskingDocs) {
                     item(key = "ai_loading_bubble") {
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .widthIn(max = 720.dp)
                                 .liquidGlassSurface(
                                     shape = RoundedCornerShape(16.dp),
                                     cornerRadiusDp = 16.dp,
-                                    fallbackBg = SlateDark
+                                    fallbackBg = SlateDark,
+                                    accentBorder = CyanAccent.copy(alpha = 0.45f)
                                 )
                                 .padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            CircularProgressIndicator(color = CyanAccent, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
-                            Text(
-                                text = "AI đang tra cứu tài liệu PDF 388 trang...",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = SlateTextPrimary
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                CircularProgressIndicator(color = CyanAccent, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = uiState.docsStatusText.ifBlank { "AI đang tra cứu tài liệu PDF 388 trang..." },
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = CyanAccent,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    if (uiState.docsElapsedSeconds > 0) {
+                                        Text(
+                                            text = "Đã chờ ${uiState.docsElapsedSeconds}s · Đang nhận phản hồi",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = SlateTextSecondary,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                                TextButton(
+                                    onClick = onCancelQuestion,
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    modifier = Modifier.testTag("ai_docs_cancel_btn")
+                                ) {
+                                    Icon(Icons.Default.StopCircle, contentDescription = null, tint = RoseAccent, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Hủy", color = RoseAccent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                            }
+                            if (uiState.streamingDocsAnswer.isNotBlank()) {
+                                HorizontalDivider(color = SlateBorder.copy(alpha = 0.35f))
+                                Text(
+                                    text = uiState.streamingDocsAnswer,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = SlateTextPrimary,
+                                    lineHeight = 21.sp
+                                )
+                            }
                         }
                     }
                 }
@@ -542,6 +595,16 @@ private fun AiDocsQaTab(
                     )
                 },
                 maxLines = 3,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(
+                    onSend = {
+                        val q = inputText.trim()
+                        if (q.isNotEmpty() && !uiState.isAskingDocs) {
+                            inputText = ""
+                            onSendQuestion(q)
+                        }
+                    }
+                ),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color.Transparent,
                     unfocusedBorderColor = Color.Transparent,
@@ -586,6 +649,8 @@ private fun AiDocsQaTab(
 private fun AiChatBubbleCard(
     message: AiChatMessage,
     onOpenPdfPage: (Int) -> Unit,
+    onRetry: (() -> Unit)? = null,
+    onOpenSettings: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val bgColor = when {
@@ -641,6 +706,39 @@ private fun AiChatBubbleCard(
             color = SlateTextPrimary,
             lineHeight = 21.sp
         )
+
+        if (message.isError && (onRetry != null || onOpenSettings != null)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (onRetry != null) {
+                    Button(
+                        onClick = onRetry,
+                        colors = ButtonDefaults.buttonColors(containerColor = CyanAccent, contentColor = Color.Black),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier
+                            .defaultMinSize(minHeight = 40.dp)
+                            .testTag("ai_docs_retry_btn")
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Thử lại", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+                if (onOpenSettings != null) {
+                    OutlinedButton(
+                        onClick = onOpenSettings,
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.defaultMinSize(minHeight = 40.dp)
+                    ) {
+                        Text("Kiểm tra kết nối / Key", color = SlateTextPrimary, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
 
         if (message.suggestedPages.isNotEmpty()) {
             HorizontalDivider(color = SlateBorder.copy(alpha = 0.4f))

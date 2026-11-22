@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -39,6 +40,7 @@ data class AiAssistantUiState(
     // Google Sign-In + keyless Firebase AI Logic (Google Gemini)
     val googleUser: GoogleUserProfile? = null,
     val isSigningIn: Boolean = false,
+    val isTestingGoogleAi: Boolean = false,
     val authStatusMessage: String? = null,
     val authStatusSuccess: Boolean = false,
     val authToast: AuthToastEvent? = null,
@@ -53,21 +55,48 @@ data class AiAssistantUiState(
     // Document Q&A chat state
     val messages: List<AiChatMessage> = emptyList(),
     val isAskingDocs: Boolean = false,
+    val streamingDocsAnswer: String = "",
+    val docsStatusText: String = "",
+    val docsElapsedSeconds: Int = 0,
+    val lastFailedDocsQuestion: String? = null,
     val attachedPdfPage: Int? = null,
 
     // Problem Photo -> Draw 3D/2D state
     val problemBitmap: Bitmap? = null,
     val problemNote: String = "",
     val isAnalyzingProblem: Boolean = false,
+    val problemStatusText: String = "",
+    val problemElapsedSeconds: Int = 0,
     val problemError: String? = null,
     val latestDrawingPlan: AiDrawingPlan? = null
 ) {
     val isSignedInWithGoogle: Boolean get() = googleUser != null
     val isAiReady: Boolean get() = isSignedInWithGoogle || keyConfig.hasKey
+    val canSwitchProvider: Boolean get() = isSignedInWithGoogle && keyConfig.hasKey
+
+    /**
+     * Resolves which backend handles AI requests:
+     * - If both Google Sign-In and a personal API key are available, respects user's providerMode choice.
+     * - Otherwise automatically uses whichever is configured.
+     */
+    val useGoogleGeminiActive: Boolean
+        get() = when {
+            isSignedInWithGoogle && keyConfig.hasKey ->
+                keyConfig.providerMode != AiProviderMode.PERSONAL_API_KEY
+            isSignedInWithGoogle -> true
+            else -> false
+        }
+
+    val activeProviderShortLabel: String
+        get() = when {
+            useGoogleGeminiActive -> "Google Gemini"
+            keyConfig.hasKey -> "API Key riêng"
+            else -> "Chưa kết nối"
+        }
 
     val activeProviderLabel: String
         get() = when {
-            isSignedInWithGoogle -> "Google Gemini · Không cần API Key"
+            useGoogleGeminiActive -> "Google Gemini · Không cần API Key"
             keyConfig.hasKey -> "API Key riêng (${keyConfig.maskedKey})"
             else -> "Chưa đăng nhập Google hoặc nhập Key"
         }
@@ -81,6 +110,9 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     private var msgSeq = 1
     private var toastSeq = 1L
     private var toastAutoDismissJob: Job? = null
+    private var activeDocsJob: Job? = null
+    private var activeProblemJob: Job? = null
+    private var activeTestJob: Job? = null
     private var attemptedSilentAuth = false
 
     private val _uiState = MutableStateFlow(createInitialState())
@@ -110,6 +142,9 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     override fun onCleared() {
         super.onCleared()
         toastAutoDismissJob?.cancel()
+        activeDocsJob?.cancel()
+        activeProblemJob?.cancel()
+        activeTestJob?.cancel()
         pdfRenderer?.close()
         pdfRenderer = null
     }
@@ -151,7 +186,59 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // ================= GOOGLE SIGN-IN (KEYLESS GOOGLE GEMINI) =================
+    // ================= GOOGLE SIGN-IN & PROVIDER SELECTION =================
+
+    fun selectProviderMode(mode: AiProviderMode) {
+        val current = _uiState.value.keyConfig
+        val next = current.copy(providerMode = mode)
+        keyPrefs.save(next)
+        _uiState.update { it.copy(keyConfig = next) }
+    }
+
+    fun testGoogleGeminiConnection() {
+        if (_uiState.value.isTestingGoogleAi) return
+        val modelId = _uiState.value.keyConfig.effectiveModelId
+        _uiState.update {
+            it.copy(
+                isTestingGoogleAi = true,
+                authStatusMessage = "Đang kiểm tra App Check & Google Gemini ($modelId)...",
+                authStatusSuccess = true
+            )
+        }
+        activeTestJob?.cancel()
+        activeTestJob = viewModelScope.launch {
+            try {
+                val res = FirebaseAiClient.testConnection(modelId)
+                res.onSuccess { okMsg ->
+                    _uiState.update {
+                        it.copy(
+                            authStatusMessage = okMsg,
+                            authStatusSuccess = true
+                        )
+                    }
+                }.onFailure { err ->
+                    _uiState.update {
+                        it.copy(
+                            authStatusMessage = err.localizedMessage ?: "Kiểm tra kết nối Google Gemini thất bại.",
+                            authStatusSuccess = false
+                        )
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.e(TAG, "Unexpected error testing Google Gemini", e)
+                _uiState.update {
+                    it.copy(
+                        authStatusMessage = "Lỗi kiểm tra kết nối: ${e.localizedMessage ?: e.javaClass.simpleName}",
+                        authStatusSuccess = false
+                    )
+                }
+            } finally {
+                _uiState.update { it.copy(isTestingGoogleAi = false) }
+            }
+        }
+    }
 
     fun attemptSilentGoogleSignIn(context: Context) {
         if (attemptedSilentAuth || _uiState.value.isSignedInWithGoogle) return
@@ -175,58 +262,73 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         if (_uiState.value.isSigningIn) return
         _uiState.update { it.copy(isSigningIn = true, authStatusMessage = null) }
         viewModelScope.launch {
-            when (val outcome = GoogleAuthManager.signInWithGoogle(activity)) {
-                is GoogleSignInOutcome.Success -> {
-                    val user = outcome.user
-                    _uiState.update { current ->
-                        current.copy(
-                            googleUser = user,
-                            isSigningIn = false,
-                            authStatusMessage = "Đăng nhập thành công! Xin chào ${user.displayName} — bạn có thể dùng Google Gemini ngay mà không cần API Key.",
-                            authStatusSuccess = true,
-                            keyStatusMessage = null
+            try {
+                when (val outcome = GoogleAuthManager.signInWithGoogle(activity)) {
+                    is GoogleSignInOutcome.Success -> {
+                        val user = outcome.user
+                        _uiState.update { current ->
+                            current.copy(
+                                googleUser = user,
+                                isSigningIn = false,
+                                authStatusMessage = "Đăng nhập thành công! Xin chào ${user.displayName} — bạn có thể dùng Google Gemini ngay mà không cần API Key.",
+                                authStatusSuccess = true,
+                                keyStatusMessage = null
+                            )
+                        }
+                        showAuthToast(
+                            title = "Đăng nhập Google thành công!",
+                            subtitle = "Xin chào ${user.displayName} · Sẵn sàng dùng Google Gemini",
+                            user = user,
+                            isSuccess = true
                         )
                     }
-                    showAuthToast(
-                        title = "Đăng nhập Google thành công!",
-                        subtitle = "Xin chào ${user.displayName} · Sẵn sàng dùng Google Gemini",
-                        user = user,
-                        isSuccess = true
-                    )
-                }
-                is GoogleSignInOutcome.Cancelled -> {
-                    val hint = outcome.diagnosticHint ?: "Đã hủy đăng nhập Google."
-                    _uiState.update {
-                        it.copy(
-                            isSigningIn = false,
-                            authStatusMessage = hint,
-                            authStatusSuccess = false
+                    is GoogleSignInOutcome.Cancelled -> {
+                        val hint = outcome.diagnosticHint ?: "Đã hủy đăng nhập Google."
+                        _uiState.update {
+                            it.copy(
+                                isSigningIn = false,
+                                authStatusMessage = hint,
+                                authStatusSuccess = false
+                            )
+                        }
+                        showAuthToast(
+                            title = "Chưa hoàn tất đăng nhập",
+                            subtitle = hint,
+                            user = null,
+                            isSuccess = false,
+                            durationMs = 5200L
                         )
                     }
-                    showAuthToast(
-                        title = "Chưa hoàn tất đăng nhập",
-                        subtitle = hint,
-                        user = null,
-                        isSuccess = false,
-                        durationMs = 5200L
-                    )
-                }
-                is GoogleSignInOutcome.Error -> {
-                    _uiState.update {
-                        it.copy(
-                            isSigningIn = false,
-                            authStatusMessage = outcome.message,
-                            authStatusSuccess = false
+                    is GoogleSignInOutcome.Error -> {
+                        _uiState.update {
+                            it.copy(
+                                isSigningIn = false,
+                                authStatusMessage = outcome.message,
+                                authStatusSuccess = false
+                            )
+                        }
+                        showAuthToast(
+                            title = "Đăng nhập Google thất bại",
+                            subtitle = outcome.message,
+                            user = null,
+                            isSuccess = false,
+                            durationMs = 5500L
                         )
                     }
-                    showAuthToast(
-                        title = "Đăng nhập Google thất bại",
-                        subtitle = outcome.message,
-                        user = null,
-                        isSuccess = false,
-                        durationMs = 5500L
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.e(TAG, "Unexpected signInWithGoogle error", e)
+                _uiState.update {
+                    it.copy(
+                        isSigningIn = false,
+                        authStatusMessage = "Lỗi đăng nhập: ${e.localizedMessage ?: e.javaClass.simpleName}",
+                        authStatusSuccess = false
                     )
                 }
+            } finally {
+                _uiState.update { it.copy(isSigningIn = false) }
             }
         }
     }
@@ -255,7 +357,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     // ================= MANUAL API KEY FALLBACK =================
 
     fun saveApiKey(rawKey: String, modelId: String = _uiState.value.keyConfig.effectiveModelId) {
-        val next = AiKeyConfig(apiKey = rawKey.trim(), modelId = modelId.trim())
+        val current = _uiState.value.keyConfig
+        val next = current.copy(apiKey = rawKey.trim(), modelId = modelId.trim())
         keyPrefs.save(next)
         _uiState.update {
             it.copy(
@@ -277,7 +380,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         keyPrefs.clearKey()
         _uiState.update {
             it.copy(
-                keyConfig = it.keyConfig.copy(apiKey = ""),
+                keyConfig = it.keyConfig.copy(apiKey = "", providerMode = AiProviderMode.GOOGLE_GEMINI),
                 keyStatusMessage = "Đã xóa API Key khỏi thiết bị.",
                 keyStatusSuccess = false
             )
@@ -286,7 +389,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
 
     fun saveAndVerifyApiKey(rawKey: String, modelId: String) {
         val trimmed = rawKey.trim()
-        val next = AiKeyConfig(apiKey = trimmed, modelId = modelId.trim())
+        val current = _uiState.value.keyConfig
+        val next = current.copy(apiKey = trimmed, modelId = modelId.trim())
         keyPrefs.save(next)
         _uiState.update {
             it.copy(
@@ -326,6 +430,17 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: Throwable) {
+                Log.e(TAG, "Unexpected API key verification failure", e)
+                _uiState.update {
+                    it.copy(
+                        isVerifyingKey = false,
+                        keyStatusMessage = "Lỗi kiểm tra API Key: ${e.localizedMessage ?: e.javaClass.simpleName}",
+                        keyStatusSuccess = false
+                    )
+                }
+            } finally {
+                _uiState.update { it.copy(isVerifyingKey = false) }
             }
         }
     }
@@ -348,7 +463,40 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun clearChatHistory() {
-        _uiState.update { it.copy(messages = emptyList(), attachedPdfPage = null) }
+        activeDocsJob?.cancel()
+        activeDocsJob = null
+        _uiState.update {
+            it.copy(
+                messages = emptyList(),
+                isAskingDocs = false,
+                streamingDocsAnswer = "",
+                docsStatusText = "",
+                docsElapsedSeconds = 0,
+                lastFailedDocsQuestion = null,
+                attachedPdfPage = null
+            )
+        }
+    }
+
+    fun cancelDocumentQuestion() {
+        val job = activeDocsJob ?: return
+        activeDocsJob = null
+        job.cancel()
+        _uiState.update {
+            it.copy(
+                isAskingDocs = false,
+                streamingDocsAnswer = "",
+                docsStatusText = "",
+                docsElapsedSeconds = 0
+            )
+        }
+    }
+
+    fun retryLastDocumentQuestion() {
+        val q = _uiState.value.lastFailedDocsQuestion?.trim().orEmpty()
+        if (q.isNotEmpty()) {
+            askDocumentQuestion(q)
+        }
     }
 
     fun askDocumentQuestion(rawQuestion: String) {
@@ -367,7 +515,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
 
-        val useGoogleGemini = snapshot.isSignedInWithGoogle
+        val useGoogleGemini = snapshot.useGoogleGeminiActive
         val cfg = snapshot.keyConfig
         val explicitPage = snapshot.attachedPdfPage ?: extractMentionedPage(question)
         val userMsg = AiChatMessage(
@@ -377,25 +525,52 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             attachedPdfPage = explicitPage
         )
         val historySnapshot = snapshot.messages
+        val providerName = if (useGoogleGemini) "Google Gemini" else "API Key riêng"
+
         _uiState.update {
             it.copy(
                 messages = it.messages + userMsg,
                 isAskingDocs = true,
+                streamingDocsAnswer = "",
+                docsStatusText = if (explicitPage != null) {
+                    "Đang đọc ảnh Trang $explicitPage & kết nối $providerName..."
+                } else {
+                    "Đang kết nối $providerName (${cfg.effectiveModelId})..."
+                },
+                docsElapsedSeconds = 0,
+                lastFailedDocsQuestion = null,
                 attachedPdfPage = null
             )
         }
 
-        viewModelScope.launch {
+        activeDocsJob?.cancel()
+        activeDocsJob = viewModelScope.launch {
+            val timerJob = launch {
+                var sec = 0
+                while (isActive) {
+                    delay(1_000L)
+                    sec++
+                    _uiState.update { it.copy(docsElapsedSeconds = sec) }
+                }
+            }
             try {
                 val pageBmp = explicitPage?.let { renderPdfPageForAi(it) }
-                val res = withTimeout(60_000L) {
+                val res = withTimeout(90_000L) {
                     if (useGoogleGemini) {
                         FirebaseAiClient.askDocumentAssistant(
                             modelId = cfg.effectiveModelId,
                             question = question,
                             history = historySnapshot,
                             attachedPageBitmap = pageBmp,
-                            attachedPageNumber = explicitPage
+                            attachedPageNumber = explicitPage,
+                            onPartialAnswer = { partial ->
+                                _uiState.update {
+                                    it.copy(
+                                        streamingDocsAnswer = partial,
+                                        docsStatusText = "AI đang trả lời..."
+                                    )
+                                }
+                            }
                         )
                     } else {
                         GeminiApiClient.askDocumentAssistant(
@@ -415,7 +590,12 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                         text = reply.answer,
                         suggestedPages = reply.suggestedPages
                     )
-                    _uiState.update { it.copy(messages = it.messages + aiMsg, isAskingDocs = false) }
+                    _uiState.update {
+                        it.copy(
+                            messages = it.messages + aiMsg,
+                            lastFailedDocsQuestion = null
+                        )
+                    }
                 }.onFailure { err ->
                     Log.e(TAG, "Document Q&A failed", err)
                     val errMsg = AiChatMessage(
@@ -424,18 +604,53 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                         text = err.localizedMessage ?: "Không thể nhận phản hồi từ AI.",
                         isError = true
                     )
-                    _uiState.update { it.copy(messages = it.messages + errMsg, isAskingDocs = false) }
+                    _uiState.update {
+                        it.copy(
+                            messages = it.messages + errMsg,
+                            lastFailedDocsQuestion = question
+                        )
+                    }
                 }
             } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "Document Q&A timed out after 90s", e)
                 val errMsg = AiChatMessage(
                     id = "e_${msgSeq++}",
                     isUser = false,
-                    text = "Yêu cầu quá thời gian chờ (60 giây). Vui lòng thử lại.",
+                    text = "AI không phản hồi sau 90 giây. Hãy kiểm tra kết nối mạng, bấm Thử lại hoặc chọn Gemini 3.5 Flash-Lite trong mục Tài khoản / Key.",
                     isError = true
                 )
-                _uiState.update { it.copy(messages = it.messages + errMsg, isAskingDocs = false) }
+                _uiState.update {
+                    it.copy(
+                        messages = it.messages + errMsg,
+                        lastFailedDocsQuestion = question
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: Throwable) {
+                Log.e(TAG, "Unexpected Document Q&A error", e)
+                val errMsg = AiChatMessage(
+                    id = "e_${msgSeq++}",
+                    isUser = false,
+                    text = "Lỗi không mong muốn khi gọi AI (${e.javaClass.simpleName}): ${e.localizedMessage ?: "Vui lòng thử lại."}",
+                    isError = true
+                )
+                _uiState.update {
+                    it.copy(
+                        messages = it.messages + errMsg,
+                        lastFailedDocsQuestion = question
+                    )
+                }
+            } finally {
+                timerJob.cancel()
+                _uiState.update {
+                    it.copy(
+                        isAskingDocs = false,
+                        streamingDocsAnswer = "",
+                        docsStatusText = "",
+                        docsElapsedSeconds = 0
+                    )
+                }
             }
         }
     }
@@ -444,7 +659,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         return runCatching {
             val r = pdfRenderer ?: PdfBookRenderer(appContext).also { pdfRenderer = it }
             r.open()
-            r.renderPage((page1Based - 1).coerceIn(0, PDF_TOTAL_PAGES - 1), targetWidthPx = 1120)
+            r.renderPage((page1Based - 1).coerceIn(0, PDF_TOTAL_PAGES - 1), targetWidthPx = 1024)
         }.getOrNull()
     }
 
@@ -461,12 +676,31 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun clearProblemInput() {
+        activeProblemJob?.cancel()
+        activeProblemJob = null
         _uiState.update {
             it.copy(
                 problemBitmap = null,
                 problemNote = "",
+                isAnalyzingProblem = false,
+                problemStatusText = "",
+                problemElapsedSeconds = 0,
                 problemError = null,
                 latestDrawingPlan = null
+            )
+        }
+    }
+
+    fun cancelProblemAnalysis() {
+        val job = activeProblemJob ?: return
+        activeProblemJob = null
+        job.cancel()
+        _uiState.update {
+            it.copy(
+                isAnalyzingProblem = false,
+                problemStatusText = "",
+                problemElapsedSeconds = 0,
+                problemError = "Đã hủy yêu cầu phân tích đề bài."
             )
         }
     }
@@ -510,18 +744,46 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
 
-        val useGoogleGemini = state.isSignedInWithGoogle
+        val useGoogleGemini = state.useGoogleGeminiActive
         val cfg = state.keyConfig
+        val providerName = if (useGoogleGemini) "Google Gemini" else "API Key riêng"
 
-        _uiState.update { it.copy(isAnalyzingProblem = true, problemError = null) }
-        viewModelScope.launch {
+        _uiState.update {
+            it.copy(
+                isAnalyzingProblem = true,
+                problemError = null,
+                latestDrawingPlan = null,
+                problemElapsedSeconds = 0,
+                problemStatusText = if (state.problemBitmap != null) {
+                    "Đang gửi ảnh đề bài tới $providerName (${cfg.effectiveModelId})..."
+                } else {
+                    "Đang gửi đề bài tới $providerName (${cfg.effectiveModelId})..."
+                }
+            )
+        }
+
+        activeProblemJob?.cancel()
+        activeProblemJob = viewModelScope.launch {
+            val timerJob = launch {
+                var sec = 0
+                while (isActive) {
+                    delay(1_000L)
+                    sec++
+                    _uiState.update { it.copy(problemElapsedSeconds = sec) }
+                }
+            }
             try {
-                val res = withTimeout(60_000L) {
+                val res = withTimeout(90_000L) {
                     if (useGoogleGemini) {
                         FirebaseAiClient.analyzeProblemToDrawing(
                             modelId = cfg.effectiveModelId,
                             problemBitmap = state.problemBitmap,
-                            problemNote = state.problemNote
+                            problemNote = state.problemNote,
+                            onProgressChars = { chars ->
+                                _uiState.update {
+                                    it.copy(problemStatusText = "AI đang dựng cấu trúc hình... ($chars ký tự)")
+                                }
+                            }
                         )
                     } else {
                         GeminiApiClient.analyzeProblemToDrawing(
@@ -535,7 +797,6 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 res.onSuccess { plan ->
                     _uiState.update {
                         it.copy(
-                            isAnalyzingProblem = false,
                             latestDrawingPlan = plan,
                             problemError = null
                         )
@@ -544,20 +805,35 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     Log.e(TAG, "Problem drawing analysis failed", err)
                     _uiState.update {
                         it.copy(
-                            isAnalyzingProblem = false,
                             problemError = err.localizedMessage ?: "Không thể phân tích đề bài."
                         )
                     }
                 }
             } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "Problem drawing analysis timed out after 90s", e)
                 _uiState.update {
                     it.copy(
-                        isAnalyzingProblem = false,
-                        problemError = "Quá thời gian phân tích đề bài (60 giây). Hãy thử lại."
+                        problemError = "AI không phản hồi sau 90 giây. Hãy kiểm tra mạng, thử chụp ảnh gần/rõ hơn hoặc chuyển sang Gemini 3.5 Flash-Lite."
                     )
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: Throwable) {
+                Log.e(TAG, "Unexpected problem drawing failure", e)
+                _uiState.update {
+                    it.copy(
+                        problemError = "Lỗi khi phân tích đề bài (${e.javaClass.simpleName}): ${e.localizedMessage ?: "Vui lòng thử lại."}"
+                    )
+                }
+            } finally {
+                timerJob.cancel()
+                _uiState.update {
+                    it.copy(
+                        isAnalyzingProblem = false,
+                        problemStatusText = "",
+                        problemElapsedSeconds = 0
+                    )
+                }
             }
         }
     }
@@ -568,15 +844,15 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             appContext.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
             val maxEdge = maxOf(bounds.outWidth, bounds.outHeight)
             var sample = 1
-            while (maxEdge / sample > 2048) sample *= 2
+            while (maxEdge / sample > 1600) sample *= 2
 
             val opts = BitmapFactory.Options().apply { inSampleSize = sample }
             val raw = appContext.contentResolver.openInputStream(uri)?.use {
                 BitmapFactory.decodeStream(it, null, opts)
             } ?: return@runCatching null
 
-            if (raw.width > 1800 || raw.height > 1800) {
-                val scale = 1800f / maxOf(raw.width, raw.height).toFloat()
+            if (raw.width > 1280 || raw.height > 1280) {
+                val scale = 1280f / maxOf(raw.width, raw.height).toFloat()
                 val m = Matrix().apply { postScale(scale, scale) }
                 Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, true)
             } else {

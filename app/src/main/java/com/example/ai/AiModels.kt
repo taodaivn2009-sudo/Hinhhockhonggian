@@ -41,9 +41,20 @@ enum class AiSubTab(val key: String, val label: String) {
     API_KEY("api_key", "Tài khoản / Key")
 }
 
+enum class AiProviderMode(val key: String, val label: String) {
+    GOOGLE_GEMINI("google_gemini", "Google Gemini (Tài khoản Google)"),
+    PERSONAL_API_KEY("personal_api_key", "API Key riêng");
+
+    companion object {
+        fun fromKey(raw: String?): AiProviderMode =
+            entries.firstOrNull { it.key.equals(raw?.trim(), ignoreCase = true) } ?: GOOGLE_GEMINI
+    }
+}
+
 data class AiKeyConfig(
     val apiKey: String = "",
-    val modelId: String = AiModelPreset.GEMINI_3_8_FLASH.modelId
+    val modelId: String = AiModelPreset.GEMINI_3_8_FLASH.modelId,
+    val providerMode: AiProviderMode = AiProviderMode.GOOGLE_GEMINI
 ) {
     val trimmedKey: String get() = apiKey.trim()
     val hasKey: Boolean get() = trimmedKey.isNotEmpty()
@@ -66,23 +77,29 @@ class AiKeyPreferences(context: Context) {
     fun load(): AiKeyConfig = AiKeyConfig(
         apiKey = prefs.getString(KEY_API_KEY, "") ?: "",
         modelId = prefs.getString(KEY_MODEL_ID, AiModelPreset.GEMINI_3_8_FLASH.modelId)
-            ?: AiModelPreset.GEMINI_3_8_FLASH.modelId
+            ?: AiModelPreset.GEMINI_3_8_FLASH.modelId,
+        providerMode = AiProviderMode.fromKey(prefs.getString(KEY_PROVIDER_MODE, AiProviderMode.GOOGLE_GEMINI.key))
     )
 
     fun save(config: AiKeyConfig) {
         prefs.edit()
             .putString(KEY_API_KEY, config.trimmedKey)
             .putString(KEY_MODEL_ID, config.effectiveModelId)
+            .putString(KEY_PROVIDER_MODE, config.providerMode.key)
             .apply()
     }
 
     fun clearKey() {
-        prefs.edit().remove(KEY_API_KEY).apply()
+        prefs.edit()
+            .remove(KEY_API_KEY)
+            .putString(KEY_PROVIDER_MODE, AiProviderMode.GOOGLE_GEMINI.key)
+            .apply()
     }
 
     companion object {
         private const val KEY_API_KEY = "gemini_user_api_key"
         private const val KEY_MODEL_ID = "gemini_model_id"
+        private const val KEY_PROVIDER_MODE = "gemini_provider_mode"
     }
 }
 
@@ -216,6 +233,85 @@ object AiResponseParser {
         return null
     }
 
+    /**
+     * Sanitizes conversation history before multi-turn Gemini calls:
+     * - Strips error messages and blank messages
+     * - Drops leading model messages so history always starts with a user turn
+     * - Collapses consecutive same-role turns so roles strictly alternate user -> model
+     * - Drops any trailing dangling user turn so history always ends with a model turn
+     *   before the caller appends the new user message.
+     */
+    fun sanitizeChatHistory(history: List<AiChatMessage>, maxTurns: Int = 6): List<AiChatMessage> {
+        val cleaned = mutableListOf<AiChatMessage>()
+        for (msg in history) {
+            if (msg.isError || msg.text.isBlank()) continue
+            if (cleaned.isEmpty() && !msg.isUser) continue
+            val last = cleaned.lastOrNull()
+            if (last != null && last.isUser == msg.isUser) {
+                cleaned[cleaned.lastIndex] = msg
+            } else {
+                cleaned.add(msg)
+            }
+        }
+        // Ensure history ends on a model reply so the new user prompt never collides with a dangling user turn
+        while (cleaned.isNotEmpty() && cleaned.last().isUser) {
+            cleaned.removeAt(cleaned.lastIndex)
+        }
+        val capped = if (cleaned.size > maxTurns) cleaned.takeLast(maxTurns).toMutableList() else cleaned
+        while (capped.isNotEmpty() && !capped.first().isUser) {
+            capped.removeAt(0)
+        }
+        return capped
+    }
+
+    /**
+     * Incrementally extracts the human-readable "answer" string from a partially streamed
+     * JSON response like `{"answer": "Công thức khoảng cách...\n` so the UI displays
+     * live typing immediately instead of raw JSON syntax.
+     */
+    fun extractStreamingAnswerPreview(rawPartialJson: String): String {
+        val keyIndex = rawPartialJson.indexOf("\"answer\"")
+        if (keyIndex < 0) return ""
+        val colonIndex = rawPartialJson.indexOf(':', startIndex = keyIndex + 8)
+        if (colonIndex < 0) return ""
+        var i = colonIndex + 1
+        while (i < rawPartialJson.length && rawPartialJson[i].isWhitespace()) i++
+        if (i >= rawPartialJson.length || rawPartialJson[i] != '"') return ""
+        i++ // skip opening quote
+
+        val sb = StringBuilder()
+        while (i < rawPartialJson.length) {
+            val ch = rawPartialJson[i]
+            if (ch == '"') break
+            if (ch == '\\') {
+                if (i + 1 >= rawPartialJson.length) break
+                when (val next = rawPartialJson[i + 1]) {
+                    'n' -> { sb.append('\n'); i += 2 }
+                    't' -> { sb.append('\t'); i += 2 }
+                    'r' -> { i += 2 }
+                    '"' -> { sb.append('"'); i += 2 }
+                    '\\' -> { sb.append('\\'); i += 2 }
+                    '/' -> { sb.append('/'); i += 2 }
+                    'u' -> {
+                        if (i + 6 <= rawPartialJson.length) {
+                            val hex = rawPartialJson.substring(i + 2, i + 6)
+                            val code = hex.toIntOrNull(16)
+                            if (code != null) sb.append(code.toChar())
+                            i += 6
+                        } else {
+                            break
+                        }
+                    }
+                    else -> { sb.append(next); i += 2 }
+                }
+            } else {
+                sb.append(ch)
+                i++
+            }
+        }
+        return sb.toString()
+    }
+
     fun parseDocsReply(rawText: String): AiDocsReply {
         val obj = extractJsonObject(rawText) ?: return AiDocsReply(answer = rawText.trim())
         val answer = obj.optString("answer").trim().ifEmpty { rawText.trim() }
@@ -225,8 +321,22 @@ object AiResponseParser {
 
     fun parseDrawingPlan(rawText: String): AiDrawingPlan? {
         val obj = extractJsonObject(rawText) ?: return null
-        val targetStr = obj.optString("target", "3D").trim().uppercase()
-        val target = if (targetStr.contains("2D")) AiDrawTarget.PLANE_2D else AiDrawTarget.SPACE_3D
+        val rawScene3D = obj.optJSONObject("scene3D")
+            ?: obj.optJSONObject("scene3d")
+            ?: obj.optJSONObject("scene_3d")
+        val rawScene2D = obj.optJSONObject("scene2D")
+            ?: obj.optJSONObject("scene2d")
+            ?: obj.optJSONObject("scene_2d")
+
+        val targetStr = obj.optString("target", "").trim().uppercase()
+        val target = when {
+            targetStr.contains("2D") && rawScene2D != null -> AiDrawTarget.PLANE_2D
+            targetStr.contains("3D") && rawScene3D != null -> AiDrawTarget.SPACE_3D
+            rawScene3D != null -> AiDrawTarget.SPACE_3D
+            rawScene2D != null -> AiDrawTarget.PLANE_2D
+            else -> return null
+        }
+
         val title = obj.optString("title").trim().ifEmpty {
             if (target == AiDrawTarget.SPACE_3D) "Hình không gian 3D từ đề bài" else "Hình phẳng & Đồ thị 2D từ đề bài"
         }
@@ -235,13 +345,8 @@ object AiResponseParser {
         val solutionHint = obj.optString("solutionHint").trim()
         val relatedPages = parsePageSuggestions(obj.optJSONArray("relatedPages"))
 
-        val scene3D = if (target == AiDrawTarget.SPACE_3D) {
-            obj.optJSONObject("scene3D")?.let { parse3DSpec(it) }
-        } else null
-
-        val scene2D = if (target == AiDrawTarget.PLANE_2D) {
-            obj.optJSONObject("scene2D")?.let { parse2DSpec(it) }
-        } else null
+        val scene3D = if (target == AiDrawTarget.SPACE_3D) rawScene3D?.let { parse3DSpec(it) } else null
+        val scene2D = if (target == AiDrawTarget.PLANE_2D) rawScene2D?.let { parse2DSpec(it) } else null
 
         if (target == AiDrawTarget.SPACE_3D && scene3D == null) return null
         if (target == AiDrawTarget.PLANE_2D && scene2D == null) return null

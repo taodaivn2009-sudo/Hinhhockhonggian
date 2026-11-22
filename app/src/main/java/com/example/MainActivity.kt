@@ -223,9 +223,11 @@ fun ToolToanRootScreen(
                     context.findActivity()?.let { aiViewModel.signInWithGoogle(it) }
                 },
                 onSignOutGoogle = { aiViewModel.signOutGoogle(context) },
+                onTestGoogleAi = { aiViewModel.testGoogleGeminiConnection() },
                 onSaveAndVerifyAiKey = { key, model -> aiViewModel.saveAndVerifyApiKey(key, model) },
                 onSaveAiKeyOnly = { key, model -> aiViewModel.saveApiKey(key, model) },
                 onSelectAiModel = { aiViewModel.selectModel(it) },
+                onSelectAiProviderMode = { aiViewModel.selectProviderMode(it) },
                 onClearAiKey = { aiViewModel.clearApiKey() },
                 onSwitchWorkspace = onSelectWorkspace
             )

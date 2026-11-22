@@ -25,7 +25,7 @@ object GeminiApiClient {
 
     private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
     private const val CONNECT_TIMEOUT_MS = 15_000
-    private const val READ_TIMEOUT_MS = 60_000
+    private const val READ_TIMEOUT_MS = 85_000
 
     suspend fun verifyApiKey(apiKey: String): Result<String> = withContext(Dispatchers.IO) {
         val cleanKey = apiKey.trim()
@@ -72,8 +72,8 @@ object GeminiApiClient {
             val systemText = buildDocsSystemPrompt()
             val contents = JSONArray()
 
-            // Include last 6 turns of conversation context
-            history.filter { !it.isError }.takeLast(6).forEach { msg ->
+            // Strictly alternate user -> model turns and end with a model turn before the new user prompt
+            AiResponseParser.sanitizeChatHistory(history, maxTurns = 6).forEach { msg ->
                 contents.put(
                     JSONObject().apply {
                         put("role", if (msg.isUser) "user" else "model")
@@ -84,7 +84,7 @@ object GeminiApiClient {
 
             val userParts = JSONArray()
             if (attachedPageBitmap != null) {
-                userParts.put(bitmapToInlineDataPart(attachedPageBitmap, maxDim = 1400))
+                userParts.put(bitmapToInlineDataPart(attachedPageBitmap, maxDim = 1024))
                 val pageNote = attachedPageNumber?.let { " (Đính kèm hình ảnh Trang $it trong tài liệu PDF)" } ?: ""
                 userParts.put(JSONObject().put("text", "$question$pageNote"))
             } else {
@@ -128,7 +128,7 @@ object GeminiApiClient {
         runCatching {
             val parts = JSONArray()
             if (problemBitmap != null) {
-                parts.put(bitmapToInlineDataPart(problemBitmap, maxDim = 1600))
+                parts.put(bitmapToInlineDataPart(problemBitmap, maxDim = 1024))
             }
             val promptLine = buildString {
                 if (problemBitmap != null) {
@@ -207,7 +207,7 @@ object GeminiApiClient {
             }
             return result
         } catch (e: SocketTimeoutException) {
-            throw IllegalStateException("Kết nối tới AI bị quá thời gian (60 giây). Hãy kiểm tra mạng và thử lại.")
+            throw IllegalStateException("Kết nối tới AI bị quá thời gian chờ. Hãy kiểm tra mạng và thử lại.")
         } finally {
             conn.disconnect()
         }
@@ -270,6 +270,17 @@ object GeminiApiClient {
             }
         }
     }
+
+    /**
+     * Ultra-compact TOC summary for problem-to-drawing calls (~1.4KB instead of ~10KB)
+     * so multimodal vision inference responds rapidly without hitting token/latency limits.
+     */
+    internal fun buildCompactProblemTocIndex(): String = """
+        Mục lục nhanh PDF 388 trang (DPAD):
+        - Lớp 10: Hàm bậc 2 (Tr.33-35), Hệ thức lượng tam giác (Tr.39-44), Vectơ & Tích vô hướng (Tr.45-53), Oxy tọa độ (Tr.88-92), PT đường thẳng (Tr.93-98), Đường tròn (Tr.99-101), Elip/Hyperbol/Parabol (Tr.102-108).
+        - Lớp 11: Lượng giác (Tr.111-129), Đạo hàm & Tiếp tuyến (Tr.174-180), Hình không gian giao tuyến/thiết diện/song song/vuông góc (Tr.198-213), Góc & Khoảng cách 3D (Tr.214-225), Khối đa diện & Thể tích (Tr.226-239).
+        - Lớp 12: Đơn điệu/Cực trị/Max-Min/Tiệm cận (Tr.256-282), Khảo sát & Tương giao đồ thị (Tr.283-306), Nguyên hàm/Tích phân/Diện tích-Thể tích (Tr.307-331), Vectơ & Oxyz (Tr.332-352), Mặt cầu/Mặt phẳng/Đường thẳng/Góc-Khoảng cách/Cực trị Oxyz (Tr.353-385).
+    """.trimIndent()
 
     internal fun buildDocsSystemPrompt(): String = """
 Bạn là Trợ lý Toán học THPT (Lớp 10, 11, 12) tích hợp trực tiếp trong ứng dụng Tool Toán.
@@ -342,7 +353,7 @@ Chọn target="2D" cho các bài toán: khảo sát hàm số / vẽ đồ thị
 - `functions`: biểu thức chuẩn dùng biến `x` (và tham số `m` nếu có), hỗ trợ: `+ - * / ^`, `sin(x)`, `cos(x)`, `tan(x)`, `sqrt(x)`, `cbrt(x)`, `ln(x)`, `log(x)`, `log2(x)`, `log(a; x)`, `e^x`, `|x|`, `pi`. Ví dụ: `"x^3 - 3x + 1"`, `"(2x - 1)/(x - 1)"`.
 
 === 4. MỤC LỤC PDF ĐỂ GỢI Ý TRANG CÔNG THỨC LIÊN QUAN ===
-${buildCompactTocIndex()}
+${buildCompactProblemTocIndex()}
 
 BẮT BUỘC TRẢ VỀ JSON HỢP LỆ DUY NHẤT (không bọc markdown):
 {

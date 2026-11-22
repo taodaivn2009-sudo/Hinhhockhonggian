@@ -73,10 +73,12 @@ tailrec fun Context.findActivity(): Activity? = when (this) {
 fun AiKeySetupSection(
     googleUser: GoogleUserProfile?,
     isSigningIn: Boolean,
+    isTestingGoogleAi: Boolean = false,
     authStatusMessage: String?,
     authStatusSuccess: Boolean,
     onSignInWithGoogle: () -> Unit,
     onSignOutGoogle: () -> Unit,
+    onTestGoogleAi: () -> Unit = {},
     keyConfig: AiKeyConfig,
     isVerifying: Boolean,
     statusMessage: String?,
@@ -84,6 +86,7 @@ fun AiKeySetupSection(
     onSaveAndVerify: (apiKey: String, modelId: String) -> Unit,
     onSaveOnly: (apiKey: String, modelId: String) -> Unit,
     onSelectModel: (String) -> Unit,
+    onSelectProviderMode: (AiProviderMode) -> Unit = {},
     onClearKey: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -103,11 +106,69 @@ fun AiKeySetupSection(
         GoogleGeminiAuthCard(
             googleUser = googleUser,
             isSigningIn = isSigningIn,
+            isTestingGoogleAi = isTestingGoogleAi,
             authStatusMessage = authStatusMessage,
             authStatusSuccess = authStatusSuccess,
             onSignInWithGoogle = onSignInWithGoogle,
-            onSignOutGoogle = onSignOutGoogle
+            onSignOutGoogle = onSignOutGoogle,
+            onTestGoogleAi = onTestGoogleAi
         )
+
+        // 1b. Active Provider Switcher when BOTH Google Sign-In & Personal API Key are configured
+        if (googleUser != null && keyConfig.hasKey) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "Nguồn AI đang sử dụng",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = SlateTextPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val useGoogle = keyConfig.providerMode != AiProviderMode.PERSONAL_API_KEY
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .defaultMinSize(minHeight = 42.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (useGoogle) EmeraldAccent.copy(alpha = 0.2f) else SlateDeepest.copy(alpha = 0.55f))
+                            .border(1.dp, if (useGoogle) EmeraldAccent else SlateBorder, RoundedCornerShape(12.dp))
+                            .clickable { onSelectProviderMode(AiProviderMode.GOOGLE_GEMINI) }
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                            .testTag("ai_provider_google_btn"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Google Gemini",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (useGoogle) EmeraldLight else SlateTextSecondary,
+                            fontWeight = if (useGoogle) FontWeight.ExtraBold else FontWeight.Medium
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .defaultMinSize(minHeight = 42.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (!useGoogle) CyanAccent.copy(alpha = 0.2f) else SlateDeepest.copy(alpha = 0.55f))
+                            .border(1.dp, if (!useGoogle) CyanAccent else SlateBorder, RoundedCornerShape(12.dp))
+                            .clickable { onSelectProviderMode(AiProviderMode.PERSONAL_API_KEY) }
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                            .testTag("ai_provider_apikey_btn"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "API Key riêng",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (!useGoogle) CyanAccent else SlateTextSecondary,
+                            fontWeight = if (!useGoogle) FontWeight.ExtraBold else FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        }
 
         // 2. Shared Gemini Model Selector (applies to BOTH Google Gemini & Manual API Key)
         HorizontalDivider(color = SlateBorder.copy(alpha = 0.45f))
@@ -388,10 +449,12 @@ fun AiKeySetupSection(
 fun GoogleGeminiAuthCard(
     googleUser: GoogleUserProfile?,
     isSigningIn: Boolean,
+    isTestingGoogleAi: Boolean = false,
     authStatusMessage: String?,
     authStatusSuccess: Boolean,
     onSignInWithGoogle: () -> Unit,
     onSignOutGoogle: () -> Unit,
+    onTestGoogleAi: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val isSignedIn = googleUser != null
@@ -449,7 +512,7 @@ fun GoogleGeminiAuthCard(
                         )
                     }
                     Text(
-                        text = "Đang dùng Google Gemini · Không cần nhập API Key",
+                        text = "Đã đăng nhập Google · App Check: ${activeAppCheckProviderLabel()}",
                         style = MaterialTheme.typography.labelSmall,
                         color = EmeraldLight,
                         fontWeight = FontWeight.SemiBold,
@@ -458,22 +521,60 @@ fun GoogleGeminiAuthCard(
                 }
             }
 
-            OutlinedButton(
-                onClick = onSignOutGoogle,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .defaultMinSize(minHeight = 44.dp)
-                    .testTag("google_sign_out_button")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Logout,
-                    contentDescription = null,
-                    tint = SlateTextPrimary,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("Đăng xuất tài khoản Google", color = SlateTextPrimary, fontWeight = FontWeight.SemiBold)
+                Button(
+                    onClick = onTestGoogleAi,
+                    enabled = !isTestingGoogleAi,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = EmeraldAccent,
+                        contentColor = Color.Black
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .defaultMinSize(minHeight = 44.dp)
+                        .testTag("google_test_ai_button")
+                ) {
+                    if (isTestingGoogleAi) {
+                        CircularProgressIndicator(
+                            color = Color.Black,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("Đang kiểm tra...", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("Kiểm tra kết nối AI", fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = onSignOutGoogle,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    modifier = Modifier
+                        .defaultMinSize(minHeight = 44.dp)
+                        .testTag("google_sign_out_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Logout,
+                        contentDescription = null,
+                        tint = SlateTextPrimary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("Đăng xuất", color = SlateTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                }
             }
         } else {
             Row(

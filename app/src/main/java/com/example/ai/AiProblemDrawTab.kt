@@ -26,9 +26,12 @@ import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,6 +64,7 @@ fun AiProblemDrawTab(
     onNoteChange: (String) -> Unit,
     onClearInput: () -> Unit,
     onAnalyzeClick: () -> Unit,
+    onCancelAnalyze: () -> Unit = {},
     onApplyDrawingPlan: (AiDrawingPlan) -> Unit,
     onOpenPdfPage: (Int) -> Unit,
     onGoToKeyTab: () -> Unit,
@@ -68,23 +72,31 @@ fun AiProblemDrawTab(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+    val scrollState = rememberScrollState()
+    var pendingCameraUriStr by rememberSaveable { mutableStateOf<String?>(null) }
     var cameraPermissionMessage by remember { mutableStateOf<String?>(null) }
+
+    // Auto-scroll down to reveal AI drawing result or error banner immediately when it arrives
+    LaunchedEffect(uiState.latestDrawingPlan, uiState.problemError) {
+        if (uiState.latestDrawingPlan != null || !uiState.problemError.isNullOrBlank()) {
+            scrollState.animateScrollTo(scrollState.maxValue)
+        }
+    }
 
     val takePictureLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
-        val uri = pendingCameraUri
-        if (success && uri != null) {
+        val uriStr = pendingCameraUriStr
+        if (success && !uriStr.isNullOrBlank()) {
             cameraPermissionMessage = null
-            onImageSelected(uri)
+            onImageSelected(Uri.parse(uriStr))
         }
     }
 
     fun launchCameraCapture() {
         val uri = createTempProblemPhotoUri(context)
         if (uri != null) {
-            pendingCameraUri = uri
+            pendingCameraUriStr = uri.toString()
             takePictureLauncher.launch(uri)
         } else {
             cameraPermissionMessage = "Không thể khởi tạo tệp ảnh tạm trên thiết bị."
@@ -114,7 +126,7 @@ fun AiProblemDrawTab(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
             .navigationBarsPadding()
             .padding(horizontal = 12.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -318,47 +330,106 @@ fun AiProblemDrawTab(
                     )
                 }
 
-                // Analyze CTA
-                Button(
-                    onClick = onAnalyzeClick,
-                    enabled = !uiState.isAnalyzingProblem && (uiState.problemBitmap != null || uiState.problemNote.isNotBlank()),
-                    colors = ButtonDefaults.buttonColors(containerColor = PurpleAccent, contentColor = Color.White),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .defaultMinSize(minHeight = 50.dp)
-                        .testTag("ai_analyze_problem_btn")
+                // Analyze CTA + Cancel button while running
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (uiState.isAnalyzingProblem) {
-                        CircularProgressIndicator(color = Color.White, strokeWidth = 2.5.dp, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(10.dp))
-                        Text("AI đang đọc đề & dựng hình...", fontWeight = FontWeight.Bold)
-                    } else {
-                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Phân tích đề bài & Dựng hình AI", fontWeight = FontWeight.ExtraBold)
+                    Button(
+                        onClick = onAnalyzeClick,
+                        enabled = !uiState.isAnalyzingProblem && (uiState.problemBitmap != null || uiState.problemNote.isNotBlank()),
+                        colors = ButtonDefaults.buttonColors(containerColor = PurpleAccent, contentColor = Color.White),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .defaultMinSize(minHeight = 50.dp)
+                            .testTag("ai_analyze_problem_btn")
+                    ) {
+                        if (uiState.isAnalyzingProblem) {
+                            CircularProgressIndicator(color = Color.White, strokeWidth = 2.5.dp, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(10.dp))
+                            val secSuffix = if (uiState.problemElapsedSeconds > 0) " (${uiState.problemElapsedSeconds}s)" else ""
+                            Text("AI đang phân tích...$secSuffix", fontWeight = FontWeight.Bold)
+                        } else {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Phân tích đề bài & Dựng hình AI", fontWeight = FontWeight.ExtraBold)
+                        }
                     }
+
+                    if (uiState.isAnalyzingProblem) {
+                        OutlinedButton(
+                            onClick = onCancelAnalyze,
+                            shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp),
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 50.dp)
+                                .testTag("ai_cancel_problem_btn")
+                        ) {
+                            Icon(Icons.Default.StopCircle, contentDescription = "Hủy phân tích", tint = RoseAccent, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Hủy", color = RoseAccent, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                if (uiState.isAnalyzingProblem && uiState.problemStatusText.isNotBlank()) {
+                    Text(
+                        text = uiState.problemStatusText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = CyanAccent,
+                        fontWeight = FontWeight.Medium
+                    )
                 }
             }
 
-            // Error display
+            // Error display with Retry & Connection check
             if (!uiState.problemError.isNullOrBlank()) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(14.dp))
                         .background(RoseAccent.copy(alpha = 0.14f))
                         .border(1.dp, RoseAccent.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
                         .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(Icons.Default.WarningAmber, contentDescription = null, tint = RoseAccent, modifier = Modifier.size(20.dp))
-                    Text(
-                        text = uiState.problemError,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = SlateTextPrimary
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(Icons.Default.WarningAmber, contentDescription = null, tint = RoseAccent, modifier = Modifier.size(20.dp))
+                        Text(
+                            text = uiState.problemError,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = SlateTextPrimary,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = onAnalyzeClick,
+                            colors = ButtonDefaults.buttonColors(containerColor = CyanAccent, contentColor = Color.Black),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 40.dp)
+                                .testTag("ai_problem_retry_btn")
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Thử lại", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                        OutlinedButton(
+                            onClick = onGoToKeyTab,
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.defaultMinSize(minHeight = 40.dp)
+                        ) {
+                            Text("Kiểm tra kết nối / Key", color = SlateTextPrimary, fontSize = 12.sp)
+                        }
+                    }
                 }
             }
 

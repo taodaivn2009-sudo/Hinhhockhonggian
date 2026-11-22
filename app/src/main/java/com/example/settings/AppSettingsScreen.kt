@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ai.AiAssistantUiState
 import com.example.ai.AiKeySetupSection
+import com.example.ai.AiProviderMode
 import com.example.ai.GoogleAccountAvatar
 import com.example.engine.SensitivityConfig
 import com.example.geo2d.Geo2DSensitivity
@@ -82,9 +83,11 @@ fun AppSettingsScreen(
     aiUiState: AiAssistantUiState,
     onSignInWithGoogle: () -> Unit,
     onSignOutGoogle: () -> Unit,
+    onTestGoogleAi: () -> Unit = {},
     onSaveAndVerifyAiKey: (String, String) -> Unit,
     onSaveAiKeyOnly: (String, String) -> Unit,
     onSelectAiModel: (String) -> Unit,
+    onSelectAiProviderMode: (AiProviderMode) -> Unit = {},
     onClearAiKey: () -> Unit,
     onSwitchWorkspace: (MathWorkspace) -> Unit
 ) {
@@ -194,10 +197,12 @@ fun AppSettingsScreen(
                         AiKeySetupSection(
                             googleUser = aiUiState.googleUser,
                             isSigningIn = aiUiState.isSigningIn,
+                            isTestingGoogleAi = aiUiState.isTestingGoogleAi,
                             authStatusMessage = aiUiState.authStatusMessage,
                             authStatusSuccess = aiUiState.authStatusSuccess,
                             onSignInWithGoogle = onSignInWithGoogle,
                             onSignOutGoogle = onSignOutGoogle,
+                            onTestGoogleAi = onTestGoogleAi,
                             keyConfig = aiUiState.keyConfig,
                             isVerifying = aiUiState.isVerifyingKey,
                             statusMessage = aiUiState.keyStatusMessage,
@@ -205,6 +210,7 @@ fun AppSettingsScreen(
                             onSaveAndVerify = onSaveAndVerifyAiKey,
                             onSaveOnly = onSaveAiKeyOnly,
                             onSelectModel = onSelectAiModel,
+                            onSelectProviderMode = onSelectAiProviderMode,
                             onClearKey = onClearAiKey
                         )
                     }

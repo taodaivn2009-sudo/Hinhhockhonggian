@@ -3,21 +3,29 @@ package com.example.ai
 import android.graphics.Bitmap
 import android.util.Log
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.ai.GenerativeModel
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
+import com.google.firebase.appcheck.FirebaseAppCheck
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 
 private const val FIREBASE_AI_TAG = "FirebaseAiClient"
 
 /**
  * Keyless Gemini client powered by Firebase AI Logic (`Firebase.ai`) + App Check.
- * Activated automatically once the user signs in with Google — zero API key entry needed!
+ * Uses streaming (`generateContentStream`) for responsive Time-To-First-Token and reliable
+ * feedback over mobile networks.
  */
 object FirebaseAiClient {
 
@@ -86,27 +94,111 @@ object FirebaseAiClient {
         return cleaned.ifEmpty { AiModelPreset.GEMINI_3_8_FLASH.modelId }
     }
 
+    /**
+     * Live 2-step diagnostic for Google Gemini via Firebase AI Logic:
+     * 1) Verifies Firebase App Check attestation token retrieval
+     * 2) Sends a minimal prompt to the selected Gemini model
+     */
+    suspend fun testConnection(modelId: String): Result<String> = withContext(Dispatchers.IO) {
+        val safeModel = sanitizeModelId(modelId)
+        try {
+            if (FirebaseApp.getApps(FirebaseApp.getInstance().applicationContext).isEmpty()) {
+                return@withContext Result.failure(
+                    IllegalStateException("Firebase chưa được khởi tạo trong bản APK này.")
+                )
+            }
+        } catch (e: Throwable) {
+            return@withContext Result.failure(
+                IllegalStateException("Bản APK chưa có cấu hình Firebase hợp lệ (${e.localizedMessage ?: e.javaClass.simpleName}).")
+            )
+        }
+
+        // Step 1: Verify App Check token (with bounded timeout so it never hangs forever)
+        val appCheckProvider = activeAppCheckProviderLabel()
+        try {
+            withTimeout(15_000L) {
+                FirebaseAppCheck.getInstance().getAppCheckToken(false).await()
+            }
+        } catch (e: TimeoutCancellationException) {
+            return@withContext Result.failure(
+                IllegalStateException(
+                    "Xác thực App Check ($appCheckProvider) quá thời gian (15 giây). Hãy kiểm tra kết nối mạng hoặc thử lại."
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(FIREBASE_AI_TAG, "App Check token retrieval failed ($appCheckProvider)", e)
+            return@withContext Result.failure(
+                IllegalStateException(
+                    "Lỗi xác thực App Check ($appCheckProvider): ${e.localizedMessage ?: e.javaClass.simpleName}"
+                )
+            )
+        }
+
+        // Step 2: Minimal live ping to Gemini model
+        try {
+            val pingModel = Firebase.ai.generativeModel(modelName = safeModel)
+            val response = withTimeout(25_000L) {
+                pingModel.generateContent("Trả lời đúng 1 chữ: OK")
+            }
+            val text = response.text?.trim().orEmpty()
+            if (text.isEmpty()) {
+                Result.failure(IllegalStateException("Google Gemini ($safeModel) phản hồi rỗng. Hãy thử đổi sang Gemini 3.8 Flash."))
+            } else {
+                Result.success("Kết nối Google Gemini ($safeModel) thành công! App Check: $appCheckProvider.")
+            }
+        } catch (e: TimeoutCancellationException) {
+            Result.failure(
+                IllegalStateException("Google Gemini ($safeModel) không phản hồi sau 25 giây. Hãy kiểm tra mạng hoặc đổi sang Gemini 3.5 Flash-Lite.")
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(FIREBASE_AI_TAG, "Firebase AI ping failed for $safeModel", e)
+            Result.failure(IllegalStateException(formatFirebaseAiError(e, safeModel), e))
+        }
+    }
+
     suspend fun askDocumentAssistant(
         modelId: String,
         question: String,
         history: List<AiChatMessage>,
         attachedPageBitmap: Bitmap? = null,
-        attachedPageNumber: Int? = null
+        attachedPageNumber: Int? = null,
+        onPartialAnswer: (String) -> Unit = {}
     ): Result<AiDocsReply> = withContext(Dispatchers.IO) {
+        val safeModel = sanitizeModelId(modelId)
         try {
-            val model = getDocsModel(modelId)
-            val chatHistory = history
-                .filter { !it.isError }
-                .takeLast(6)
-                .map { msg ->
-                    content(role = if (msg.isUser) "user" else "model") {
-                        text(msg.text)
-                    }
+            val model = getDocsModel(safeModel)
+            // Strictly alternate user -> model turns and ensure history ends with a model turn.
+            // Format prior model replies as JSON matching docsReplySchema so startChat stays consistent.
+            val sanitizedHistory = AiResponseParser.sanitizeChatHistory(history, maxTurns = 6)
+            val chatHistory = sanitizedHistory.map { msg ->
+                if (msg.isUser) {
+                    content(role = "user") { text(msg.text) }
+                } else {
+                    val modelJson = JSONObject().apply {
+                        put("answer", msg.text)
+                        val pagesArr = JSONArray()
+                        msg.suggestedPages.forEach { p ->
+                            pagesArr.put(
+                                JSONObject().apply {
+                                    put("page", p.page)
+                                    put("title", p.title)
+                                    if (p.reason.isNotBlank()) put("reason", p.reason)
+                                }
+                            )
+                        }
+                        put("suggestedPages", pagesArr)
+                    }.toString()
+                    content(role = "model") { text(modelJson) }
                 }
+            }
 
             val userPrompt = content(role = "user") {
                 if (attachedPageBitmap != null) {
-                    image(GeminiApiClient.downscaleBitmap(attachedPageBitmap, maxDim = 1400))
+                    image(GeminiApiClient.downscaleBitmap(attachedPageBitmap, maxDim = 1024))
                     val pageNote = attachedPageNumber?.let { " (Đính kèm hình ảnh Trang $it trong tài liệu PDF)" } ?: ""
                     text("$question$pageNote")
                 } else {
@@ -114,38 +206,52 @@ object FirebaseAiClient {
                 }
             }
 
-            val response = if (chatHistory.isNotEmpty()) {
+            val accumulated = StringBuilder()
+            val stream = if (chatHistory.isNotEmpty()) {
                 val chat = model.startChat(history = chatHistory)
-                chat.sendMessage(userPrompt)
+                chat.sendMessageStream(userPrompt)
             } else {
-                model.generateContent(userPrompt)
+                model.generateContentStream(userPrompt)
             }
 
-            val rawText = response.text?.trim().orEmpty()
+            stream.collect { chunk ->
+                val part = chunk.text.orEmpty()
+                if (part.isNotEmpty()) {
+                    accumulated.append(part)
+                    val preview = AiResponseParser.extractStreamingAnswerPreview(accumulated.toString())
+                    if (preview.isNotEmpty()) {
+                        onPartialAnswer(preview)
+                    }
+                }
+            }
+
+            val rawText = accumulated.toString().trim()
             if (rawText.isEmpty()) {
                 throw IllegalStateException("Google Gemini trả về nội dung trống. Vui lòng thử lại.")
             }
             Result.success(AiResponseParser.parseDocsReply(rawText))
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
-            Log.e(FIREBASE_AI_TAG, "Firebase AI document query failed", e)
-            Result.failure(IllegalStateException(formatFirebaseAiError(e), e))
+        } catch (e: Throwable) {
+            Log.e(FIREBASE_AI_TAG, "Firebase AI document query failed ($safeModel)", e)
+            Result.failure(IllegalStateException(formatFirebaseAiError(e, safeModel), e))
         }
     }
 
     suspend fun analyzeProblemToDrawing(
         modelId: String,
         problemBitmap: Bitmap?,
-        problemNote: String
+        problemNote: String,
+        onProgressChars: (Int) -> Unit = {}
     ): Result<AiDrawingPlan> = withContext(Dispatchers.IO) {
         if (problemBitmap == null && problemNote.isBlank()) {
             return@withContext Result.failure(
                 IllegalArgumentException("Hãy chụp/chọn ảnh đề bài hoặc nhập nội dung đề bài.")
             )
         }
+        val safeModel = sanitizeModelId(modelId)
         try {
-            val model = getProblemModel(modelId)
+            val model = getProblemModel(safeModel)
             val promptLine = buildString {
                 if (problemBitmap != null) {
                     append("Hãy đọc thật chính xác đề bài toán trong ảnh đính kèm và xuất kế hoạch dựng hình 3D hoặc 2D theo đúng định dạng JSON.")
@@ -160,38 +266,80 @@ object FirebaseAiClient {
 
             val input = content(role = "user") {
                 if (problemBitmap != null) {
-                    image(GeminiApiClient.downscaleBitmap(problemBitmap, maxDim = 1600))
+                    image(GeminiApiClient.downscaleBitmap(problemBitmap, maxDim = 1024))
                 }
                 text(promptLine)
             }
 
-            val response = model.generateContent(input)
-            val rawText = response.text?.trim().orEmpty()
+            val accumulated = StringBuilder()
+            model.generateContentStream(input).collect { chunk ->
+                val part = chunk.text.orEmpty()
+                if (part.isNotEmpty()) {
+                    accumulated.append(part)
+                    onProgressChars(accumulated.length)
+                }
+            }
+
+            val rawText = accumulated.toString().trim()
             if (rawText.isEmpty()) {
                 throw IllegalStateException("Google Gemini trả về dữ liệu trống. Vui lòng thử lại.")
             }
             val plan = AiResponseParser.parseDrawingPlan(rawText)
-                ?: throw IllegalStateException("AI không trả về dữ liệu dựng hình hợp lệ. Hãy thử chụp ảnh rõ nét hơn hoặc mô tả thêm đề bài.")
+                ?: throw IllegalStateException(
+                    "AI trả về dữ liệu chưa đúng cấu trúc dựng hình 3D/2D. Hãy thử chụp ảnh rõ nét hơn hoặc mô tả ngắn gọn đề bài."
+                )
             Result.success(plan)
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
-            Log.e(FIREBASE_AI_TAG, "Firebase AI problem drawing failed", e)
-            Result.failure(IllegalStateException(formatFirebaseAiError(e), e))
+        } catch (e: Throwable) {
+            Log.e(FIREBASE_AI_TAG, "Firebase AI problem drawing failed ($safeModel)", e)
+            Result.failure(IllegalStateException(formatFirebaseAiError(e, safeModel), e))
         }
     }
 
-    private fun formatFirebaseAiError(e: Exception): String {
-        val msg = e.localizedMessage?.trim().orEmpty()
+    private fun formatFirebaseAiError(e: Throwable, modelId: String): String {
+        val rawMsg = buildString {
+            val direct = e.localizedMessage?.trim().orEmpty()
+            val causeMsg = e.cause?.localizedMessage?.trim().orEmpty()
+            if (direct.isNotEmpty()) append(direct)
+            if (causeMsg.isNotEmpty() && !direct.contains(causeMsg)) {
+                if (isNotEmpty()) append(" · ")
+                append(causeMsg)
+            }
+        }.ifEmpty { e.javaClass.simpleName }
+
         return when {
-            msg.contains("403", ignoreCase = true) || msg.contains("App Check", ignoreCase = true) ->
-                "Không thể xác thực kết nối Google Gemini (App Check/403). Hãy kiểm tra kết nối mạng hoặc thử lại. ($msg)"
-            msg.contains("429", ignoreCase = true) || msg.contains("quota", ignoreCase = true) ->
-                "Google Gemini đang quá tải tạm thời. Vui lòng đợi ít phút rồi thử lại."
-            msg.contains("404", ignoreCase = true) || msg.contains("not found", ignoreCase = true) ->
-                "Mô hình đang chọn chưa khả dụng. Hãy chọn Gemini 3.8 Flash trong mục Tài khoản / Key."
-            msg.isNotEmpty() -> msg
-            else -> "Lỗi kết nối Google Gemini. Vui lòng kiểm tra mạng và thử lại."
+            rawMsg.contains("App Check", ignoreCase = true) ||
+                rawMsg.contains("attestation", ignoreCase = true) ||
+                rawMsg.contains("403", ignoreCase = true) && rawMsg.contains("token", ignoreCase = true) ->
+                "Không thể xác thực App Check (${activeAppCheckProviderLabel()}). Hãy kiểm tra mạng, bấm 'Kiểm tra kết nối' trong mục Tài khoản hoặc dùng API Key riêng. ($rawMsg)"
+
+            rawMsg.contains("billing", ignoreCase = true) ||
+                rawMsg.contains("Blaze", ignoreCase = true) ||
+                (rawMsg.contains("403", ignoreCase = true) && modelId.contains("argon", ignoreCase = true)) ->
+                "Mô hình $modelId yêu cầu gói trả phí (Blaze). Hãy chuyển sang Gemini 3.8 Flash hoặc Gemini 3.5 Flash-Lite trong mục Tài khoản / Key."
+
+            rawMsg.contains("403", ignoreCase = true) || rawMsg.contains("PERMISSION_DENIED", ignoreCase = true) ->
+                "Google Gemini từ chối quyền truy cập (403). Hãy kiểm tra kết nối mạng hoặc thử chọn Gemini 3.8 Flash / API Key riêng. ($rawMsg)"
+
+            rawMsg.contains("429", ignoreCase = true) ||
+                rawMsg.contains("quota", ignoreCase = true) ||
+                rawMsg.contains("RESOURCE_EXHAUSTED", ignoreCase = true) ->
+                "Google Gemini đang quá tải tạm thời (429). Vui lòng đợi 30–60 giây rồi thử lại, hoặc đổi sang Gemini 3.5 Flash-Lite."
+
+            rawMsg.contains("404", ignoreCase = true) || rawMsg.contains("not found", ignoreCase = true) ->
+                "Mô hình '$modelId' chưa khả dụng. Hãy chọn Gemini 3.8 Flash trong mục Tài khoản / Key."
+
+            rawMsg.contains("Unable to resolve host", ignoreCase = true) ||
+                rawMsg.contains("UnknownHost", ignoreCase = true) ||
+                rawMsg.contains("No address associated", ignoreCase = true) ||
+                rawMsg.contains("ConnectException", ignoreCase = true) ->
+                "Không có kết nối Internet hoặc mạng bị gián đoạn. Hãy kiểm tra Wi-Fi / 4G rồi thử lại."
+
+            rawMsg.contains("timeout", ignoreCase = true) || rawMsg.contains("timed out", ignoreCase = true) ->
+                "Kết nối tới Google Gemini bị quá thời gian chờ. Hãy thử lại hoặc chọn Gemini 3.5 Flash-Lite để phản hồi nhanh hơn."
+
+            else -> "Lỗi Google Gemini ($modelId): $rawMsg"
         }
     }
 }

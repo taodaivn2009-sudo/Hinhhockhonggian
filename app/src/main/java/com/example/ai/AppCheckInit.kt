@@ -23,6 +23,14 @@ private const val RECAPTCHA_SITE_KEY_RES = "recaptcha_site_key"
 private const val HARNESS_PREFS_NAME = "appcheck_harness_state"
 private const val KEY_HAS_HARNESS_TOKEN = "has_harness_debug_token"
 
+@Volatile
+private var installedAppCheckProviderMode: String? = null
+
+/**
+ * Human-readable label of the currently installed App Check provider for diagnostics.
+ */
+fun activeAppCheckProviderLabel(): String = installedAppCheckProviderMode ?: "Chưa khởi tạo"
+
 /**
  * Configures Firebase App Check before Compose setContent, ViewModels, or any Firebase operation.
  * Must be called from MainActivity.onCreate(savedInstanceState) with the Activity's launch intent.
@@ -33,12 +41,20 @@ private const val KEY_HAS_HARNESS_TOKEN = "has_harness_debug_token"
  * 2. Real Android devices (both sideloaded debug APKs built via GitHub Actions and release APKs) ->
  *    RecaptchaAppCheckProviderFactory using `recaptcha_site_key` from firebase_applet_config.xml,
  *    avoiding unregistered random debug UUIDs that cause "Firebase App Check token is invalid (403)".
+ *
+ * Idempotency: skips redundant provider re-installation across Activity recreations (e.g., rotation,
+ * theme toggle, returning from Camera/Photo Picker) unless a fresh harness debug token is delivered.
  */
 @SuppressLint("ApplySharedPref", "DiscouragedApi")
 fun configureAppCheck(context: Context, intent: Intent?) {
     try {
         if (FirebaseApp.getApps(context).isEmpty()) {
             FirebaseApp.initializeApp(context)
+        }
+        if (FirebaseApp.getApps(context).isEmpty()) {
+            Log.e(APP_CHECK_TAG, "FirebaseApp unavailable (google-services.json missing); skipping App Check.")
+            installedAppCheckProviderMode = "Chưa có Firebase (thiếu google-services.json)"
+            return
         }
 
         val harnessPrefs = context.getSharedPreferences(HARNESS_PREFS_NAME, Context.MODE_PRIVATE)
@@ -62,7 +78,15 @@ fun configureAppCheck(context: Context, intent: Intent?) {
             FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
                 DebugAppCheckProviderFactory.getInstance()
             )
+            installedAppCheckProviderMode = "Debug App Check (Harness)"
             Log.d(APP_CHECK_TAG, "DebugAppCheckProviderFactory installed with harness debug token.")
+            return
+        }
+
+        // Avoid tearing down an already-initialized App Check provider on Activity recreation
+        // (e.g., returning from Camera capture or screen rotation).
+        if (installedAppCheckProviderMode != null) {
+            Log.d(APP_CHECK_TAG, "App Check already initialized ($installedAppCheckProviderMode); reusing.")
             return
         }
 
@@ -70,6 +94,7 @@ fun configureAppCheck(context: Context, intent: Intent?) {
             FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
                 DebugAppCheckProviderFactory.getInstance()
             )
+            installedAppCheckProviderMode = "Debug App Check (Harness)"
             Log.d(APP_CHECK_TAG, "DebugAppCheckProviderFactory installed using persisted harness token.")
             return
         }
@@ -81,16 +106,20 @@ fun configureAppCheck(context: Context, intent: Intent?) {
             FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
                 RecaptchaAppCheckProviderFactory.getInstance(siteKey)
             )
+            installedAppCheckProviderMode = "reCAPTCHA Enterprise App Check"
             Log.d(APP_CHECK_TAG, "RecaptchaAppCheckProviderFactory installed for real device attestation.")
         } else if (BuildConfig.DEBUG) {
             Log.w(APP_CHECK_TAG, "recaptcha_site_key unavailable; falling back to DebugAppCheckProviderFactory.")
             FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
                 DebugAppCheckProviderFactory.getInstance()
             )
+            installedAppCheckProviderMode = "Debug App Check (Fallback)"
         } else {
+            installedAppCheckProviderMode = "Thiếu recaptcha_site_key"
             Log.e(APP_CHECK_TAG, "recaptcha_site_key string resource not found or blank in release package.")
         }
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
+        installedAppCheckProviderMode = "Lỗi khởi tạo (${e.javaClass.simpleName})"
         Log.e(APP_CHECK_TAG, "Failed to initialize Firebase App Check", e)
     }
 }
