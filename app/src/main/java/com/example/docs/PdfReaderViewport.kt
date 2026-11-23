@@ -1,6 +1,13 @@
 package com.example.docs
 
 import android.graphics.Bitmap
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,19 +22,18 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -60,24 +66,27 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * Full-featured native PDF Reader viewport:
- * - Renders the 388-page bundled DPAD PDF lazily on Dispatchers.IO via [PdfBookRenderer]
- * - Smooth vertical page scrolling at 100% zoom, 2-finger pinch-to-zoom (1x..3.5x),
- *   double-tap quick zoom (1x <-> 2.1x), and 1-finger panning when zoomed in
- * - Floating Liquid Glass top bar (Back to Mục lục, Chapter Title, Page Pill, Night Filter, Bookmark ★)
- *   and bottom dock (Prev/Next page, Interactive 1..388 Slider, Zoom - / 100% / +)
+ * Fullscreen-first native PDF Reader viewport:
+ * - Single tap toggles Immersive Mode (hides top bar, bottom page scrubber, Ask-AI FAB & root bottom nav)
+ * - Double-tap quick zoom (1x <-> 2.1x) + 2-finger pinch-to-zoom (1x..3.5x) & smooth panning
+ * - Compact Top Bar: TOC Sheet opener, Page/Chapter indicator (tap to jump), Bookmark, Night Filter
+ * - Compact Bottom-End FAB ("Hỏi AI") + slim 1-row Page Scrubber above Bottom Navigation Bar
  */
 @Composable
 fun PdfReaderView(
     renderer: PdfBookRenderer,
     initialPage1Based: Int,
+    externalJumpPage: Int = initialPage1Based,
+    externalJumpToken: Int = 0,
+    isImmersive: Boolean = false,
+    onToggleImmersive: () -> Unit = {},
     bookmarkedPages: Set<Int>,
     nightFilterEnabled: Boolean,
     onPageChanged: (Int) -> Unit,
     onToggleBookmark: (Int) -> Unit,
     onToggleNightFilter: () -> Unit,
     onAskAiAboutPage: (Int) -> Unit = {},
-    onBackToToc: () -> Unit,
+    onOpenToc: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -102,7 +111,6 @@ fun PdfReaderView(
     val startIndex = (initialPage1Based - 1).coerceIn(0, (totalPages - 1).coerceAtLeast(0))
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = startIndex)
 
-    // Track currently centered/visible 1-based page number cleanly
     val currentPage1Based by remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
@@ -121,7 +129,6 @@ fun PdfReaderView(
         onPageChanged(currentPage1Based)
     }
 
-    // Zoom & pan state
     var zoom by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
     var viewportSize by remember { mutableStateOf(IntSize(1080, 1600)) }
@@ -152,10 +159,18 @@ fun PdfReaderView(
         }
     }
 
+    // Respond to external jumps (TOC Sheet selection or AI "Mở trang X")
+    LaunchedEffect(externalJumpToken) {
+        if (externalJumpToken > 0) {
+            jumpToPage(externalJumpPage)
+        }
+    }
+
     val currentSectionLabel = remember(currentPage1Based) {
         PdfCurriculumRepository.sectionLabelForPage(currentPage1Based)
     }
     val isCurrentBookmarked = currentPage1Based in bookmarkedPages
+    val latestToggleImmersive by rememberUpdatedState(onToggleImmersive)
 
     Box(
         modifier = modifier
@@ -206,13 +221,14 @@ fun PdfReaderView(
             }
 
             else -> {
-                // Continuous vertical PDF reader with smooth 2-finger pinch-to-zoom & pan
+                // Full-bleed continuous vertical PDF reader with 1-tap Immersive toggle, double-tap zoom, pinch zoom
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .onSizeChanged { viewportSize = it }
                         .pointerInput(Unit) {
                             detectTapGestures(
+                                onTap = { latestToggleImmersive() },
                                 onDoubleTap = {
                                     if (zoom > 1.15f) {
                                         zoom = 1f
@@ -258,49 +274,110 @@ fun PdfReaderView(
                         zoom = zoom,
                         panOffset = panOffset,
                         nightFilterEnabled = nightFilterEnabled,
+                        isImmersive = isImmersive,
                         userScrollEnabled = zoom <= 1.03f
                     )
                 }
             }
         }
 
-        // Top Reader Control Pill (sits right under the top WorkspaceModeSwitch bar)
-        PdfReaderTopBar(
-            currentPage1Based = currentPage1Based,
-            totalPages = totalPages,
-            sectionLabel = currentSectionLabel,
-            isBookmarked = isCurrentBookmarked,
-            nightFilterEnabled = nightFilterEnabled,
-            onBackToToc = onBackToToc,
-            onOpenJumpDialog = { showJumpDialog = true },
-            onAskAiAboutPage = { onAskAiAboutPage(currentPage1Based) },
-            onToggleNightFilter = onToggleNightFilter,
-            onToggleBookmark = { onToggleBookmark(currentPage1Based) },
+        // Compact Floating Top Bar (auto-hides smoothly in Immersive Mode)
+        AnimatedVisibility(
+            visible = !isImmersive,
+            enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
+            exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top),
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .widthIn(max = 720.dp)
-                .padding(horizontal = 10.dp, vertical = 4.dp)
-        )
+                .statusBarsPadding()
+                .padding(horizontal = 10.dp, vertical = 8.dp)
+        ) {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                PdfReaderTopBar(
+                    currentPage1Based = currentPage1Based,
+                    totalPages = totalPages,
+                    sectionLabel = currentSectionLabel,
+                    isBookmarked = isCurrentBookmarked,
+                    nightFilterEnabled = nightFilterEnabled,
+                    onOpenToc = onOpenToc,
+                    onOpenJumpDialog = { showJumpDialog = true },
+                    onToggleNightFilter = onToggleNightFilter,
+                    onToggleBookmark = { onToggleBookmark(currentPage1Based) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 680.dp)
+                )
+            }
+        }
 
-        // Bottom Reader Navigation & Zoom Dock
-        PdfReaderBottomDock(
-            currentPage1Based = currentPage1Based,
-            totalPages = totalPages,
-            zoom = zoom,
-            onPrevPage = { if (currentPage1Based > 1) jumpToPage(currentPage1Based - 1) },
-            onNextPage = { if (currentPage1Based < totalPages) jumpToPage(currentPage1Based + 1) },
-            onSeekPage = { jumpToPage(it) },
-            onZoomOut = { updateZoom(zoom - 0.35f) },
-            onResetZoom = { updateZoom(1f) },
-            onZoomIn = { updateZoom(zoom + 0.35f) },
+        // Compact Bottom-End Floating Action Pill ("Hỏi AI trang này") — never blocks reading
+        AnimatedVisibility(
+            visible = !isImmersive && !isOpening && openError == null,
+            enter = fadeIn() + scaleIn(initialScale = 0.85f),
+            exit = fadeOut() + scaleOut(targetScale = 0.85f),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .navigationBarsPadding()
+                .padding(end = 14.dp, bottom = 136.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .defaultMinSize(minHeight = 44.dp)
+                    .liquidGlassSurface(
+                        shape = CircleShape,
+                        pillShape = CircleShape,
+                        elevated = true,
+                        fallbackBg = PurpleAccent,
+                        accentBorder = PurpleAccent.copy(alpha = 0.7f)
+                    )
+                    .clip(CircleShape)
+                    .clickable { onAskAiAboutPage(currentPage1Based) }
+                    .padding(horizontal = 13.dp, vertical = 9.dp)
+                    .testTag("pdf_ask_ai_page_btn"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = "Hỏi AI về trang $currentPage1Based",
+                    tint = if (ActiveThemeState.current.liquidGlass.enabled) PurpleAccent else Color.White,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = "Hỏi AI",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (ActiveThemeState.current.liquidGlass.enabled) SlateTextPrimary else Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        // Slim 1-Row Bottom Page Scrubber (sits cleanly above the root Floating Bottom Navigation Bar)
+        AnimatedVisibility(
+            visible = !isImmersive && !isOpening && openError == null,
+            enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
+            exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .widthIn(max = 720.dp)
                 .navigationBarsPadding()
-                .padding(horizontal = 10.dp, vertical = 8.dp)
-        )
+                .padding(start = 10.dp, end = 10.dp, bottom = 78.dp)
+        ) {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                PdfReaderBottomScrubber(
+                    currentPage1Based = currentPage1Based,
+                    totalPages = totalPages,
+                    zoom = zoom,
+                    onPrevPage = { if (currentPage1Based > 1) jumpToPage(currentPage1Based - 1) },
+                    onNextPage = { if (currentPage1Based < totalPages) jumpToPage(currentPage1Based + 1) },
+                    onSeekPage = { jumpToPage(it) },
+                    onResetZoom = { updateZoom(if (zoom > 1.05f) 1f else 1.8f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 680.dp)
+                )
+            }
+        }
     }
 
     if (showJumpDialog) {
@@ -324,13 +401,13 @@ private fun PdfPagesLazyColumn(
     zoom: Float,
     panOffset: Offset,
     nightFilterEnabled: Boolean,
+    isImmersive: Boolean,
     userScrollEnabled: Boolean
 ) {
     val density = LocalDensity.current
     val nightColorFilter = remember(nightFilterEnabled) {
         if (!nightFilterEnabled) null
         else ColorFilter.colorMatrix(
-            // Soft warm-dark inversion for comfortable night studying
             ColorMatrix(
                 floatArrayOf(
                     -0.88f, 0f, 0f, 0f, 236f,
@@ -350,11 +427,17 @@ private fun PdfPagesLazyColumn(
         LazyColumn(
             state = listState,
             userScrollEnabled = userScrollEnabled,
-            contentPadding = PaddingValues(top = 64.dp, bottom = 126.dp, start = 8.dp, end = 8.dp),
+            contentPadding = PaddingValues(
+                top = if (isImmersive) 12.dp else 74.dp,
+                bottom = if (isImmersive) 20.dp else 156.dp,
+                start = 8.dp,
+                end = 8.dp
+            ),
             verticalArrangement = Arrangement.spacedBy(10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
                 .graphicsLayer {
                     scaleX = zoom
                     scaleY = zoom
@@ -406,7 +489,7 @@ private fun PdfSinglePageItem(
             .aspectRatio(aspectRatio)
             .clip(RoundedCornerShape(10.dp))
             .background(if (nightColorFilter != null) Color(0xFF151922) else Color.White)
-            .border(1.dp, SlateBorder.copy(alpha = 0.55f), RoundedCornerShape(10.dp)),
+            .border(1.dp, SlateBorder.copy(alpha = 0.5f), RoundedCornerShape(10.dp)),
         contentAlignment = Alignment.Center
     ) {
         val loaded = bitmap
@@ -436,13 +519,12 @@ private fun PdfSinglePageItem(
             }
         }
 
-        // Subtle corner page badge
         Box(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(8.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color.Black.copy(alpha = 0.55f))
+                .background(Color.Black.copy(alpha = 0.52f))
                 .padding(horizontal = 7.dp, vertical = 3.dp)
         ) {
             Text(
@@ -463,9 +545,8 @@ private fun PdfReaderTopBar(
     sectionLabel: String,
     isBookmarked: Boolean,
     nightFilterEnabled: Boolean,
-    onBackToToc: () -> Unit,
+    onOpenToc: () -> Unit,
     onOpenJumpDialog: () -> Unit,
-    onAskAiAboutPage: () -> Unit,
     onToggleNightFilter: () -> Unit,
     onToggleBookmark: () -> Unit,
     modifier: Modifier = Modifier
@@ -473,11 +554,10 @@ private fun PdfReaderTopBar(
     Row(
         modifier = modifier
             .liquidGlassSurface(
-                shape = RoundedCornerShape(16.dp),
-                pillShape = RoundedCornerShape(50),
-                cornerRadiusDp = 16.dp,
+                shape = CircleShape,
+                pillShape = CircleShape,
                 elevated = true,
-                fallbackBg = SlateDark,
+                fallbackBg = SlateDark.copy(alpha = 0.94f),
                 fallbackBorder = SlateBorder
             )
             .padding(horizontal = 6.dp, vertical = 4.dp),
@@ -485,22 +565,25 @@ private fun PdfReaderTopBar(
         horizontalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         IconButton(
-            onClick = onBackToToc,
-            modifier = Modifier.testTag("pdf_back_to_toc_button")
+            onClick = onOpenToc,
+            modifier = Modifier
+                .size(44.dp)
+                .testTag("pdf_back_to_toc_button")
         ) {
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Quay lại Mục lục",
-                tint = SlateTextPrimary
+                imageVector = Icons.Default.MenuBook,
+                contentDescription = "Mở Mục lục 59 chuyên đề",
+                tint = CyanAccent,
+                modifier = Modifier.size(20.dp)
             )
         }
 
         Column(
             modifier = Modifier
                 .weight(1f)
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .clickable(onClick = onOpenJumpDialog)
-                .padding(horizontal = 6.dp, vertical = 4.dp)
+                .padding(horizontal = 6.dp, vertical = 3.dp)
                 .testTag("pdf_jump_page_pill")
         ) {
             Text(
@@ -512,61 +595,54 @@ private fun PdfReaderTopBar(
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = "Trang $currentPage1Based / $totalPages · Chạm để nhảy trang",
+                text = "Trang $currentPage1Based / $totalPages · Nhảy trang",
                 style = MaterialTheme.typography.labelSmall,
                 color = CyanAccent,
-                fontSize = 11.sp,
+                fontSize = 10.5.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
         }
 
         IconButton(
-            onClick = onAskAiAboutPage,
-            modifier = Modifier.testTag("pdf_ask_ai_page_btn")
+            onClick = onToggleBookmark,
+            modifier = Modifier
+                .size(44.dp)
+                .testTag("pdf_bookmark_toggle")
         ) {
             Icon(
-                imageVector = Icons.Default.AutoAwesome,
-                contentDescription = "Hỏi AI về trang này",
-                tint = PurpleAccent
+                imageVector = if (isBookmarked) Icons.Default.Bookmark else Icons.Outlined.BookmarkBorder,
+                contentDescription = if (isBookmarked) "Bỏ đánh dấu trang này" else "Lưu trang yêu thích",
+                tint = if (isBookmarked) AmberAccent else SlateTextSecondary,
+                modifier = Modifier.size(20.dp)
             )
         }
 
         IconButton(
             onClick = onToggleNightFilter,
-            modifier = Modifier.testTag("pdf_night_filter_toggle")
+            modifier = Modifier
+                .size(44.dp)
+                .testTag("pdf_night_filter_toggle")
         ) {
             Icon(
                 imageVector = if (nightFilterEnabled) Icons.Default.LightMode else Icons.Default.DarkMode,
-                contentDescription = if (nightFilterEnabled) "Tắt chế độ đọc ban đêm" else "Bật chế độ đọc ban đêm",
-                tint = if (nightFilterEnabled) AmberAccent else SlateTextSecondary
-            )
-        }
-
-        IconButton(
-            onClick = onToggleBookmark,
-            modifier = Modifier.testTag("pdf_bookmark_toggle")
-        ) {
-            Icon(
-                imageVector = if (isBookmarked) Icons.Default.Bookmark else Icons.Outlined.BookmarkBorder,
-                contentDescription = if (isBookmarked) "Bỏ đánh dấu trang này" else "Đánh dấu trang này",
-                tint = if (isBookmarked) AmberAccent else SlateTextSecondary
+                contentDescription = if (nightFilterEnabled) "Tắt lọc ánh sáng ban đêm" else "Bật lọc ánh sáng ban đêm",
+                tint = if (nightFilterEnabled) AmberAccent else SlateTextSecondary,
+                modifier = Modifier.size(20.dp)
             )
         }
     }
 }
 
 @Composable
-private fun PdfReaderBottomDock(
+private fun PdfReaderBottomScrubber(
     currentPage1Based: Int,
     totalPages: Int,
     zoom: Float,
     onPrevPage: () -> Unit,
     onNextPage: () -> Unit,
     onSeekPage: (Int) -> Unit,
-    onZoomOut: () -> Unit,
     onResetZoom: () -> Unit,
-    onZoomIn: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var sliderDragging by remember { mutableStateOf(false) }
@@ -574,149 +650,87 @@ private fun PdfReaderBottomDock(
         mutableFloatStateOf(currentPage1Based.toFloat())
     }
 
-    Column(
+    Row(
         modifier = modifier
             .liquidGlassSurface(
-                shape = RoundedCornerShape(18.dp),
-                cornerRadiusDp = 18.dp,
+                shape = CircleShape,
+                pillShape = CircleShape,
                 elevated = true,
-                fallbackBg = SlateDark,
+                fallbackBg = SlateDark.copy(alpha = 0.94f),
                 fallbackBorder = SlateBorder
             )
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        IconButton(
+            onClick = onPrevPage,
+            enabled = currentPage1Based > 1,
+            modifier = Modifier
+                .size(38.dp)
+                .testTag("pdf_prev_page_btn")
         ) {
-            IconButton(
-                onClick = onPrevPage,
-                enabled = currentPage1Based > 1,
-                modifier = Modifier
-                    .size(40.dp)
-                    .testTag("pdf_prev_page_btn")
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                    contentDescription = "Trang trước",
-                    tint = if (currentPage1Based > 1) SlateTextPrimary else SlateTextSecondary.copy(alpha = 0.4f)
-                )
-            }
-
-            Slider(
-                value = if (sliderDragging) sliderValue else currentPage1Based.toFloat(),
-                onValueChange = {
-                    sliderDragging = true
-                    sliderValue = it
-                },
-                onValueChangeFinished = {
-                    sliderDragging = false
-                    onSeekPage(sliderValue.roundToInt().coerceIn(1, totalPages))
-                },
-                valueRange = 1f..totalPages.coerceAtLeast(2).toFloat(),
-                colors = SliderDefaults.colors(
-                    thumbColor = CyanAccent,
-                    activeTrackColor = CyanAccent,
-                    inactiveTrackColor = SlateBorder
-                ),
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("pdf_page_slider")
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                contentDescription = "Trang trước",
+                tint = if (currentPage1Based > 1) SlateTextPrimary else SlateTextSecondary.copy(alpha = 0.35f)
             )
-
-            IconButton(
-                onClick = onNextPage,
-                enabled = currentPage1Based < totalPages,
-                modifier = Modifier
-                    .size(40.dp)
-                    .testTag("pdf_next_page_btn")
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = "Trang sau",
-                    tint = if (currentPage1Based < totalPages) SlateTextPrimary else SlateTextSecondary.copy(alpha = 0.4f)
-                )
-            }
         }
 
-        Row(
+        Slider(
+            value = if (sliderDragging) sliderValue else currentPage1Based.toFloat(),
+            onValueChange = {
+                sliderDragging = true
+                sliderValue = it
+            },
+            onValueChangeFinished = {
+                sliderDragging = false
+                onSeekPage(sliderValue.roundToInt().coerceIn(1, totalPages))
+            },
+            valueRange = 1f..totalPages.coerceAtLeast(2).toFloat(),
+            colors = SliderDefaults.colors(
+                thumbColor = CyanAccent,
+                activeTrackColor = CyanAccent,
+                inactiveTrackColor = SlateBorder
+            ),
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+                .weight(1f)
+                .height(34.dp)
+                .testTag("pdf_page_slider")
+        )
+
+        IconButton(
+            onClick = onNextPage,
+            enabled = currentPage1Based < totalPages,
+            modifier = Modifier
+                .size(38.dp)
+                .testTag("pdf_next_page_btn")
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Trang sau",
+                tint = if (currentPage1Based < totalPages) SlateTextPrimary else SlateTextSecondary.copy(alpha = 0.35f)
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(SlateSurface.copy(alpha = 0.85f))
+                .border(1.dp, SlateBorder, CircleShape)
+                .clickable(onClick = onResetZoom)
+                .padding(horizontal = 8.dp, vertical = 5.dp)
+                .testTag("pdf_zoom_reset_btn"),
+            contentAlignment = Alignment.Center
         ) {
             Text(
-                text = if (sliderDragging) {
-                    "Đang chọn: Trang ${sliderValue.roundToInt()} / $totalPages"
-                } else {
-                    "Thu phóng: ${(zoom * 100).roundToInt()}% (chạm đúp hoặc chụm 2 ngón)"
-                },
+                text = if (sliderDragging) "Tr.${sliderValue.roundToInt()}" else "${(zoom * 100).roundToInt()}%",
                 style = MaterialTheme.typography.labelSmall,
-                color = SlateTextSecondary,
-                fontSize = 11.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
+                color = CyanAccent,
+                fontWeight = FontWeight.Bold,
+                fontSize = 10.5.sp
             )
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                SmallZoomChip(
-                    onClick = onZoomOut,
-                    enabled = zoom > 1.01f,
-                    testTag = "pdf_zoom_out_btn"
-                ) {
-                    Icon(Icons.Default.Remove, contentDescription = "Thu nhỏ", tint = SlateTextPrimary, modifier = Modifier.size(16.dp))
-                }
-                SmallZoomChip(
-                    onClick = onResetZoom,
-                    enabled = true,
-                    testTag = "pdf_zoom_reset_btn"
-                ) {
-                    Text(
-                        text = "${(zoom * 100).roundToInt()}%",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = CyanAccent,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp
-                    )
-                }
-                SmallZoomChip(
-                    onClick = onZoomIn,
-                    enabled = zoom < 3.45f,
-                    testTag = "pdf_zoom_in_btn"
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "Phóng to", tint = SlateTextPrimary, modifier = Modifier.size(16.dp))
-                }
-            }
         }
-    }
-}
-
-@Composable
-private fun SmallZoomChip(
-    onClick: () -> Unit,
-    enabled: Boolean,
-    testTag: String,
-    content: @Composable () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .defaultMinSize(minWidth = 34.dp, minHeight = 30.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(SlateDark.copy(alpha = if (enabled) 0.72f else 0.35f))
-            .border(1.dp, SlateBorder, RoundedCornerShape(8.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 7.dp, vertical = 4.dp)
-            .testTag(testTag),
-        contentAlignment = Alignment.Center
-    ) {
-        content()
     }
 }
 
@@ -774,12 +788,6 @@ private fun PdfJumpToPageDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("pdf_jump_page_input")
-            )
-
-            Text(
-                text = "Nhảy nhanh mốc chính:",
-                style = MaterialTheme.typography.labelSmall,
-                color = SlateTextSecondary
             )
 
             Row(

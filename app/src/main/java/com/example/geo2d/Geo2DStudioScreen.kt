@@ -10,8 +10,11 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
@@ -29,6 +32,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Redo
@@ -51,6 +56,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
@@ -66,156 +72,35 @@ import java.io.OutputStreamWriter
 import kotlin.math.abs
 import kotlin.math.hypot
 
-/**
- * Shared 4-tab unified workspace bar across 3D Space, 2D Plane, Documents, and App Settings.
- */
-@Composable
-fun WorkspaceModeSwitch(
-    current: MathWorkspace,
-    onSelect: (MathWorkspace) -> Unit,
-    modifier: Modifier = Modifier,
-    hasUpdateBadge: Boolean = false
-) {
-    Row(
-        modifier = modifier
-            .liquidGlassSurface(
-                shape = RoundedCornerShape(14.dp),
-                pillShape = CircleShape,
-                elevated = true,
-                fallbackBg = SlateDeepest.copy(alpha = 0.95f),
-                fallbackBorder = SlateBorder.copy(alpha = 0.9f)
-            )
-            .padding(horizontal = 4.dp, vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(3.dp)
-    ) {
-        WorkspaceTabChip(
-            icon = Icons.Default.Category,
-            label = "3D",
-            selected = current == MathWorkspace.SPACE_3D,
-            activeColor = IndigoPrimary,
-            testTag = "switch_workspace_3d",
-            modifier = Modifier.weight(1f),
-            onClick = { onSelect(MathWorkspace.SPACE_3D) }
-        )
-        WorkspaceTabChip(
-            icon = Icons.AutoMirrored.Filled.ShowChart,
-            label = "2D",
-            selected = current == MathWorkspace.PLANE_2D,
-            activeColor = EmeraldDark,
-            testTag = "switch_workspace_2d",
-            modifier = Modifier.weight(1f),
-            onClick = { onSelect(MathWorkspace.PLANE_2D) }
-        )
-        WorkspaceTabChip(
-            icon = Icons.Default.MenuBook,
-            label = "Tài liệu",
-            selected = current == MathWorkspace.DOCUMENTS,
-            activeColor = Color(0xFFD97706),
-            testTag = "switch_workspace_docs",
-            modifier = Modifier.weight(1.15f),
-            onClick = { onSelect(MathWorkspace.DOCUMENTS) }
-        )
-        WorkspaceTabChip(
-            icon = Icons.Default.AutoAwesome,
-            label = "AI",
-            selected = current == MathWorkspace.AI,
-            activeColor = PurpleAccent,
-            testTag = "switch_workspace_ai",
-            modifier = Modifier.weight(0.85f),
-            onClick = { onSelect(MathWorkspace.AI) }
-        )
-        WorkspaceTabChip(
-            icon = Icons.Default.Settings,
-            label = "Cài đặt",
-            selected = current == MathWorkspace.SETTINGS,
-            activeColor = SkyBlue,
-            showBadge = hasUpdateBadge,
-            testTag = "switch_workspace_settings",
-            modifier = Modifier.weight(1.1f),
-            onClick = { onSelect(MathWorkspace.SETTINGS) }
-        )
-    }
-}
-
-@Composable
-private fun WorkspaceTabChip(
-    icon: ImageVector,
-    label: String,
-    selected: Boolean,
-    activeColor: Color,
-    testTag: String,
-    modifier: Modifier = Modifier,
-    showBadge: Boolean = false,
-    onClick: () -> Unit
-) {
-    val palette = ActiveThemeState.current
-    val isGlass = palette.liquidGlass.enabled
-    val chipShape = if (isGlass) CircleShape else RoundedCornerShape(10.dp)
-    val contentTint = when {
-        selected && isGlass && !palette.isDark -> SlateTextPrimary
-        selected -> Color.White
-        isGlass && palette.isDark -> Color.White.copy(alpha = 0.80f)
-        else -> SlateTextSecondary
-    }
-
-    Box(
-        modifier = modifier
-            .defaultMinSize(minHeight = 36.dp)
-            .liquidGlassActiveBubble(
-                active = selected,
-                shape = chipShape,
-                fallbackActiveColor = activeColor
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 6.dp)
-            .testTag(testTag),
-        contentAlignment = Alignment.Center
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(3.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = contentTint,
-                modifier = Modifier.size(13.dp)
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
-                color = contentTint,
-                fontWeight = FontWeight.Bold,
-                fontSize = 11.sp,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (showBadge) {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(EmeraldLight)
-                )
-            }
-        }
-    }
+private enum class Geo2DSubMode(val label: String) {
+    GEOMETRY("Hình học 2D"),
+    GRAPH("Đồ thị hàm số")
 }
 
 @Composable
 fun Geo2DStudioScreen(
-    onSwitchWorkspace: (MathWorkspace) -> Unit,
+    isImmersive: Boolean = false,
+    onToggleImmersive: () -> Unit = {},
     pendingPlotExpr: String? = null,
     onConsumePendingPlot: () -> Unit = {},
-    hasUpdateBadge: Boolean = false,
     viewModel: Geo2DViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val density = LocalDensity.current.density
     var canvasSize by remember { mutableStateOf(IntSize(1080, 1920)) }
+
+    // Default to Graph mode when functions exist and no geometry objects, else Geometry mode
+    var subMode by remember {
+        mutableStateOf(
+            if (uiState.snapshot.functions.isNotEmpty() && uiState.snapshot.objects.isEmpty()) {
+                Geo2DSubMode.GRAPH
+            } else {
+                Geo2DSubMode.GEOMETRY
+            }
+        )
+    }
+    var graphSheetExpanded by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.refreshExportFolder()
@@ -224,6 +109,7 @@ fun Geo2DStudioScreen(
     LaunchedEffect(pendingPlotExpr) {
         val expr = pendingPlotExpr?.trim()
         if (!expr.isNullOrEmpty()) {
+            subMode = Geo2DSubMode.GRAPH
             val existing = viewModel.uiState.value.snapshot.functions.firstOrNull {
                 it.expression.replace(" ", "").equals(expr.replace(" ", ""), ignoreCase = true)
             }
@@ -239,8 +125,12 @@ fun Geo2DStudioScreen(
         }
     }
 
-    BackHandler(enabled = uiState.replayStep != null) {
-        viewModel.stopReplay(restoreFull = true)
+    BackHandler(enabled = uiState.replayStep != null || graphSheetExpanded || uiState.activeTab != null) {
+        when {
+            uiState.replayStep != null -> viewModel.stopReplay()
+            uiState.activeTab != null -> viewModel.closeTab()
+            graphSheetExpanded -> graphSheetExpanded = false
+        }
     }
 
     fun writePngToUri(uri: Uri, locationSuffix: String = "") {
@@ -362,146 +252,178 @@ fun Geo2DStudioScreen(
     val backdropState = rememberLiquidGlassBackdropState()
 
     CompositionLocalProvider(LocalLiquidGlassBackdrop provides backdropState) {
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val isCompactWidth = maxWidth < 600.dp
-        val maxSheetHeight = (maxHeight * 0.56f).coerceIn(280.dp, 480.dp)
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val isCompactWidth = maxWidth < 600.dp
+            val maxSheetHeight = (maxHeight * 0.56f).coerceIn(280.dp, 490.dp)
+            val anySheetOpen = uiState.activeTab != null || (subMode == Geo2DSubMode.GRAPH && graphSheetExpanded)
 
-        // 1. Interactive 2D Oxy + Function Graph Canvas (live GPU backdrop source for Liquid Glass!)
-        Geo2DCanvasViewport(
-            uiState = uiState,
-            viewModel = viewModel,
-            onSizeChanged = { canvasSize = it },
-            modifier = Modifier
-                .fillMaxSize()
-                .liquidGlassBackdropSource(backdropState)
-        )
-
-        // 2. Top 2D Studio Header with Unified 4-Tab Switcher
-        Geo2DTopHeader(
-            uiState = uiState,
-            viewModel = viewModel,
-            onSwitchWorkspace = onSwitchWorkspace,
-            hasUpdateBadge = hasUpdateBadge,
-            modifier = Modifier.align(Alignment.TopCenter)
-        )
-
-        // 3. Right Quick Controls
-        if (!isCompactWidth || uiState.activeTab == null) {
-            Geo2DRightQuickControls(
+            // 1. Full-bleed Interactive 2D Oxy + Function Graph Canvas
+            Geo2DCanvasViewport(
                 uiState = uiState,
                 viewModel = viewModel,
-                modifier = Modifier.align(Alignment.CenterEnd)
-            )
-        }
-
-        // 3b. Tap anywhere on empty canvas area to quickly dismiss open panel
-        if (uiState.activeTab != null) {
-            Box(
+                onSizeChanged = { canvasSize = it },
+                onEmptyCanvasTap = {
+                    if (!anySheetOpen) onToggleImmersive()
+                },
                 modifier = Modifier
                     .fillMaxSize()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { viewModel.closeTab() }
-                    .testTag("geo2d_dismiss_scrim")
+                    .liquidGlassBackdropSource(backdropState)
             )
-        }
 
-        // 4. Adaptive Inspector Sheet (Functions / Presets / Measurements / Settings)
-        Geo2DInspectorSheet(
-            uiState = uiState,
-            viewModel = viewModel,
-            isCompactWidth = isCompactWidth,
-            maxSheetHeight = maxSheetHeight,
-            modifier = Modifier.align(if (isCompactWidth) Alignment.BottomCenter else Alignment.CenterStart)
-        )
-
-        // 4b. Floating Parameter m Slider Overlay (auto-shown when any active function contains parameter m)
-        val hasActiveParamM = remember(uiState.snapshot.functions) {
-            uiState.snapshot.functions.any {
-                (it.visible || it.showDerivative) &&
-                    (MathExprParser.parse(it.expression) as? MathExprParser.ParseResult.Ok)?.expr?.containsVarM() == true
-            }
-        }
-        if (hasActiveParamM && uiState.activeTab == null && uiState.replayStep == null) {
-            val topOffset = if (uiState.traceX != null && uiState.traceResults.isNotEmpty()) 168.dp else 102.dp
-            ParameterMSliderOverlay(
-                paramM = uiState.snapshot.paramM,
-                minVal = uiState.snapshot.paramMMin,
-                maxVal = uiState.snapshot.paramMMax,
-                isAnimating = uiState.paramMAnimating,
-                onValueChange = { viewModel.updateParamM(it) },
-                onToggleAnimate = { viewModel.toggleParamMAnimate() },
-                onReset = { viewModel.resetParamM() },
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = topOffset)
-            )
-        }
-
-        // 5. Construction Replay Bar OR 2-Tier Bottom 2D Studio Dock
-        if (uiState.replayStep != null) {
-            ConstructionReplayBar(
-                step = uiState.replayStep!!,
-                totalSteps = uiState.replayTotalSteps,
-                stepLabel = uiState.replayStepLabel,
-                isPlaying = uiState.replayPlaying,
-                onPrev = { viewModel.stepReplay(-1) },
-                onTogglePlay = { viewModel.toggleReplayPlay() },
-                onNext = { viewModel.stepReplay(1) },
-                onClose = { viewModel.stopReplay() },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(bottom = 12.dp)
-            )
-        } else {
-            Geo2DBottomDock(
+            // 2. Top Floating Bar: Segmented Mode Switch (Hình học 2D | Đồ thị hàm số) + Compact Actions
+            Geo2DTopHeader(
                 uiState = uiState,
+                subMode = subMode,
+                isImmersive = isImmersive,
+                onSelectSubMode = { next ->
+                    subMode = next
+                    viewModel.closeTab()
+                    if (next == Geo2DSubMode.GEOMETRY) {
+                        graphSheetExpanded = false
+                    } else if (uiState.activeTool != Geo2DTool.TRACE_GRAPH) {
+                        viewModel.setTool(Geo2DTool.PAN_SELECT)
+                    }
+                },
+                onToggleImmersive = onToggleImmersive,
                 viewModel = viewModel,
-                modifier = Modifier.align(Alignment.BottomCenter)
+                modifier = Modifier.align(Alignment.TopCenter)
             )
-        }
 
-        // 6. Floating Toast
-        ToastBanner(
-            message = uiState.toastMessage,
-            modifier = Modifier.align(Alignment.TopCenter)
-        )
-
-        // 7. 2D Save / Export Modal
-        Geo2DSaveExportModal(
-            uiState = uiState,
-            viewModel = viewModel,
-            onPickExportFolderClick = { pickFolderLauncher.launch(null) },
-            onExportPngClick = { forcePicker ->
-                handleExport(forcePicker, "image/png", "png", ::writePngToUri) { exportPngLauncher.launch(it) }
-            },
-            onExportSvgClick = { forcePicker ->
-                handleExport(forcePicker, "image/svg+xml", "svg", ::writeSvgToUri) { exportSvgLauncher.launch(it) }
-            },
-            onExportJsonClick = { forcePicker ->
-                handleExport(forcePicker, "application/json", "json", ::writeJsonToUri) { exportJsonLauncher.launch(it) }
-            },
-            onImportJsonClick = { importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
-        )
-
-        // 8. Automatic Variation Table (Bảng biến thiên) Dialog
-        uiState.variationTargetFnId?.let { targetId ->
-            val targetFn = uiState.snapshot.functions.firstOrNull { it.id == targetId }
-            if (targetFn != null) {
-                VariationTableDialog(
-                    fn = targetFn,
-                    paramM = uiState.snapshot.paramM,
-                    paramMMin = uiState.snapshot.paramMMin,
-                    paramMMax = uiState.snapshot.paramMMax,
-                    onChangeParamM = { viewModel.updateParamM(it) },
-                    onDismiss = { viewModel.closeVariationTable() }
+            // 3. Minimal Right Quick Controls (hidden in immersive or while editing sheet)
+            AnimatedVisibility(
+                visible = !isImmersive && (!isCompactWidth || !anySheetOpen),
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.CenterEnd)
+            ) {
+                Geo2DRightQuickControls(
+                    uiState = uiState,
+                    viewModel = viewModel
                 )
             }
+
+            // 3b. Tap outside scrim to close open inspector/expanded graph sheet cleanly
+            if (anySheetOpen) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            viewModel.closeTab()
+                            graphSheetExpanded = false
+                        }
+                        .testTag("geo2d_dismiss_scrim")
+                )
+            }
+
+            // 4. Floating Parameter m Slider Overlay (when active function uses m and sheet is collapsed)
+            val hasActiveParamM = remember(uiState.snapshot.functions) {
+                uiState.snapshot.functions.any {
+                    (it.visible || it.showDerivative) &&
+                        (MathExprParser.parse(it.expression) as? MathExprParser.ParseResult.Ok)?.expr?.containsVarM() == true
+                }
+            }
+            if (hasActiveParamM && !anySheetOpen && uiState.replayStep == null && !isImmersive) {
+                val topOffset = if (uiState.traceX != null && uiState.traceResults.isNotEmpty()) 136.dp else 66.dp
+                ParameterMSliderOverlay(
+                    paramM = uiState.snapshot.paramM,
+                    minVal = uiState.snapshot.paramMMin,
+                    maxVal = uiState.snapshot.paramMMax,
+                    isAnimating = uiState.paramMAnimating,
+                    onValueChange = { viewModel.updateParamM(it) },
+                    onToggleAnimate = { viewModel.toggleParamMAnimate() },
+                    onReset = { viewModel.resetParamM() },
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(top = topOffset)
+                )
+            }
+
+            // 5. Modal Bottom Sheet for Geometry helpers (Hình mẫu / Đo đạc / Cài đặt Oxy)
+            Geo2DInspectorSheet(
+                uiState = uiState,
+                viewModel = viewModel,
+                isCompactWidth = isCompactWidth,
+                maxSheetHeight = maxSheetHeight,
+                modifier = Modifier.align(if (isCompactWidth) Alignment.BottomCenter else Alignment.CenterStart)
+            )
+
+            // 6. Bottom Contextual Area: Replay Bar OR Geometry Tool Strip OR Expandable Graph Sheet
+            if (uiState.replayStep != null) {
+                ConstructionReplayBar(
+                    step = uiState.replayStep!!,
+                    totalSteps = uiState.replayTotalSteps,
+                    stepLabel = uiState.replayStepLabel,
+                    isPlaying = uiState.replayPlaying,
+                    onPrev = { viewModel.stepReplay(-1) },
+                    onTogglePlay = { viewModel.toggleReplayPlay() },
+                    onNext = { viewModel.stepReplay(1) },
+                    onClose = { viewModel.stopReplay() },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = if (isImmersive) 14.dp else 82.dp)
+                )
+            } else if (!isImmersive) {
+                if (subMode == Geo2DSubMode.GEOMETRY) {
+                    Geo2DGeometryToolStrip(
+                        uiState = uiState,
+                        viewModel = viewModel,
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    )
+                } else {
+                    Geo2DExpandableGraphSheet(
+                        uiState = uiState,
+                        viewModel = viewModel,
+                        expanded = graphSheetExpanded,
+                        maxExpandedHeight = maxSheetHeight,
+                        onToggleExpanded = { graphSheetExpanded = !graphSheetExpanded },
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    )
+                }
+            }
+
+            // 7. Floating Toast
+            ToastBanner(
+                message = uiState.toastMessage,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
+
+            // 8. 2D Save / Export Modal
+            Geo2DSaveExportModal(
+                uiState = uiState,
+                viewModel = viewModel,
+                onPickExportFolderClick = { pickFolderLauncher.launch(null) },
+                onExportPngClick = { forcePicker ->
+                    handleExport(forcePicker, "image/png", "png", ::writePngToUri) { exportPngLauncher.launch(it) }
+                },
+                onExportSvgClick = { forcePicker ->
+                    handleExport(forcePicker, "image/svg+xml", "svg", ::writeSvgToUri) { exportSvgLauncher.launch(it) }
+                },
+                onExportJsonClick = { forcePicker ->
+                    handleExport(forcePicker, "application/json", "json", ::writeJsonToUri) { exportJsonLauncher.launch(it) }
+                },
+                onImportJsonClick = { importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
+            )
+
+            // 9. Automatic Variation Table (Bảng biến thiên) Dialog
+            uiState.variationTargetFnId?.let { targetId ->
+                val targetFn = uiState.snapshot.functions.firstOrNull { it.id == targetId }
+                if (targetFn != null) {
+                    VariationTableDialog(
+                        fn = targetFn,
+                        paramM = uiState.snapshot.paramM,
+                        paramMMin = uiState.snapshot.paramMMin,
+                        paramMMax = uiState.snapshot.paramMMax,
+                        onChangeParamM = { viewModel.updateParamM(it) },
+                        onDismiss = { viewModel.closeVariationTable() }
+                    )
+                }
+            }
         }
-    }
     }
 }
 
@@ -510,10 +432,12 @@ private fun Geo2DCanvasViewport(
     uiState: Geo2DUiState,
     viewModel: Geo2DViewModel,
     onSizeChanged: (IntSize) -> Unit,
+    onEmptyCanvasTap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current.density
     val latestState by rememberUpdatedState(uiState)
+    val latestEmptyTap by rememberUpdatedState(onEmptyCanvasTap)
     var sizePx by remember { mutableStateOf(IntSize(1080, 1920)) }
 
     Canvas(
@@ -580,13 +504,23 @@ private fun Geo2DCanvasViewport(
                         viewModel.commitCameraGesture()
                     }
                     if (!moved && !multiTouch) {
+                        val prevToast = viewModel.uiState.value.toastMessage
+                        val prevTrace = viewModel.uiState.value.traceX
                         viewModel.onCanvasTap(downPos.x, downPos.y, w, h, density)
+                        val after = viewModel.uiState.value
+                        if (
+                            latestState.activeTool == Geo2DTool.PAN_SELECT &&
+                            prevTrace == null &&
+                            after.traceX == null &&
+                            after.toastMessage == prevToast
+                        ) {
+                            latestEmptyTap()
+                        }
                     }
                 }
             }
             .testTag("geo2d_canvas")
     ) {
-        // Observe active theme palette so Light/Dark/Preset/Accent changes redraw 2D canvas immediately
         @Suppress("UNUSED_VARIABLE")
         val themeVersion = ActiveThemeState.current
         Geo2DRenderer.renderScene(
@@ -602,118 +536,146 @@ private fun Geo2DCanvasViewport(
 @Composable
 private fun Geo2DTopHeader(
     uiState: Geo2DUiState,
+    subMode: Geo2DSubMode,
+    isImmersive: Boolean,
+    onSelectSubMode: (Geo2DSubMode) -> Unit,
+    onToggleImmersive: () -> Unit,
     viewModel: Geo2DViewModel,
-    onSwitchWorkspace: (MathWorkspace) -> Unit,
-    hasUpdateBadge: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    Column(
+    val palette = ActiveThemeState.current
+    val isGlass = palette.liquidGlass.enabled
+
+    AnimatedVisibility(
+        visible = !isImmersive,
+        enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
+        exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top),
         modifier = modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        // Row 1: Unified 4-Tab Workspace Navigation Bar
-        WorkspaceModeSwitch(
-            current = MathWorkspace.PLANE_2D,
-            hasUpdateBadge = hasUpdateBadge,
-            onSelect = onSwitchWorkspace,
-            modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp)
-        )
-
-        // Row 2: Active Functions Pill + Quick 2D Studio Actions
-        Row(
-            modifier = Modifier.fillMaxWidth().widthIn(max = 680.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            val visibleFnCount = uiState.snapshot.functions.count { (it.visible || it.showDerivative) && it.expression.isNotBlank() }
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .liquidGlassSurface(
-                        shape = RoundedCornerShape(12.dp),
-                        pillShape = CircleShape,
-                        fallbackBg = SlateDark.copy(alpha = 0.90f),
-                        fallbackBorder = SlateBorder.copy(alpha = 0.8f),
-                        accentBorder = if (uiState.activeTab == Geo2DTab.FUNCTIONS) EmeraldAccent else null
-                    )
-                    .clickable { viewModel.toggleTab(Geo2DTab.FUNCTIONS) }
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Icon(Icons.AutoMirrored.Filled.ShowChart, contentDescription = null, tint = EmeraldAccent, modifier = Modifier.size(16.dp))
-                Text(
-                    text = if (visibleFnCount > 0) "Đang vẽ $visibleFnCount đồ thị f(x)" else "Nhập hàm số y = f(x)",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = SlateTextPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = EmeraldAccent, modifier = Modifier.size(16.dp))
-            }
-
-            Row(
-                modifier = Modifier
-                    .liquidGlassSurface(
-                        shape = RoundedCornerShape(12.dp),
-                        pillShape = CircleShape,
-                        fallbackBg = SlateDark.copy(alpha = 0.90f),
-                        fallbackBorder = SlateBorder.copy(alpha = 0.8f)
-                    )
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TopIconBtn(Icons.AutoMirrored.Filled.Undo, "Hoàn tác", enabled = uiState.canUndo) { viewModel.undo() }
-                TopIconBtn(Icons.AutoMirrored.Filled.Redo, "Làm lại", enabled = uiState.canRedo) { viewModel.redo() }
-                TopIconBtn(Icons.Default.PlayCircleOutline, "Tua lại từng bước dựng", tint = AmberAccent, testTag = "replay_2d_btn") { viewModel.startReplay() }
-                TopIconBtn(Icons.Default.MyLocation, "Về tâm O(0;0)") { viewModel.resetView() }
-                TopIconBtn(Icons.Default.SaveAlt, "Lưu / Xuất 2D", tint = EmeraldAccent) { viewModel.openSaveModal() }
-            }
-        }
-
-        // Live Trace Readout Pill (when tracing graph)
-        if (uiState.traceX != null && uiState.traceResults.isNotEmpty()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .widthIn(max = 680.dp)
-                    .liquidGlassSurface(
-                        shape = RoundedCornerShape(10.dp),
-                        fallbackBg = SlateDeepest.copy(alpha = 0.92f),
-                        accentBorder = CyanAccent.copy(alpha = 0.6f)
-                    )
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    .widthIn(max = 680.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = "x = ${Geo2DMathHelpers.formatNum(uiState.traceX)}",
-                        style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily),
-                        color = AmberAccent,
-                        fontWeight = FontWeight.Bold
-                    )
-                    uiState.traceResults.take(3).forEach { res ->
-                        val c = try { Color(AndroidColor.parseColor(res.colorHex)) } catch (_: Exception) { CyanAccent }
-                        val yText = if (uiState.verifyHideAnswers) "???" else if (res.y.isFinite()) Geo2DMathHelpers.formatNum(res.y) else "Không XĐ"
-                        val slopeText = if (uiState.verifyHideAnswers) "" else if (res.slope.isFinite()) " • f'(x)=${Geo2DMathHelpers.formatNum(res.slope)}" else ""
-                        Text(
-                            text = "${res.functionLabel} = $yText$slopeText",
-                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
-                            color = c,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                // Compact Segmented Control: Hình học 2D | Đồ thị hàm số
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .liquidGlassSurface(
+                            shape = CircleShape,
+                            pillShape = CircleShape,
+                            elevated = true,
+                            fallbackBg = SlateDark.copy(alpha = 0.92f),
+                            fallbackBorder = SlateBorder.copy(alpha = 0.8f)
                         )
+                        .padding(3.dp)
+                        .testTag("geo2d_mode_segmented"),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Geo2DSubMode.entries.forEach { mode ->
+                        val selected = subMode == mode
+                        val tint = when {
+                            selected && isGlass && !palette.isDark -> SlateTextPrimary
+                            selected -> Color.White
+                            else -> SlateTextSecondary
+                        }
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .defaultMinSize(minHeight = 36.dp)
+                                .liquidGlassActiveBubble(
+                                    active = selected,
+                                    shape = CircleShape,
+                                    fallbackActiveColor = if (mode == Geo2DSubMode.GRAPH) CyanAccent else EmeraldDark
+                                )
+                                .clip(CircleShape)
+                                .clickable { onSelectSubMode(mode) }
+                                .padding(horizontal = 6.dp, vertical = 6.dp)
+                                .testTag("geo2d_submode_${mode.name.lowercase()}"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = mode.label,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = tint,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
-                IconButton(onClick = { viewModel.clearTrace() }, modifier = Modifier.size(30.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "Đóng dò đồ thị", tint = SlateTextSecondary, modifier = Modifier.size(16.dp))
+
+                // Compact Action Pill: Undo, Redo, Reset, Save, Fullscreen
+                Row(
+                    modifier = Modifier
+                        .liquidGlassSurface(
+                            shape = CircleShape,
+                            pillShape = CircleShape,
+                            elevated = true,
+                            fallbackBg = SlateDark.copy(alpha = 0.92f),
+                            fallbackBorder = SlateBorder.copy(alpha = 0.8f)
+                        )
+                        .padding(horizontal = 3.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TopIconBtn(Icons.AutoMirrored.Filled.Undo, "Hoàn tác", enabled = uiState.canUndo) { viewModel.undo() }
+                    TopIconBtn(Icons.AutoMirrored.Filled.Redo, "Làm lại", enabled = uiState.canRedo) { viewModel.redo() }
+                    TopIconBtn(Icons.Default.MyLocation, "Về tâm O(0;0)") { viewModel.resetView() }
+                    TopIconBtn(Icons.Default.SaveAlt, "Lưu / Xuất 2D", tint = EmeraldAccent) { viewModel.openSaveModal() }
+                    TopIconBtn(Icons.Default.Fullscreen, "Toàn màn hình", testTag = "geo2d_fullscreen_btn") { onToggleImmersive() }
+                }
+            }
+
+            // Live Trace Readout Pill (when tracing graph)
+            if (uiState.traceX != null && uiState.traceResults.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 680.dp)
+                        .liquidGlassSurface(
+                            shape = RoundedCornerShape(14.dp),
+                            fallbackBg = SlateDeepest.copy(alpha = 0.92f),
+                            accentBorder = CyanAccent.copy(alpha = 0.6f)
+                        )
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = "x = ${Geo2DMathHelpers.formatNum(uiState.traceX)}",
+                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily),
+                            color = AmberAccent,
+                            fontWeight = FontWeight.Bold
+                        )
+                        uiState.traceResults.take(3).forEach { res ->
+                            val c = try { Color(AndroidColor.parseColor(res.colorHex)) } catch (_: Exception) { CyanAccent }
+                            val yText = if (uiState.verifyHideAnswers) "???" else if (res.y.isFinite()) Geo2DMathHelpers.formatNum(res.y) else "Không XĐ"
+                            val slopeText = if (uiState.verifyHideAnswers) "" else if (res.slope.isFinite()) " • f'(x)=${Geo2DMathHelpers.formatNum(res.slope)}" else ""
+                            Text(
+                                text = "${res.functionLabel} = $yText$slopeText",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                                color = c,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    IconButton(onClick = { viewModel.clearTrace() }, modifier = Modifier.size(30.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Đóng dò đồ thị", tint = SlateTextSecondary, modifier = Modifier.size(16.dp))
+                    }
                 }
             }
         }
@@ -756,24 +718,24 @@ private fun Geo2DRightQuickControls(
         modifier = modifier
             .padding(end = 8.dp)
             .liquidGlassSurface(
-                shape = RoundedCornerShape(14.dp),
-                pillShape = RoundedCornerShape(26.dp),
+                shape = RoundedCornerShape(22.dp),
+                pillShape = RoundedCornerShape(24.dp),
                 fallbackBg = SlateDark.copy(alpha = 0.84f),
                 fallbackBorder = SlateBorder.copy(alpha = 0.7f)
             )
-            .padding(vertical = 6.dp, horizontal = 3.dp),
+            .padding(vertical = 5.dp, horizontal = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(3.dp)
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         QuickChip2D("Oxy", Icons.Default.GridOn, s.showAxes) { viewModel.toggleAxes() }
         QuickChip2D("Hút", Icons.Default.Straighten, s.snapToGrid) { viewModel.toggleSnap() }
         QuickChip2D("Đo", Icons.Default.SquareFoot, s.showMeasurements) { viewModel.toggleMeasurements() }
-        HorizontalDivider(color = SlateBorder.copy(alpha = 0.65f), modifier = Modifier.width(24.dp).padding(vertical = 2.dp))
-        IconButton(onClick = { viewModel.stepZoom(true) }, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Default.Add, contentDescription = "Phóng to", tint = SlateTextPrimary, modifier = Modifier.size(18.dp))
+        HorizontalDivider(color = SlateBorder.copy(alpha = 0.65f), modifier = Modifier.width(22.dp).padding(vertical = 2.dp))
+        IconButton(onClick = { viewModel.stepZoom(true) }, modifier = Modifier.size(34.dp)) {
+            Icon(Icons.Default.Add, contentDescription = "Phóng to", tint = SlateTextPrimary, modifier = Modifier.size(17.dp))
         }
-        IconButton(onClick = { viewModel.stepZoom(false) }, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Default.Remove, contentDescription = "Thu nhỏ", tint = SlateTextPrimary, modifier = Modifier.size(18.dp))
+        IconButton(onClick = { viewModel.stepZoom(false) }, modifier = Modifier.size(34.dp)) {
+            Icon(Icons.Default.Remove, contentDescription = "Thu nhỏ", tint = SlateTextPrimary, modifier = Modifier.size(17.dp))
         }
     }
 }
@@ -783,15 +745,408 @@ private fun QuickChip2D(label: String, icon: ImageVector, active: Boolean, onCli
     Column(
         modifier = Modifier
             .width(42.dp)
-            .clip(RoundedCornerShape(9.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(if (active) EmeraldDark.copy(alpha = 0.36f) else Color.Transparent)
-            .border(1.dp, if (active) EmeraldAccent.copy(alpha = 0.65f) else Color.Transparent, RoundedCornerShape(9.dp))
+            .border(1.dp, if (active) EmeraldAccent.copy(alpha = 0.65f) else Color.Transparent, RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
             .padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Icon(icon, contentDescription = label, tint = if (active) EmeraldAccent else SlateTextSecondary, modifier = Modifier.size(16.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, fontSize = 8.5.sp, color = if (active) SlateTextPrimary else SlateTextSecondary)
+    }
+}
+
+/**
+ * Compact horizontal Tool Strip for 2D Geometry Mode (floating cleanly above the Bottom Navigation Bar).
+ */
+@Composable
+private fun Geo2DGeometryToolStrip(
+    uiState: Geo2DUiState,
+    viewModel: Geo2DViewModel,
+    modifier: Modifier = Modifier
+) {
+    val palette = ActiveThemeState.current
+    val isGlass = palette.liquidGlass.enabled
+    val geometryTools = remember {
+        Geo2DTool.entries.filter { it != Geo2DTool.TRACE_GRAPH }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(start = 8.dp, end = 8.dp, bottom = 78.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        // Active tool hint pill
+        AnimatedVisibility(visible = uiState.activeTool != Geo2DTool.PAN_SELECT && uiState.activeTab == null) {
+            Row(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(SlateDeepest.copy(alpha = 0.92f))
+                    .border(1.dp, EmeraldAccent.copy(alpha = 0.55f), CircleShape)
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = uiState.activeTool.hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SlateTextLight,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (uiState.activeTool == Geo2DTool.POLYGON && uiState.pendingPointIds.size >= 3) {
+                    Text(
+                        text = "Khép (${uiState.pendingPointIds.size})",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(EmeraldDark)
+                            .clickable { viewModel.finishPendingPolygon() }
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+                Text(
+                    text = "Xong",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = CyanAccent,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clickable { viewModel.setTool(Geo2DTool.PAN_SELECT) }
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                )
+            }
+        }
+
+        // Scrollable Tool Strip + Compact Sheet Triggers (Hình mẫu, Đo đạc, Cài đặt Oxy)
+        AnimatedVisibility(visible = uiState.activeTab == null) {
+            Row(
+                modifier = Modifier
+                    .liquidGlassSurface(
+                        shape = CircleShape,
+                        pillShape = CircleShape,
+                        elevated = true,
+                        fallbackBg = SlateDark.copy(alpha = 0.94f),
+                        fallbackBorder = SlateBorder.copy(alpha = 0.8f)
+                    )
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                    .testTag("geo2d_geometry_tool_strip"),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                geometryTools.forEach { tool ->
+                    val selected = uiState.activeTool == tool
+                    val tint = when {
+                        selected && isGlass && !palette.isDark -> SlateTextPrimary
+                        selected -> Color.White
+                        isGlass && palette.isDark -> Color.White.copy(alpha = 0.84f)
+                        else -> SlateTextLight
+                    }
+                    Row(
+                        modifier = Modifier
+                            .defaultMinSize(minHeight = 36.dp)
+                            .liquidGlassActiveBubble(
+                                active = selected,
+                                shape = CircleShape,
+                                fallbackActiveColor = EmeraldDark
+                            )
+                            .clip(CircleShape)
+                            .clickable { viewModel.setTool(tool) }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                            .testTag("geo2d_tool_${tool.name.lowercase()}"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = iconFor2DTool(tool),
+                            contentDescription = tool.shortLabel,
+                            tint = tint,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = tool.shortLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = tint,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+
+                Box(modifier = Modifier.width(1.dp).height(18.dp).background(SlateBorder.copy(alpha = 0.7f)))
+
+                // Contextual sheet openers (Hình mẫu / Đo đạc / Cài đặt / Phát lại)
+                Geo2DMiniSheetChip("Hình mẫu", Icons.Default.Category, CyanAccent, "geo2d_tab_presets") {
+                    viewModel.toggleTab(Geo2DTab.PRESETS)
+                }
+                Geo2DMiniSheetChip("Đo đạc", Icons.Default.Straighten, AmberAccent, "geo2d_tab_objects") {
+                    viewModel.toggleTab(Geo2DTab.OBJECTS)
+                }
+                Geo2DMiniSheetChip("Phát lại", Icons.Default.PlayCircleOutline, IndigoBright, "replay_2d_btn") {
+                    viewModel.startReplay()
+                }
+                Geo2DMiniSheetChip("Tùy chọn", Icons.Default.Tune, SlateTextPrimary, "geo2d_tab_settings") {
+                    viewModel.toggleTab(Geo2DTab.SETTINGS)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Geo2DMiniSheetChip(
+    label: String,
+    icon: ImageVector,
+    tint: Color,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .testTag(testTag)
+            .defaultMinSize(minHeight = 36.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 9.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(15.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = SlateTextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+/**
+ * Expandable Bottom Sheet for 2D Function Graphing & Analysis Mode:
+ * - Collapsed (Peek) state: Compact 1-line quick y = f(x) input + Trace toggle + Expand pill (keeps graph wide open!)
+ * - Expanded state: Full Geo2DFunctionsPane (function list, library, parameter m, derivative f'(x), key points, asymptotes, BBT)
+ */
+@Composable
+private fun Geo2DExpandableGraphSheet(
+    uiState: Geo2DUiState,
+    viewModel: Geo2DViewModel,
+    expanded: Boolean,
+    maxExpandedHeight: Dp,
+    onToggleExpanded: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var quickExpr by remember { mutableStateOf("") }
+    val fnCount = uiState.snapshot.functions.count { (it.visible || it.showDerivative) && it.expression.isNotBlank() }
+    val isTracing = uiState.activeTool == Geo2DTool.TRACE_GRAPH
+    val isGlass = ActiveThemeState.current.liquidGlass.enabled
+    val headerBg = if (isGlass) SlateDeepest.copy(alpha = 0.42f) else SlateDeepest
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .widthIn(max = 640.dp)
+            .navigationBarsPadding()
+            .padding(start = 8.dp, end = 8.dp, bottom = 78.dp)
+            .animateContentSize()
+            .then(if (expanded) Modifier.heightIn(max = maxExpandedHeight) else Modifier)
+            .liquidGlassSurface(
+                shape = RoundedCornerShape(22.dp),
+                elevated = true,
+                fallbackBg = SlateDark.copy(alpha = 0.96f),
+                fallbackBorder = SlateBorder.copy(alpha = 0.85f)
+            )
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {}
+            .testTag("geo2d_graph_expandable_sheet")
+    ) {
+        // Drag Handle + Header Toggle
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(headerBg)
+                .clickable(onClick = onToggleExpanded)
+                .padding(horizontal = 14.dp, vertical = 7.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(38.dp)
+                    .height(4.dp)
+                    .clip(CircleShape)
+                    .background(SlateMuted)
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ShowChart,
+                    contentDescription = null,
+                    tint = CyanAccent,
+                    modifier = Modifier.size(17.dp)
+                )
+                Text(
+                    text = if (expanded) "Khảo sát hàm số & Bảng biến thiên" else "Đồ thị ($fnCount hàm) · Khảo sát & BBT",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = SlateTextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                // Quick Trace toggle right in the header
+                Box(
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(if (isTracing) CyanAccent.copy(alpha = 0.22f) else SlateSurface)
+                        .border(1.dp, if (isTracing) CyanAccent else SlateBorder, CircleShape)
+                        .clickable {
+                            viewModel.setTool(if (isTracing) Geo2DTool.PAN_SELECT else Geo2DTool.TRACE_GRAPH)
+                            if (!isTracing && expanded) onToggleExpanded()
+                        }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .testTag("geo2d_tool_trace_graph")
+                ) {
+                    Text(
+                        text = if (isTracing) "Đang dò" else "Dò x",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isTracing) CyanAccent else SlateTextSecondary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.5.sp
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+                    contentDescription = if (expanded) "Thu gọn bảng đồ thị" else "Mở rộng bảng khảo sát hàm số",
+                    tint = CyanAccent,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
+        if (!expanded) {
+            // Peek State: Slim 1-line quick y = f(x) composer so graph stays unobstructed
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                OutlinedTextField(
+                    value = quickExpr,
+                    onValueChange = { quickExpr = it },
+                    placeholder = { Text("Nhập nhanh: x^3 - 3x, e^x, sin(x)...", color = SlateTextSecondary, fontSize = 11.5.sp) },
+                    prefix = { Text("y = ", color = CyanAccent, fontWeight = FontWeight.Bold, fontSize = 12.sp) },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFontFamily, color = SlateTextPrimary),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            if (quickExpr.isNotBlank()) {
+                                viewModel.addFunction(quickExpr)
+                                quickExpr = ""
+                            }
+                        }
+                    ),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = SlateDeepest.copy(alpha = 0.7f),
+                        unfocusedContainerColor = SlateDeepest.copy(alpha = 0.6f),
+                        focusedBorderColor = CyanAccent,
+                        unfocusedBorderColor = SlateBorder
+                    ),
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 44.dp)
+                        .testTag("geo2d_quick_func_input")
+                )
+                Button(
+                    onClick = {
+                        if (quickExpr.isNotBlank()) {
+                            viewModel.addFunction(quickExpr)
+                            quickExpr = ""
+                        } else {
+                            onToggleExpanded()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldDark, contentColor = Color.White),
+                    shape = CircleShape,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                    modifier = Modifier.heightIn(min = 44.dp)
+                ) {
+                    Icon(if (quickExpr.isNotBlank()) Icons.Default.Add else Icons.Default.ExpandLess, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(if (quickExpr.isNotBlank()) "Vẽ" else "Mở", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                }
+            }
+        } else {
+            HorizontalDivider(color = SlateSurface)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Quick Analysis Display Chips (Điểm đặc biệt, Tiệm cận, Tiếp tuyến)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    GraphFeatureChip("Nghiệm & Cực trị", uiState.snapshot.showKeyGraphPoints) {
+                        viewModel.toggleKeyGraphPoints()
+                    }
+                    GraphFeatureChip("Tiệm cận", uiState.snapshot.showAsymptotes) {
+                        viewModel.toggleAsymptotes()
+                    }
+                    GraphFeatureChip("Tiếp tuyến khi dò", uiState.snapshot.showTangentOnTrace) {
+                        viewModel.toggleTangentOnTrace()
+                    }
+                }
+                Geo2DFunctionsPane(uiState = uiState, viewModel = viewModel)
+            }
+        }
+    }
+}
+
+@Composable
+private fun GraphFeatureChip(
+    label: String,
+    active: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(if (active) CyanAccent.copy(alpha = 0.2f) else SlateSurface)
+            .border(1.dp, if (active) CyanAccent else SlateBorder, CircleShape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Icon(
+            imageVector = if (active) Icons.Default.Check else Icons.Default.VisibilityOff,
+            contentDescription = null,
+            tint = if (active) CyanAccent else SlateTextSecondary,
+            modifier = Modifier.size(13.dp)
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (active) CyanAccent else SlateTextSecondary,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 
@@ -804,9 +1159,6 @@ private fun Geo2DInspectorSheet(
     modifier: Modifier = Modifier
 ) {
     val activeTab = uiState.activeTab
-    BackHandler(enabled = activeTab != null) {
-        viewModel.closeTab()
-    }
 
     AnimatedVisibility(
         visible = activeTab != null,
@@ -815,19 +1167,19 @@ private fun Geo2DInspectorSheet(
         modifier = modifier
     ) {
         if (activeTab == null) return@AnimatedVisibility
-        val shape = RoundedCornerShape(16.dp)
+        val shape = RoundedCornerShape(22.dp)
         val containerMod = if (isCompactWidth) {
             Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(start = 8.dp, end = 8.dp, bottom = 72.dp)
+                .padding(start = 8.dp, end = 8.dp, bottom = 78.dp)
                 .heightIn(min = 220.dp, max = maxSheetHeight)
         } else {
             Modifier
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(start = 10.dp, top = 74.dp, bottom = 78.dp)
-                .width(356.dp)
+                .padding(start = 10.dp, top = 66.dp, bottom = 84.dp)
+                .width(360.dp)
                 .fillMaxHeight()
         }
 
@@ -853,14 +1205,14 @@ private fun Geo2DInspectorSheet(
                         .fillMaxWidth()
                         .background(headerBg2D)
                         .clickable { viewModel.closeTab() }
-                        .padding(top = 7.dp, bottom = 2.dp),
+                        .padding(top = 8.dp, bottom = 2.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Box(
                         modifier = Modifier
-                            .width(36.dp)
+                            .width(38.dp)
                             .height(4.dp)
-                            .clip(RoundedCornerShape(2.dp))
+                            .clip(CircleShape)
                             .background(SlateMuted)
                     )
                 }
@@ -873,14 +1225,14 @@ private fun Geo2DInspectorSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(activeTab.title, style = MaterialTheme.typography.titleSmall, color = EmeraldAccent)
+                Text(activeTab.title, style = MaterialTheme.typography.titleSmall, color = EmeraldAccent, fontWeight = FontWeight.Bold)
                 Row(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(CircleShape)
                         .background(SlateSurface)
-                        .border(1.dp, SlateBorder, RoundedCornerShape(8.dp))
+                        .border(1.dp, SlateBorder, CircleShape)
                         .clickable { viewModel.closeTab() }
-                        .padding(horizontal = 9.dp, vertical = 4.dp),
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
@@ -907,201 +1259,6 @@ private fun Geo2DInspectorSheet(
     }
 }
 
-@Composable
-private fun Geo2DBottomDock(
-    uiState: Geo2DUiState,
-    viewModel: Geo2DViewModel,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(5.dp)
-    ) {
-        // Active Tool Hint Pill + Finish Polygon Button
-        if (uiState.activeTool != Geo2DTool.PAN_SELECT && uiState.activeTab == null) {
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(SlateDeepest.copy(alpha = 0.92f))
-                    .border(1.dp, EmeraldAccent.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = uiState.activeTool.hint,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = SlateTextLight,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                if (uiState.activeTool == Geo2DTool.POLYGON && uiState.pendingPointIds.size >= 3) {
-                    Text(
-                        text = "Khép (${uiState.pendingPointIds.size})",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(EmeraldDark)
-                            .clickable { viewModel.finishPendingPolygon() }
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
-                Text(
-                    text = "Xong",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = CyanAccent,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .clickable { viewModel.setTool(Geo2DTool.PAN_SELECT) }
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                )
-            }
-        }
-
-        // Tier 1: Compact Scrollable 2D Tool Mode Strip (auto-hidden when an inspector tab is open to keep UI neat!)
-        val palette = ActiveThemeState.current
-        val isGlass = palette.liquidGlass.enabled
-
-        AnimatedVisibility(visible = uiState.activeTab == null) {
-            Row(
-                modifier = Modifier
-                    .liquidGlassSurface(
-                        shape = RoundedCornerShape(13.dp),
-                        pillShape = CircleShape,
-                        fallbackBg = SlateDark.copy(alpha = 0.9f),
-                        fallbackBorder = SlateBorder.copy(alpha = 0.75f)
-                    )
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Geo2DTool.entries.forEach { tool ->
-                    val selected = uiState.activeTool == tool
-                    val chipShape = if (isGlass) CircleShape else RoundedCornerShape(9.dp)
-                    val tint = when {
-                        selected && isGlass && !palette.isDark -> SlateTextPrimary
-                        selected -> Color.White
-                        isGlass && palette.isDark -> Color.White.copy(alpha = 0.82f)
-                        else -> SlateTextLight
-                    }
-                    Row(
-                        modifier = Modifier
-                            .defaultMinSize(minHeight = 34.dp)
-                            .liquidGlassActiveBubble(
-                                active = selected,
-                                shape = chipShape,
-                                fallbackActiveColor = EmeraldDark
-                            )
-                            .clickable { viewModel.setTool(tool) }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                            .testTag("geo2d_tool_${tool.name.lowercase()}"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = iconFor2DTool(tool),
-                            contentDescription = null,
-                            tint = tint,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Text(
-                            text = tool.shortLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = tint,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                            fontSize = 11.sp
-                        )
-                    }
-                }
-            }
-        }
-
-        // Tier 2: Floating Capsule 4-Tab Navigation Bar with Liquid Droplet Active Bubble
-        Row(
-            modifier = Modifier
-                .widthIn(max = 520.dp)
-                .fillMaxWidth()
-                .liquidGlassSurface(
-                    shape = RoundedCornerShape(16.dp),
-                    pillShape = CircleShape,
-                    elevated = true,
-                    fallbackBg = SlateDark.copy(alpha = 0.95f),
-                    fallbackBorder = SlateBorder.copy(alpha = 0.8f)
-                )
-                .padding(horizontal = 6.dp, vertical = 5.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Geo2DTab.entries.forEach { tab ->
-                val selected = uiState.activeTab == tab
-                val tabShape = if (isGlass) CircleShape else RoundedCornerShape(12.dp)
-                val iconTint = when {
-                    selected && isGlass && !palette.isDark -> SlateTextPrimary
-                    selected -> Color.White
-                    isGlass && palette.isDark -> Color.White.copy(alpha = 0.82f)
-                    else -> SlateTextSecondary
-                }
-                val labelTint = when {
-                    selected && isGlass && !palette.isDark -> SlateTextPrimary
-                    selected && isGlass -> Color.White
-                    selected -> EmeraldAccent
-                    isGlass && palette.isDark -> Color.White.copy(alpha = 0.78f)
-                    else -> SlateTextSecondary
-                }
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .defaultMinSize(minHeight = 48.dp)
-                        .liquidGlassActiveBubble(
-                            active = selected,
-                            shape = tabShape,
-                            fallbackActiveColor = EmeraldDark.copy(alpha = 0.24f)
-                        )
-                        .clickable { viewModel.toggleTab(tab) }
-                        .padding(vertical = 5.dp, horizontal = 3.dp)
-                        .testTag("geo2d_tab_${tab.name.lowercase()}"),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(if (selected && !isGlass) EmeraldDark else Color.Transparent)
-                            .padding(horizontal = 10.dp, vertical = 2.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = iconFor2DTab(tab),
-                            contentDescription = tab.shortLabel,
-                            tint = iconTint,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    Spacer(Modifier.height(1.dp))
-                    Text(
-                        text = tab.shortLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontSize = 10.sp,
-                        color = labelTint,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-        }
-    }
-}
-
 private fun iconFor2DTool(tool: Geo2DTool): ImageVector = when (tool) {
     Geo2DTool.PAN_SELECT -> Icons.Default.PanTool
     Geo2DTool.TRACE_GRAPH -> Icons.Default.Timeline
@@ -1113,13 +1270,6 @@ private fun iconFor2DTool(tool: Geo2DTool): ImageVector = when (tool) {
     Geo2DTool.CIRCLE -> Icons.Default.RadioButtonUnchecked
     Geo2DTool.POLYGON -> Icons.Default.Pentagon
     Geo2DTool.MEASURE_ANGLE -> Icons.Default.Architecture
-}
-
-private fun iconFor2DTab(tab: Geo2DTab): ImageVector = when (tab) {
-    Geo2DTab.FUNCTIONS -> Icons.AutoMirrored.Filled.ShowChart
-    Geo2DTab.PRESETS -> Icons.Default.Category
-    Geo2DTab.OBJECTS -> Icons.Default.Straighten
-    Geo2DTab.SETTINGS -> Icons.Default.Tune
 }
 
 private fun formatGeo2DTreeLabel(treeUri: Uri): String {

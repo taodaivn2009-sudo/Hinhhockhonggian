@@ -1,13 +1,13 @@
 package com.example.docs
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -18,29 +18,30 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.geo2d.MathWorkspace
-import com.example.geo2d.WorkspaceModeSwitch
 import com.example.ui.theme.*
 
 /**
- * Integrated 388-page PDF Reference Library ("Tài liệu") powered by the user's attached
- * "Tóm Tắt Kiến Thức Toán 10 – 11 – 12 (DPAD)" PDF:
- * - Interactive Mục lục organized by Lớp 10 (22 topics), Lớp 11 (19 topics), Lớp 12 (18 topics) + Bookmarks
- * - Diacritic-insensitive search across all 59 topics & subtopics jumping straight to exact PDF pages
- * - Native offline Android PdfRenderer viewer with pinch-to-zoom, double-tap zoom, page scrubber,
- *   jump-to-page dialog, night reading filter, and persistent reading progress + bookmarks.
+ * Fullscreen-first 388-page PDF Reference Library ("Tài liệu"):
+ * - Opens directly onto the last read PDF page in distraction-free full-screen reader mode
+ * - Single tap toggles Immersive Mode (hides top bar, bottom page scrubber, Ask-AI FAB & bottom nav)
+ * - Hierarchical 59-topic Table of Contents (Lớp 10, 11, 12 + Bookmarks + diacritic-insensitive search)
+ *   opens cleanly in an on-demand Modal Bottom Sheet from the compact top bar.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MathDocumentsScreen(
+    isImmersive: Boolean = false,
+    onToggleImmersive: () -> Unit = {},
     onSwitchWorkspace: (MathWorkspace) -> Unit,
     pendingOpenPage: Int? = null,
     onConsumePendingPage: () -> Unit = {},
-    onAskAiAboutPage: (Int) -> Unit = {},
-    hasUpdateBadge: Boolean = false
+    onAskAiAboutPage: (Int) -> Unit = {}
 ) {
     val context = LocalContext.current
     val appContext = context.applicationContext
@@ -56,9 +57,11 @@ fun MathDocumentsScreen(
     var lastReadPage by remember { mutableIntStateOf(prefs.loadLastPage()) }
     var bookmarkedPages by remember { mutableStateOf(prefs.loadBookmarks()) }
     var nightFilterEnabled by remember { mutableStateOf(prefs.loadNightFilter()) }
+    var showTocSheet by remember { mutableStateOf(false) }
 
-    // Non-null when viewing the PDF pages directly (value = target 1-based page to open at)
-    var activeReaderTargetPage by remember { mutableStateOf<Int?>(null) }
+    // Trigger counter so jumping to a page works reliably even if the same page is requested again
+    var jumpTargetPage by remember { mutableIntStateOf(lastReadPage) }
+    var jumpRequestToken by remember { mutableIntStateOf(0) }
 
     val searchHits = remember(searchQuery) {
         if (searchQuery.isBlank()) emptyList() else PdfCurriculumRepository.searchTopics(searchQuery)
@@ -68,7 +71,9 @@ fun MathDocumentsScreen(
         val safePage = page1Based.coerceIn(1, PDF_TOTAL_PAGES)
         lastReadPage = safePage
         prefs.saveLastPage(safePage)
-        activeReaderTargetPage = safePage
+        jumpTargetPage = safePage
+        jumpRequestToken += 1
+        showTocSheet = false
     }
 
     LaunchedEffect(pendingOpenPage) {
@@ -91,14 +96,13 @@ fun MathDocumentsScreen(
 
     BackHandler {
         when {
-            activeReaderTargetPage != null -> activeReaderTargetPage = null
-            searchQuery.isNotEmpty() -> searchQuery = ""
+            showTocSheet -> showTocSheet = false
+            isImmersive -> onToggleImmersive()
             else -> onSwitchWorkspace(MathWorkspace.SPACE_3D)
         }
     }
 
-    val bgOnlyBackdrop = rememberLiquidGlassBackdropState()
-    val scrollBackdrop = rememberLiquidGlassBackdropState()
+    val bgBackdrop = rememberLiquidGlassBackdropState()
 
     BoxWithConstraints(
         modifier = Modifier
@@ -107,84 +111,109 @@ fun MathDocumentsScreen(
     ) {
         val isWideScreen = maxWidth >= 600.dp
 
-        // Layer 1: Live backdrop + Mục lục OR native PDF Reader (captured by floating top capsule bar)
-        Box(
+        LiquidGlassBackdrop(
             modifier = Modifier
                 .fillMaxSize()
-                .liquidGlassBackdropSource(scrollBackdrop)
-        ) {
-            LiquidGlassBackdrop(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .liquidGlassBackdropSource(bgOnlyBackdrop)
-            )
+                .liquidGlassBackdropSource(bgBackdrop)
+        )
 
-            CompositionLocalProvider(LocalLiquidGlassBackdrop provides bgOnlyBackdrop) {
-                AnimatedContent(
-                    targetState = activeReaderTargetPage != null,
-                    transitionSpec = { fadeIn() togetherWith fadeOut() },
-                    label = "pdf_docs_mode_transition",
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .statusBarsPadding()
-                        .padding(top = 60.dp)
-                ) { inReaderMode ->
-                    if (!inReaderMode) {
-                        PdfTocOverviewContent(
-                            selectedTab = selectedTab,
-                            searchQuery = searchQuery,
-                            searchHits = searchHits,
-                            lastReadPage = lastReadPage,
-                            bookmarkedPages = bookmarkedPages,
-                            isWideScreen = isWideScreen,
-                            onSearchChange = { searchQuery = it },
-                            onSelectTab = { nextTab ->
-                                selectedTab = nextTab
-                                prefs.saveLastTab(nextTab)
-                            },
-                            onOpenPage = openPdfAt,
-                            onRemoveBookmark = toggleBookmark
-                        )
-                    } else {
-                        PdfReaderView(
-                            renderer = pdfRenderer,
-                            initialPage1Based = activeReaderTargetPage ?: lastReadPage,
-                            bookmarkedPages = bookmarkedPages,
-                            nightFilterEnabled = nightFilterEnabled,
-                            onPageChanged = { currentPage ->
-                                if (currentPage != lastReadPage) {
-                                    lastReadPage = currentPage
-                                    prefs.saveLastPage(currentPage)
-                                }
-                            },
-                            onToggleBookmark = toggleBookmark,
-                            onToggleNightFilter = toggleNightFilter,
-                            onAskAiAboutPage = onAskAiAboutPage,
-                            onBackToToc = { activeReaderTargetPage = null }
-                        )
+        CompositionLocalProvider(LocalLiquidGlassBackdrop provides bgBackdrop) {
+            // Direct Fullscreen PDF Reader Viewport
+            PdfReaderView(
+                renderer = pdfRenderer,
+                initialPage1Based = lastReadPage,
+                externalJumpPage = jumpTargetPage,
+                externalJumpToken = jumpRequestToken,
+                isImmersive = isImmersive,
+                onToggleImmersive = onToggleImmersive,
+                bookmarkedPages = bookmarkedPages,
+                nightFilterEnabled = nightFilterEnabled,
+                onPageChanged = { currentPage ->
+                    if (currentPage != lastReadPage) {
+                        lastReadPage = currentPage
+                        prefs.saveLastPage(currentPage)
                     }
-                }
-            }
+                },
+                onToggleBookmark = toggleBookmark,
+                onToggleNightFilter = toggleNightFilter,
+                onAskAiAboutPage = onAskAiAboutPage,
+                onOpenToc = { showTocSheet = true },
+                modifier = Modifier.fillMaxSize()
+            )
         }
 
-        // Layer 2: Floating Liquid Glass Top Capsule Bar (live GPU blur & refraction over PDF & TOC)
-        CompositionLocalProvider(LocalLiquidGlassBackdrop provides scrollBackdrop) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                contentAlignment = Alignment.Center
+        // Hierarchical TOC Modal Bottom Sheet (Lớp 10, 11, 12, 59 chuyên đề, Bookmarks & Diacritic-Insensitive Search)
+        if (showTocSheet) {
+            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            ModalBottomSheet(
+                onDismissRequest = { showTocSheet = false },
+                sheetState = sheetState,
+                containerColor = SlateDark,
+                contentColor = SlateTextPrimary,
+                dragHandle = { BottomSheetDefaults.DragHandle(color = SlateMuted) }
             ) {
-                WorkspaceModeSwitch(
-                    current = MathWorkspace.DOCUMENTS,
-                    hasUpdateBadge = hasUpdateBadge,
-                    onSelect = onSwitchWorkspace,
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .widthIn(max = 560.dp)
-                )
+                        .fillMaxHeight(0.86f)
+                        .testTag("pdf_toc_sheet")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Mục lục Toán THPT (388 trang)",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = SlateTextPrimary,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                            Text(
+                                text = "59 chuyên đề Lớp 10 – 11 – 12 & Trang đã đánh dấu",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SlateTextSecondary
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(SlateSurface)
+                                .border(1.dp, SlateBorder, CircleShape)
+                                .clickable { showTocSheet = false },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Đóng Mục lục",
+                                tint = SlateTextLight,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(6.dp))
+
+                    PdfTocOverviewContent(
+                        selectedTab = selectedTab,
+                        searchQuery = searchQuery,
+                        searchHits = searchHits,
+                        lastReadPage = lastReadPage,
+                        bookmarkedPages = bookmarkedPages,
+                        isWideScreen = isWideScreen,
+                        onSearchChange = { searchQuery = it },
+                        onSelectTab = { nextTab ->
+                            selectedTab = nextTab
+                            prefs.saveLastTab(nextTab)
+                        },
+                        onOpenPage = openPdfAt,
+                        onRemoveBookmark = toggleBookmark
+                    )
+                }
             }
         }
     }
@@ -203,8 +232,6 @@ private fun PdfTocOverviewContent(
     onOpenPage: (Int) -> Unit,
     onRemoveBookmark: (Int) -> Unit
 ) {
-    val isGlass = ActiveThemeState.current.liquidGlass.enabled
-
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -215,7 +242,7 @@ private fun PdfTocOverviewContent(
             onValueChange = onSearchChange,
             placeholder = {
                 Text(
-                    text = "Tìm nhanh mục lục PDF: lượng giác, đạo hàm, nguyên hàm, Oxyz, Bayes...",
+                    text = "Tìm mục lục không dấu: lượng giác, đạo hàm, oxyz, bayes...",
                     style = MaterialTheme.typography.bodySmall,
                     color = SlateTextSecondary,
                     maxLines = 1
@@ -239,17 +266,17 @@ private fun PdfTocOverviewContent(
             singleLine = true,
             textStyle = MaterialTheme.typography.bodyMedium.copy(color = SlateTextPrimary),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = SlateDark.copy(alpha = if (isGlass) 0.65f else 1f),
-                unfocusedContainerColor = SlateDark.copy(alpha = if (isGlass) 0.55f else 1f),
+                focusedContainerColor = SlateDeepest,
+                unfocusedContainerColor = SlateDeepest,
                 focusedBorderColor = CyanAccent,
                 unfocusedBorderColor = SlateBorder,
                 cursorColor = CyanAccent
             ),
-            shape = RoundedCornerShape(14.dp),
+            shape = CircleShape,
             modifier = Modifier
                 .fillMaxWidth()
                 .widthIn(max = 720.dp)
-                .padding(horizontal = 12.dp, vertical = 4.dp)
+                .padding(horizontal = 14.dp, vertical = 4.dp)
                 .testTag("docs_search_input")
         )
 
@@ -260,7 +287,7 @@ private fun PdfTocOverviewContent(
                 onSelectTab = onSelectTab,
                 modifier = Modifier
                     .widthIn(max = 720.dp)
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .padding(horizontal = 14.dp, vertical = 6.dp)
             )
         }
 
@@ -268,9 +295,9 @@ private fun PdfTocOverviewContent(
             modifier = Modifier
                 .fillMaxSize()
                 .navigationBarsPadding(),
-            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 28.dp),
+            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             if (searchQuery.isNotBlank()) {
                 item(key = "pdf_search_count") {
@@ -305,7 +332,6 @@ private fun PdfTocOverviewContent(
                     }
                 }
             } else {
-                // Hero card to continue reading / jump to Cover or Original PDF TOC
                 item(key = "pdf_hero_resume") {
                     PdfHeroResumeCard(
                         lastPage = lastReadPage,
@@ -323,7 +349,7 @@ private fun PdfTocOverviewContent(
                             PdfEmptyStateCard(
                                 icon = Icons.Outlined.BookmarkBorder,
                                 title = "Chưa có trang nào được đánh dấu",
-                                subtitle = "Khi đang đọc tài liệu PDF, chạm biểu tượng Đánh dấu trên góc trên bên phải để lưu trang quan trọng vào đây.",
+                                subtitle = "Khi đang đọc PDF, chạm biểu tượng Đánh dấu trên góc phải để lưu trang quan trọng vào đây.",
                                 modifier = Modifier.widthIn(max = 720.dp)
                             )
                         }
@@ -358,7 +384,7 @@ private fun PdfTocOverviewContent(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .widthIn(max = 720.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 pair.forEach { topic ->
                                     PdfTopicCard(

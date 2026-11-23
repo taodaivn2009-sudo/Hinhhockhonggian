@@ -443,7 +443,7 @@ fun AiProblemDrawTab(
                 )
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(96.dp))
         }
     }
 }

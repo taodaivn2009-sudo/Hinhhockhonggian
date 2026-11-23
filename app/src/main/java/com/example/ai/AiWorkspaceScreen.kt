@@ -17,46 +17,55 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material3.*
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.docs.PdfCurriculumRepository
 import com.example.geo2d.MathWorkspace
-import com.example.geo2d.WorkspaceModeSwitch
 import com.example.ui.theme.*
 
 /**
- * Main AI Assistant Workspace ("AI") integrated with Liquid Glass floating chrome:
- * - Sub-tab 1: Hỏi tài liệu (asks AI grounded on the 388-page DPAD PDF + 1-tap jump to exact PDF pages)
- * - Sub-tab 2: Chụp đề vẽ hình (camera/gallery problem scanner -> automatic 3D or 2D construction)
- * - Sub-tab 3: Mục Key (end-user Gemini API key entry, verification, and model choice)
+ * Redesigned Minimal, Chat-Focused AI Assistant Workspace:
+ * - Compact Top Bar: 2-mode Segmented Control (Hỏi tài liệu | Chụp đề vẽ hình) + Overflow Menu (⋮)
+ *   containing "Xóa cuộc trò chuyện" (with confirmation dialog) & "Cài đặt AI & Nhà cung cấp".
+ * - Compact AI Status Chip right under Top Bar with Provider/Model + ultra-thin token progress bar.
+ *   Tapping it opens the AI Quick Control Bottom Sheet (Token Card + quick Provider/Custom URL/Model switcher).
+ * - Spacious Chat / Problem Draw area + compact 1-line Prompt Composer with `+` attach button.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AiWorkspaceScreen(
     aiViewModel: AiAssistantViewModel,
     onSwitchWorkspace: (MathWorkspace) -> Unit,
     onOpenPdfPage: (Int) -> Unit,
     onApplyDrawingPlan: (AiDrawingPlan) -> Unit,
-    hasUpdateBadge: Boolean = false
+    onOpenAiSettings: () -> Unit
 ) {
     val uiState by aiViewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -64,302 +73,237 @@ fun AiWorkspaceScreen(
         context.findActivity()?.let { aiViewModel.signInWithGoogle(it) }
     }
 
+    // If any legacy path set activeSubTab to API_KEY, normalize to DOCS_QA since full AI setup now lives in Settings
+    val displayedTab = if (uiState.activeSubTab == AiSubTab.PROBLEM_DRAW) {
+        AiSubTab.PROBLEM_DRAW
+    } else {
+        AiSubTab.DOCS_QA
+    }
+
+    var showOverflowMenu by remember { mutableStateOf(false) }
+    var showClearChatConfirm by remember { mutableStateOf(false) }
+    var showAiQuickSheet by remember { mutableStateOf(false) }
+
     BackHandler {
-        onSwitchWorkspace(MathWorkspace.SPACE_3D)
+        when {
+            showAiQuickSheet -> showAiQuickSheet = false
+            displayedTab == AiSubTab.PROBLEM_DRAW -> aiViewModel.selectSubTab(AiSubTab.DOCS_QA)
+            else -> onSwitchWorkspace(MathWorkspace.SPACE_3D)
+        }
     }
 
     val bgOnlyBackdrop = rememberLiquidGlassBackdropState()
-    val scrollBackdrop = rememberLiquidGlassBackdropState()
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .testTag("ai_workspace_screen")
     ) {
-        // Layer 1: Live backdrop + AI workspace content
-        Box(
+        LiquidGlassBackdrop(
             modifier = Modifier
                 .fillMaxSize()
-                .liquidGlassBackdropSource(scrollBackdrop)
-        ) {
-            LiquidGlassBackdrop(
+                .liquidGlassBackdropSource(bgOnlyBackdrop)
+        )
+
+        CompositionLocalProvider(LocalLiquidGlassBackdrop provides bgOnlyBackdrop) {
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .liquidGlassBackdropSource(bgOnlyBackdrop)
-            )
-
-            CompositionLocalProvider(LocalLiquidGlassBackdrop provides bgOnlyBackdrop) {
-                Column(
+                    .statusBarsPadding(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // 1. Minimal Top Bar: 2-Mode Segmented Control + Overflow (⋮)
+                Row(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .statusBarsPadding()
-                        .padding(top = 60.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .fillMaxWidth()
+                        .widthIn(max = 720.dp)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // AI Sub-Tab Switcher Pill
-                    AiSubTabBar(
-                        activeTab = uiState.activeSubTab,
-                        activeProvider = uiState.activeProvider,
-                        isAiReady = uiState.isAiReady,
+                    AiTwoModeSegmentedControl(
+                        activeTab = displayedTab,
                         onSelectTab = { aiViewModel.selectSubTab(it) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .widthIn(max = 720.dp)
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                        modifier = Modifier.weight(1f)
                     )
 
-                    // Compact active AI provider & model strip on Docs Q&A / Problem Draw tabs
-                    val signedInUser = uiState.googleUser
-                    if (uiState.isAiReady && uiState.activeSubTab != AiSubTab.API_KEY) {
-                        val accentColor = providerAccentColor(uiState.activeProvider)
-                        Row(
+                    Box {
+                        Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .widthIn(max = 720.dp)
-                                .padding(horizontal = 12.dp, vertical = 2.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(accentColor.copy(alpha = 0.12f))
-                                .border(1.dp, accentColor.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
-                                .clickable { aiViewModel.selectSubTab(AiSubTab.API_KEY) }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                                .testTag("ai_signed_in_account_strip"),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                .size(48.dp)
+                                .liquidGlassSurface(
+                                    shape = CircleShape,
+                                    pillShape = CircleShape,
+                                    cornerRadiusDp = 24.dp,
+                                    elevated = false,
+                                    fallbackBg = SlateDark,
+                                    fallbackBorder = SlateBorder
+                                )
+                                .clickable { showOverflowMenu = true }
+                                .testTag("ai_overflow_menu_btn"),
+                            contentAlignment = Alignment.Center
                         ) {
-                            if (signedInUser != null && uiState.activeProvider == AiProvider.GOOGLE_ACCOUNT) {
-                                GoogleAccountAvatar(
-                                    user = signedInUser,
-                                    size = 30.dp,
-                                    showVerifiedBadge = true
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .size(30.dp)
-                                        .clip(CircleShape)
-                                        .background(accentColor.copy(alpha = 0.22f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Key,
-                                        contentDescription = null,
-                                        tint = accentColor,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = if (uiState.activeProvider == AiProvider.GOOGLE_ACCOUNT && signedInUser != null) {
-                                        signedInUser.displayName
-                                    } else {
-                                        uiState.activeProviderLabel
-                                    },
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = SlateTextPrimary,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "${uiState.activeProviderShortLabel} · ${uiState.activeProfile.effectiveModelId}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = accentColor,
-                                    fontSize = 11.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                val tok = uiState.tokenState
-                                val balancePrefix = tok.accountBalanceLabel?.takeIf { it.isNotBlank() }?.let { "$it · " }.orEmpty()
-                                val tokenLine = when {
-                                    tok.hasContextLimit -> {
-                                        val rem = AiResponseParser.formatExactTokens(tok.remainingContextTokens.toLong())
-                                        val maxTok = AiResponseParser.formatCompactTokens(tok.inputTokenLimit.toLong())
-                                        val todayStr = if (tok.usedTokensToday > 0L) {
-                                            " · Hôm nay: ${AiResponseParser.formatExactTokens(tok.usedTokensToday)}"
-                                        } else ""
-                                        "${balancePrefix}Còn $rem / $maxTok ctx$todayStr"
-                                    }
-                                    tok.currentContextTokens > 0 || tok.usedTokensToday > 0L -> {
-                                        "${balancePrefix}Phiên: ${AiResponseParser.formatExactTokens(tok.currentContextTokens.toLong())} · Hôm nay: ${AiResponseParser.formatExactTokens(tok.usedTokensToday)}"
-                                    }
-                                    tok.isSyncingTokens -> "Đang đồng bộ số token..."
-                                    balancePrefix.isNotEmpty() -> balancePrefix.removeSuffix(" · ")
-                                    else -> ""
-                                }
-                                if (tokenLine.isNotEmpty()) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "Tùy chọn Trợ lý AI",
+                                tint = SlateTextPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = showOverflowMenu,
+                            onDismissRequest = { showOverflowMenu = false },
+                            containerColor = SlateDark
+                        ) {
+                            DropdownMenuItem(
+                                text = {
                                     Text(
-                                        text = tokenLine,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = SlateTextSecondary,
-                                        fontSize = 10.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.testTag("ai_top_bar_token_status")
+                                        text = "Xóa cuộc trò chuyện",
+                                        color = if (uiState.messages.isNotEmpty()) RoseAccent else SlateTextSecondary,
+                                        fontWeight = FontWeight.Medium
                                     )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.DeleteSweep,
+                                        contentDescription = null,
+                                        tint = if (uiState.messages.isNotEmpty()) RoseAccent else SlateTextSecondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                enabled = uiState.messages.isNotEmpty(),
+                                onClick = {
+                                    showOverflowMenu = false
+                                    showClearChatConfirm = true
                                 }
-                            }
-                            Text(
-                                text = "Đổi nguồn",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = accentColor,
-                                fontWeight = FontWeight.SemiBold
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = "Cài đặt AI & Nhà cung cấp",
+                                        color = SlateTextPrimary,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Settings,
+                                        contentDescription = null,
+                                        tint = CyanAccent,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    onOpenAiSettings()
+                                }
                             )
                         }
                     }
+                }
 
-                    when (uiState.activeSubTab) {
-                        AiSubTab.DOCS_QA -> AiDocsQaTab(
-                            uiState = uiState,
-                            onSendQuestion = { aiViewModel.askDocumentQuestion(it) },
-                            onCancelQuestion = { aiViewModel.cancelDocumentQuestion() },
-                            onRetryLastQuestion = { aiViewModel.retryLastDocumentQuestion() },
-                            onClearAttachedPage = { aiViewModel.setAttachedPdfPage(null) },
-                            onClearChat = { aiViewModel.clearChatHistory() },
-                            onOpenPdfPage = onOpenPdfPage,
-                            onGoToKeyTab = { aiViewModel.selectSubTab(AiSubTab.API_KEY) },
-                            onSignInWithGoogle = triggerGoogleSignIn,
-                            modifier = Modifier.weight(1f)
-                        )
+                // 2. Compact AI Status Chip with ultra-thin remaining token progress bar
+                AiCompactStatusChip(
+                    uiState = uiState,
+                    onClick = { showAiQuickSheet = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 720.dp)
+                        .padding(horizontal = 12.dp)
+                        .padding(bottom = 6.dp)
+                )
 
-                        AiSubTab.PROBLEM_DRAW -> AiProblemDrawTab(
-                            uiState = uiState,
-                            onImageSelected = { aiViewModel.setProblemImageFromUri(it) },
-                            onNoteChange = { aiViewModel.updateProblemNote(it) },
-                            onClearInput = { aiViewModel.clearProblemInput() },
-                            onAnalyzeClick = { aiViewModel.analyzeProblemForDrawing() },
-                            onCancelAnalyze = { aiViewModel.cancelProblemAnalysis() },
-                            onApplyDrawingPlan = onApplyDrawingPlan,
-                            onOpenPdfPage = onOpenPdfPage,
-                            onGoToKeyTab = { aiViewModel.selectSubTab(AiSubTab.API_KEY) },
-                            onSignInWithGoogle = triggerGoogleSignIn,
-                            modifier = Modifier.weight(1f)
-                        )
+                // 3. Main Content Area (Hỏi tài liệu OR Chụp đề vẽ hình)
+                when (displayedTab) {
+                    AiSubTab.DOCS_QA -> AiDocsQaTab(
+                        uiState = uiState,
+                        onSendQuestion = { aiViewModel.askDocumentQuestion(it) },
+                        onCancelQuestion = { aiViewModel.cancelDocumentQuestion() },
+                        onRetryLastQuestion = { aiViewModel.retryLastDocumentQuestion() },
+                        onAttachPdfPage = { aiViewModel.setAttachedPdfPage(it) },
+                        onClearAttachedPage = { aiViewModel.setAttachedPdfPage(null) },
+                        onSwitchToProblemDraw = { aiViewModel.selectSubTab(AiSubTab.PROBLEM_DRAW) },
+                        onOpenPdfPage = onOpenPdfPage,
+                        onOpenAiSettings = onOpenAiSettings,
+                        onSignInWithGoogle = triggerGoogleSignIn,
+                        modifier = Modifier.weight(1f)
+                    )
 
-                        AiSubTab.API_KEY -> Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth()
-                                .verticalScroll(rememberScrollState())
-                                .navigationBarsPadding()
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .widthIn(max = 720.dp)
-                                    .liquidGlassSurface(
-                                        shape = RoundedCornerShape(20.dp),
-                                        cornerRadiusDp = 20.dp,
-                                        elevated = true,
-                                        fallbackBg = SlateDark,
-                                        fallbackBorder = SlateBorder
-                                    )
-                                    .padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(22.dp))
-                                    Column {
-                                        Text(
-                                            text = "Kết nối AI Đa Nhà Cung Cấp",
-                                            style = MaterialTheme.typography.titleMedium,
-                                            color = SlateTextPrimary,
-                                            fontWeight = FontWeight.ExtraBold
-                                        )
-                                        Text(
-                                            text = "Google Gemini, OpenAI, OpenRouter, Groq, DeepSeek, Claude & Custom URL — lưu riêng từng khóa",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = SlateTextSecondary
-                                        )
-                                    }
-                                }
-
-                                AiKeySetupSection(
-                                    activeProvider = uiState.activeProvider,
-                                    activeProfile = uiState.activeProfile,
-                                    configuredProviders = uiState.configuredProviders,
-                                    onSelectProvider = { aiViewModel.selectProvider(it) },
-                                    customEndpoints = uiState.customEndpoints,
-                                    activeCustomEndpointId = uiState.activeCustomEndpointId,
-                                    onSelectCustomEndpoint = { aiViewModel.selectCustomEndpoint(it) },
-                                    onCreateCustomEndpoint = { name, baseUrl, key, verify ->
-                                        aiViewModel.createCustomEndpoint(name, baseUrl, key, verify)
-                                    },
-                                    onUpdateCustomEndpoint = { id, name, baseUrl, key, verify ->
-                                        aiViewModel.updateCustomEndpoint(id, name, baseUrl, key, verify)
-                                    },
-                                    onDeleteCustomEndpoint = { aiViewModel.deleteCustomEndpoint(it) },
-                                    googleUser = uiState.googleUser,
-                                    isSigningIn = uiState.isSigningIn,
-                                    isTestingGoogleAi = uiState.isTestingGoogleAi,
-                                    authStatusMessage = uiState.authStatusMessage,
-                                    authStatusSuccess = uiState.authStatusSuccess,
-                                    onSignInWithGoogle = triggerGoogleSignIn,
-                                    onSignOutGoogle = { aiViewModel.signOutGoogle(context) },
-                                    onTestGoogleAi = { aiViewModel.testGoogleGeminiConnection() },
-                                    displayModels = uiState.displayModels,
-                                    isSyncedFromAccount = uiState.syncedModels.isNotEmpty(),
-                                    isSyncingModels = uiState.isSyncingModels,
-                                    modelSyncStatusMessage = uiState.modelSyncStatusMessage,
-                                    modelSyncSuccess = uiState.modelSyncSuccess,
-                                    onSyncModels = { overrideKey, overrideUrl ->
-                                        aiViewModel.syncAccountModels(overrideKey, overrideUrl)
-                                    },
-                                    isProbingAllModels = uiState.isProbingAllModels,
-                                    probeProgressDone = uiState.probeProgressDone,
-                                    probeProgressTotal = uiState.probeProgressTotal,
-                                    modelProbeResults = uiState.modelProbeResults,
-                                    modelProbeSummary = uiState.modelProbeSummary,
-                                    onProbeAllModels = { overrideKey, overrideUrl, subset ->
-                                        aiViewModel.probeAllModels(overrideKey, overrideUrl, subset)
-                                    },
-                                    tokenState = uiState.tokenState,
-                                    tokenLedgers = uiState.tokenLedgers,
-                                    onRefreshTokens = { aiViewModel.refreshTokenSync() },
-                                    onAddCustomModel = { aiViewModel.addCustomModel(it) },
-                                    onRemoveCustomModel = { aiViewModel.removeCustomModel(it) },
-                                    isVerifying = uiState.isVerifyingKey,
-                                    statusMessage = uiState.keyStatusMessage,
-                                    statusSuccess = uiState.keyStatusSuccess,
-                                    onSaveAndVerify = { key, model, baseUrl ->
-                                        aiViewModel.saveAndVerifyApiKey(key, model, baseUrl)
-                                    },
-                                    onSaveOnly = { key, model, baseUrl ->
-                                        aiViewModel.saveApiKey(key, model, baseUrl)
-                                    },
-                                    onSelectModel = { aiViewModel.selectModel(it) },
-                                    onClearKey = { aiViewModel.clearApiKey() }
-                                )
-                            }
-                        }
-                    }
+                    else -> AiProblemDrawTab(
+                        uiState = uiState,
+                        onImageSelected = { aiViewModel.setProblemImageFromUri(it) },
+                        onNoteChange = { aiViewModel.updateProblemNote(it) },
+                        onClearInput = { aiViewModel.clearProblemInput() },
+                        onAnalyzeClick = { aiViewModel.analyzeProblemForDrawing() },
+                        onCancelAnalyze = { aiViewModel.cancelProblemAnalysis() },
+                        onApplyDrawingPlan = onApplyDrawingPlan,
+                        onOpenPdfPage = onOpenPdfPage,
+                        onGoToKeyTab = onOpenAiSettings,
+                        onSignInWithGoogle = triggerGoogleSignIn,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
         }
 
-        // Layer 2: Floating Liquid Glass Top Workspace Switcher
-        CompositionLocalProvider(LocalLiquidGlassBackdrop provides scrollBackdrop) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                contentAlignment = Alignment.Center
+        // Confirmation dialog before clearing chat history
+        if (showClearChatConfirm) {
+            AlertDialog(
+                onDismissRequest = { showClearChatConfirm = false },
+                containerColor = SlateDark,
+                title = {
+                    Text(
+                        text = "Xóa cuộc trò chuyện?",
+                        color = SlateTextPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Text(
+                        text = "Toàn bộ tin nhắn trong phiên hỏi đáp tài liệu hiện tại sẽ bị xóa. Bộ đếm token bền vững hôm nay vẫn được giữ nguyên.",
+                        color = SlateTextSecondary,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showClearChatConfirm = false
+                            aiViewModel.clearChatHistory()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = RoseAccent, contentColor = Color.White),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Xóa lịch sử", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showClearChatConfirm = false }) {
+                        Text("Hủy", color = SlateTextSecondary)
+                    }
+                }
+            )
+        }
+
+        // AI Quick Control Bottom Sheet (Token Card + Fast Provider/Custom URL/Model Switcher)
+        if (showAiQuickSheet) {
+            ModalBottomSheet(
+                onDismissRequest = { showAiQuickSheet = false },
+                containerColor = SlateDark,
+                contentColor = SlateTextPrimary,
+                dragHandle = { BottomSheetDefaults.DragHandle(color = SlateBorder) }
             ) {
-                WorkspaceModeSwitch(
-                    current = MathWorkspace.AI,
-                    hasUpdateBadge = hasUpdateBadge,
-                    onSelect = onSwitchWorkspace,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .widthIn(max = 560.dp)
+                AiQuickControlSheetContent(
+                    uiState = uiState,
+                    onRefreshTokens = { aiViewModel.refreshTokenSync() },
+                    onSelectProvider = { aiViewModel.selectProvider(it) },
+                    onSelectCustomEndpoint = { aiViewModel.selectCustomEndpoint(it) },
+                    onSelectModel = { aiViewModel.selectModel(it) },
+                    onOpenFullSettings = {
+                        showAiQuickSheet = false
+                        onOpenAiSettings()
+                    }
                 )
             }
         }
@@ -367,19 +311,18 @@ fun AiWorkspaceScreen(
 }
 
 @Composable
-private fun AiSubTabBar(
+private fun AiTwoModeSegmentedControl(
     activeTab: AiSubTab,
-    activeProvider: AiProvider,
-    isAiReady: Boolean,
     onSelectTab: (AiSubTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val tabs = listOf(AiSubTab.DOCS_QA, AiSubTab.PROBLEM_DRAW)
     Row(
         modifier = modifier
             .liquidGlassSurface(
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(24.dp),
                 pillShape = CircleShape,
-                cornerRadiusDp = 16.dp,
+                cornerRadiusDp = 24.dp,
                 elevated = false,
                 fallbackBg = SlateDark,
                 fallbackBorder = SlateBorder
@@ -387,40 +330,370 @@ private fun AiSubTabBar(
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        AiSubTab.entries.forEach { tab ->
+        tabs.forEach { tab ->
             val selected = tab == activeTab
-            val accent = when (tab) {
-                AiSubTab.DOCS_QA -> CyanAccent
-                AiSubTab.PROBLEM_DRAW -> PurpleAccent
-                AiSubTab.API_KEY -> if (isAiReady) EmeraldAccent else AmberAccent
-            }
-            val label = if (tab == AiSubTab.API_KEY) {
-                if (isAiReady) "${activeProvider.shortTitle} ✓" else "Kết nối AI"
-            } else tab.label
-
+            val accent = if (tab == AiSubTab.DOCS_QA) CyanAccent else PurpleAccent
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .defaultMinSize(minHeight = 40.dp)
                     .liquidGlassActiveBubble(
                         active = selected,
-                        shape = RoundedCornerShape(12.dp),
-                        fallbackActiveColor = accent.copy(alpha = 0.24f)
+                        shape = RoundedCornerShape(20.dp),
+                        fallbackActiveColor = accent.copy(alpha = 0.22f)
                     )
                     .clickable { onSelectTab(tab) }
-                    .padding(horizontal = 6.dp, vertical = 8.dp)
+                    .padding(horizontal = 8.dp, vertical = 8.dp)
                     .testTag("ai_subtab_${tab.key}"),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = label,
+                    text = tab.label,
                     style = MaterialTheme.typography.labelMedium,
                     color = if (selected) accent else SlateTextSecondary,
                     fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
                     fontSize = 12.sp,
-                    maxLines = 1
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun AiCompactStatusChip(
+    uiState: AiAssistantUiState,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val accentColor = if (uiState.isAiReady) providerAccentColor(uiState.activeProvider) else AmberAccent
+    val tok = uiState.tokenState
+    val remainingFraction = when {
+        !uiState.isAiReady -> 0f
+        tok.hasContextLimit -> tok.remainingContextFraction
+        else -> 1f
+    }
+    val barColor = when {
+        !uiState.isAiReady -> AmberAccent
+        !tok.hasContextLimit -> accentColor
+        remainingFraction > 0.4f -> EmeraldAccent
+        remainingFraction > 0.15f -> AmberAccent
+        else -> RoseAccent
+    }
+    val signedInUser = uiState.googleUser
+    val titleLabel = when {
+        !uiState.isAiReady -> "Chưa kết nối AI · Nhấn để thiết lập"
+        uiState.activeProvider == AiProvider.GOOGLE_ACCOUNT && signedInUser != null ->
+            "${signedInUser.displayName} · ${uiState.activeProfile.effectiveModelId}"
+        else -> "${uiState.activeProviderLabel} · ${uiState.activeProfile.effectiveModelId}"
+    }
+    val tokenBadge = when {
+        !uiState.isAiReady -> "Cài đặt"
+        tok.isSyncingTokens -> "Đang đo..."
+        tok.hasContextLimit -> "${(remainingFraction * 100).toInt()}% ctx"
+        tok.usedTokensToday > 0L -> "${AiResponseParser.formatCompactTokens(tok.usedTokensToday)} hôm nay"
+        !tok.accountBalanceLabel.isNullOrBlank() -> tok.accountBalanceLabel
+        else -> "Đổi nhanh"
+    }
+
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .liquidGlassSurface(
+                shape = RoundedCornerShape(14.dp),
+                cornerRadiusDp = 14.dp,
+                elevated = false,
+                fallbackBg = SlateDark.copy(alpha = 0.85f),
+                accentBorder = accentColor.copy(alpha = 0.4f)
+            )
+            .clickable(onClick = onClick)
+            .testTag("ai_signed_in_account_strip")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 44.dp)
+                .padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (signedInUser != null && uiState.activeProvider == AiProvider.GOOGLE_ACCOUNT) {
+                GoogleAccountAvatar(
+                    user = signedInUser,
+                    size = 24.dp,
+                    showVerifiedBadge = true
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(accentColor.copy(alpha = 0.2f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = null,
+                        tint = accentColor,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+
+            Text(
+                text = titleLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = SlateTextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+
+            Text(
+                text = tokenBadge,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = barColor,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp,
+                maxLines = 1,
+                modifier = Modifier.testTag("ai_top_bar_token_status")
+            )
+
+            Icon(
+                imageVector = Icons.Default.ExpandMore,
+                contentDescription = "Mở bảng điều khiển AI nhanh",
+                tint = SlateTextSecondary,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+
+        // Ultra-thin token remaining progress bar along bottom edge
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(3.dp)
+                .background(SlateBorder.copy(alpha = 0.28f))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(remainingFraction.coerceIn(0.03f, 1f))
+                    .fillMaxHeight()
+                    .background(barColor)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AiQuickControlSheetContent(
+    uiState: AiAssistantUiState,
+    onRefreshTokens: () -> Unit,
+    onSelectProvider: (AiProvider) -> Unit,
+    onSelectCustomEndpoint: (String) -> Unit,
+    onSelectModel: (String) -> Unit,
+    onOpenFullSettings: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column {
+                Text(
+                    text = "Điều khiển AI nhanh",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = SlateTextPrimary,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                    text = "${uiState.activeProviderLabel} · ${uiState.activeProfile.effectiveModelId}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SlateTextSecondary
+                )
+            }
+            TextButton(onClick = onOpenFullSettings) {
+                Icon(Icons.Default.Settings, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Cài đặt đủ", color = CyanAccent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            }
+        }
+
+        // Live persistent token status card
+        AiTokenStatusCard(
+            tokenState = uiState.tokenState,
+            onRefreshTokens = onRefreshTokens,
+            activeProvider = uiState.activeProvider
+        )
+
+        // Quick Provider Switcher
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "Đổi nhanh Nhà cung cấp",
+                style = MaterialTheme.typography.labelMedium,
+                color = SlateTextSecondary,
+                fontWeight = FontWeight.Bold
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                AiProvider.entries.forEach { provider ->
+                    val selected = provider == uiState.activeProvider
+                    val configured = provider in uiState.configuredProviders
+                    val accent = providerAccentColor(provider)
+                    Row(
+                        modifier = Modifier
+                            .defaultMinSize(minHeight = 40.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (selected) accent.copy(alpha = 0.22f) else SlateDeepest.copy(alpha = 0.7f))
+                            .border(
+                                width = if (selected) 1.5.dp else 1.dp,
+                                color = if (selected) accent else SlateBorder,
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .clickable { onSelectProvider(provider) }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (configured) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(EmeraldAccent)
+                            )
+                        }
+                        Text(
+                            text = provider.shortTitle,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (selected) accent else SlateTextPrimary,
+                            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        }
+
+        // Quick Custom URL selector if Custom OpenAI is active and has saved endpoints
+        if (uiState.activeProvider == AiProvider.CUSTOM_OPENAI && uiState.customEndpoints.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Chọn nhanh Custom URL (${uiState.customEndpoints.size})",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = SlateTextSecondary,
+                    fontWeight = FontWeight.Bold
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    uiState.customEndpoints.forEach { ep ->
+                        val selected = ep.id == uiState.activeCustomEndpoint?.id
+                        val accent = providerAccentColor(AiProvider.CUSTOM_OPENAI)
+                        Box(
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 38.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (selected) accent.copy(alpha = 0.22f) else SlateDeepest.copy(alpha = 0.7f))
+                                .border(
+                                    width = if (selected) 1.5.dp else 1.dp,
+                                    color = if (selected) accent else SlateBorder,
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .clickable { onSelectCustomEndpoint(ep.id) }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = ep.name.ifBlank { ep.baseUrl },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (selected) accent else SlateTextPrimary,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Quick Model Switcher
+        if (uiState.displayModels.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Đổi nhanh Mô hình (${uiState.displayModels.size})",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = SlateTextSecondary,
+                    fontWeight = FontWeight.Bold
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    uiState.displayModels.take(20).forEach { model ->
+                        val selected = model.modelId == uiState.activeProfile.effectiveModelId
+                        val accent = providerAccentColor(uiState.activeProvider)
+                        Box(
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 38.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (selected) accent.copy(alpha = 0.22f) else SlateDeepest.copy(alpha = 0.7f))
+                                .border(
+                                    width = if (selected) 1.5.dp else 1.dp,
+                                    color = if (selected) accent else SlateBorder,
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .clickable { onSelectModel(model.modelId) }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = model.displayName.ifBlank { model.modelId },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (selected) accent else SlateTextPrimary,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Full settings CTA
+        Button(
+            onClick = onOpenFullSettings,
+            colors = ButtonDefaults.buttonColors(containerColor = CyanAccent, contentColor = Color.Black),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 48.dp)
+                .testTag("ai_quick_open_settings_btn")
+        ) {
+            Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Quản lý API Key, Custom URL & Test mô hình", fontWeight = FontWeight.ExtraBold)
         }
     }
 }
@@ -431,17 +704,24 @@ private fun AiDocsQaTab(
     onSendQuestion: (String) -> Unit,
     onCancelQuestion: () -> Unit,
     onRetryLastQuestion: () -> Unit,
+    onAttachPdfPage: (Int) -> Unit,
     onClearAttachedPage: () -> Unit,
-    onClearChat: () -> Unit,
+    onSwitchToProblemDraw: () -> Unit,
     onOpenPdfPage: (Int) -> Unit,
-    onGoToKeyTab: () -> Unit,
+    onOpenAiSettings: () -> Unit,
     onSignInWithGoogle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var inputText by remember { mutableStateOf("") }
+    var showAttachMenu by remember { mutableStateOf(false) }
+    var showAttachPageDialog by remember { mutableStateOf(false) }
+    var attachPageInput by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
-    // Scroll accurately to the TRUE last item (including loading/streaming bubble) whenever chat updates
+    val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
+    val isImeVisible = imeBottomPx > 0
+
+    // Scroll accurately to the TRUE last item whenever chat updates
     LaunchedEffect(uiState.messages.size, uiState.isAskingDocs, uiState.streamingDocsAnswer.length / 40) {
         val total = listState.layoutInfo.totalItemsCount
         if (total > 0) {
@@ -471,7 +751,7 @@ private fun AiDocsQaTab(
                         AiMissingKeyBanner(
                             isSigningIn = uiState.isSigningIn,
                             onSignInWithGoogle = onSignInWithGoogle,
-                            onGoToKeyTab = onGoToKeyTab
+                            onGoToKeyTab = onOpenAiSettings
                         )
                     }
                 }
@@ -488,7 +768,7 @@ private fun AiDocsQaTab(
                                 cornerRadiusDp = 18.dp,
                                 elevated = false,
                                 fallbackBg = SlateDark,
-                                accentBorder = CyanAccent.copy(alpha = 0.45f)
+                                accentBorder = CyanAccent.copy(alpha = 0.4f)
                             )
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -499,14 +779,14 @@ private fun AiDocsQaTab(
                         ) {
                             Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(20.dp))
                             Text(
-                                text = "Hỏi AI tìm nội dung tài liệu 388 trang",
+                                text = "Hỏi AI tra cứu tài liệu 388 trang",
                                 style = MaterialTheme.typography.titleSmall,
                                 color = SlateTextPrimary,
                                 fontWeight = FontWeight.Bold
                             )
                         }
                         Text(
-                            text = "Hỏi bất kỳ công thức hay dạng bài Lớp 10, 11, 12 nào — AI sẽ tóm tắt nội dung và trả về nút mở thẳng đúng trang trong cuốn PDF DPAD 388 trang. Bạn cũng có thể gõ \"Giải thích trang 121\" để AI đọc trực tiếp ảnh trang đó!",
+                            text = "Hỏi bất kỳ công thức hay dạng bài Lớp 10, 11, 12 nào — AI sẽ tóm tắt và mở thẳng đúng trang PDF. Bạn cũng có thể bấm nút + để đính kèm trang PDF cụ thể.",
                             style = MaterialTheme.typography.bodySmall,
                             color = SlateTextSecondary
                         )
@@ -515,7 +795,6 @@ private fun AiDocsQaTab(
                             "Tìm công thức khoảng cách 2 đường chéo nhau Oxyz ở trang nào?",
                             "Tóm tắt công thức nguyên hàm từng phần và chỉ trang PDF",
                             "Công thức lượng giác nhân đôi, hạ bậc ở trang nào?",
-                            "Tìm công thức xác suất có điều kiện & Bayes lớp 12",
                             "Đọc và tóm tắt giúp tôi trang 121"
                         )
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -523,11 +802,12 @@ private fun AiDocsQaTab(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(10.dp))
+                                        .defaultMinSize(minHeight = 42.dp)
+                                        .clip(RoundedCornerShape(12.dp))
                                         .background(CyanAccent.copy(alpha = 0.10f))
-                                        .border(1.dp, CyanAccent.copy(alpha = 0.30f), RoundedCornerShape(10.dp))
+                                        .border(1.dp, CyanAccent.copy(alpha = 0.28f), RoundedCornerShape(12.dp))
                                         .clickable { onSendQuestion(prompt) }
-                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
@@ -539,28 +819,13 @@ private fun AiDocsQaTab(
                     }
                 }
             } else {
-                item(key = "chat_clear_bar") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .widthIn(max = 720.dp),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        TextButton(onClick = onClearChat) {
-                            Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = SlateTextSecondary, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Xóa cuộc trò chuyện", color = SlateTextSecondary, fontSize = 12.sp)
-                        }
-                    }
-                }
-
                 items(uiState.messages, key = { it.id }) { msg ->
                     val isLatestError = msg.isError && msg.id == uiState.messages.lastOrNull()?.id && !uiState.isAskingDocs
                     AiChatBubbleCard(
                         message = msg,
                         onOpenPdfPage = onOpenPdfPage,
                         onRetry = if (isLatestError && !uiState.lastFailedDocsQuestion.isNullOrBlank()) onRetryLastQuestion else null,
-                        onOpenSettings = if (isLatestError) onGoToKeyTab else null,
+                        onOpenSettings = if (isLatestError) onOpenAiSettings else null,
                         modifier = Modifier.widthIn(max = 720.dp)
                     )
                 }
@@ -627,7 +892,7 @@ private fun AiDocsQaTab(
             }
         }
 
-        // Attached PDF page indicator (when user jumped from PDF Reader "Hỏi AI về trang X")
+        // Attached PDF page pill
         val attachedPage = uiState.attachedPdfPage
         if (attachedPage != null) {
             Row(
@@ -635,18 +900,20 @@ private fun AiDocsQaTab(
                     .fillMaxWidth()
                     .widthIn(max = 720.dp)
                     .padding(horizontal = 12.dp, vertical = 4.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(12.dp))
                     .background(CyanAccent.copy(alpha = 0.16f))
-                    .border(1.dp, CyanAccent.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+                    .border(1.dp, CyanAccent.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
                     .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Đính kèm ảnh Trang $attachedPage · ${PdfCurriculumRepository.sectionLabelForPage(attachedPage)}",
+                    text = "Đính kèm Trang $attachedPage · ${PdfCurriculumRepository.sectionLabelForPage(attachedPage)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = CyanAccent,
                     fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
                 IconButton(onClick = onClearAttachedPage, modifier = Modifier.size(28.dp)) {
@@ -655,31 +922,80 @@ private fun AiDocsQaTab(
             }
         }
 
-        // Bottom Prompt Composer
+        // Compact 1-Line Bottom Prompt Composer (clears FloatingPillBottomNavBar when IME closed)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .widthIn(max = 720.dp)
-                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .padding(horizontal = 12.dp)
+                .padding(top = 4.dp, bottom = if (isImeVisible) 8.dp else 82.dp)
                 .liquidGlassSurface(
-                    shape = RoundedCornerShape(16.dp),
-                    cornerRadiusDp = 16.dp,
+                    shape = RoundedCornerShape(24.dp),
+                    pillShape = CircleShape,
+                    cornerRadiusDp = 24.dp,
                     elevated = true,
                     fallbackBg = SlateDark,
                     fallbackBorder = SlateBorder
                 )
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+                .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            // `+` Attach Button (PDF Page or Problem Photo)
+            Box {
+                IconButton(
+                    onClick = { showAttachMenu = true },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .testTag("ai_composer_attach_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Đính kèm trang PDF hoặc chụp đề",
+                        tint = CyanAccent,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = showAttachMenu,
+                    onDismissRequest = { showAttachMenu = false },
+                    containerColor = SlateDark
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Đính kèm trang PDF (1–388)...", color = SlateTextPrimary) },
+                        leadingIcon = {
+                            Icon(Icons.Default.MenuBook, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(18.dp))
+                        },
+                        onClick = {
+                            showAttachMenu = false
+                            attachPageInput = (uiState.attachedPdfPage ?: 1).toString()
+                            showAttachPageDialog = true
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Chụp / chọn ảnh đề bài vẽ hình", color = SlateTextPrimary) },
+                        leadingIcon = {
+                            Icon(Icons.Default.CameraAlt, contentDescription = null, tint = PurpleAccent, modifier = Modifier.size(18.dp))
+                        },
+                        onClick = {
+                            showAttachMenu = false
+                            onSwitchToProblemDraw()
+                        }
+                    )
+                }
+            }
+
             OutlinedTextField(
                 value = inputText,
                 onValueChange = { inputText = it },
                 placeholder = {
                     Text(
-                        "Hỏi AI tìm công thức hoặc giải thích trang PDF...",
+                        text = "Hỏi công thức, giải thích trang PDF...",
                         style = MaterialTheme.typography.bodySmall,
-                        color = SlateTextSecondary
+                        color = SlateTextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 },
                 maxLines = 3,
@@ -707,29 +1023,105 @@ private fun AiDocsQaTab(
                     .testTag("ai_docs_question_input")
             )
 
-            IconButton(
-                onClick = {
-                    val q = inputText.trim()
-                    if (q.isNotEmpty()) {
-                        inputText = ""
-                        onSendQuestion(q)
-                    }
-                },
-                enabled = inputText.isNotBlank() && !uiState.isAskingDocs,
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(if (inputText.isNotBlank() && !uiState.isAskingDocs) CyanAccent else SlateBorder.copy(alpha = 0.4f))
-                    .testTag("ai_docs_send_btn")
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Gửi câu hỏi AI",
-                    tint = if (inputText.isNotBlank() && !uiState.isAskingDocs) Color.Black else SlateTextSecondary,
-                    modifier = Modifier.size(18.dp)
-                )
+            if (uiState.isAskingDocs) {
+                IconButton(
+                    onClick = onCancelQuestion,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(RoseAccent.copy(alpha = 0.2f))
+                        .testTag("ai_composer_stop_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.StopCircle,
+                        contentDescription = "Dừng phản hồi AI",
+                        tint = RoseAccent,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            } else {
+                IconButton(
+                    onClick = {
+                        val q = inputText.trim()
+                        if (q.isNotEmpty()) {
+                            inputText = ""
+                            onSendQuestion(q)
+                        }
+                    },
+                    enabled = inputText.isNotBlank(),
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(if (inputText.isNotBlank()) CyanAccent else SlateBorder.copy(alpha = 0.4f))
+                        .testTag("ai_docs_send_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Gửi câu hỏi AI",
+                        tint = if (inputText.isNotBlank()) Color.Black else SlateTextSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
         }
+    }
+
+    if (showAttachPageDialog) {
+        AlertDialog(
+            onDismissRequest = { showAttachPageDialog = false },
+            containerColor = SlateDark,
+            title = {
+                Text(
+                    text = "Đính kèm trang PDF",
+                    color = SlateTextPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Nhập số trang (1 – 388) để AI đọc trực tiếp ảnh trang đó khi trả lời:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SlateTextSecondary
+                    )
+                    OutlinedTextField(
+                        value = attachPageInput,
+                        onValueChange = { raw -> attachPageInput = raw.filter { it.isDigit() }.take(3) },
+                        singleLine = true,
+                        label = { Text("Số trang") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = CyanAccent,
+                            unfocusedBorderColor = SlateBorder,
+                            focusedTextColor = SlateTextPrimary,
+                            unfocusedTextColor = SlateTextPrimary
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val page = attachPageInput.toIntOrNull()?.coerceIn(1, 388)
+                        if (page != null) {
+                            onAttachPdfPage(page)
+                        }
+                        showAttachPageDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = CyanAccent, contentColor = Color.Black),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Đính kèm", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAttachPageDialog = false }) {
+                    Text("Hủy", color = SlateTextSecondary)
+                }
+            }
+        )
     }
 }
 

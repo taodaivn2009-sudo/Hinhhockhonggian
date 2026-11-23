@@ -1,9 +1,11 @@
 package com.example.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -18,7 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,220 +32,275 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.engine.*
-import com.example.geo2d.MathWorkspace
-import com.example.geo2d.WorkspaceModeSwitch
 import com.example.ui.panes.ShapePreviewThumbnail
 import com.example.ui.theme.*
 import com.example.viewmodel.GeometryViewModel
 import java.util.Locale
 
+/**
+ * Minimal Canvas-first Top Floating Bar for 3D Space:
+ * - Row 1: Shape Selector Pill (opens 15-shape Bottom Sheet) + Camera View Popover + Save/Export + Fullscreen
+ * - Row 2 (micro-strip, hidden when sheet open): Undo/Redo + Live Metrics summary pill
+ */
 @Composable
 fun TopStudioHeader(
     uiState: GeometryUiState,
     viewModel: GeometryViewModel,
     isCompactWidth: Boolean,
-    onSwitchWorkspace: (MathWorkspace) -> Unit,
-    hasUpdateBadge: Boolean = false,
+    isImmersive: Boolean,
+    onToggleImmersive: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val m = uiState.scene.metrics
     val hide = uiState.verifyHideAnswers
     fun f2(v: Float) = if (hide) "???" else String.format(Locale.US, "%.2f", v)
+    var cameraMenuExpanded by remember { mutableStateOf(false) }
 
-    Column(
+    AnimatedVisibility(
+        visible = !isImmersive,
+        enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
+        exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top),
         modifier = modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        // Row 1: Unified 4-Tab Workspace Navigation Bar (3D | 2D | Tài liệu | Cài đặt)
-        WorkspaceModeSwitch(
-            current = MathWorkspace.SPACE_3D,
-            hasUpdateBadge = hasUpdateBadge,
-            onSelect = onSwitchWorkspace,
-            modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp)
-        )
-
-        // Row 2: Active Shape Selector Pill + Quick Studio Action Strip
-        Row(
-            modifier = Modifier.fillMaxWidth().widthIn(max = 680.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            // Row 1: Compact Translucent Floating Header
             Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .testTag("top_shape_selector_pill")
-                    .liquidGlassSurface(
-                        shape = RoundedCornerShape(12.dp),
-                        pillShape = CircleShape,
-                        fallbackBg = SlateDark.copy(alpha = 0.90f),
-                        fallbackBorder = SlateBorder.copy(alpha = 0.8f),
-                        accentBorder = if (uiState.activeLeftPane == LeftPane.SHAPES) CyanAccent else null
-                    )
-                    .clickable { viewModel.toggleLeftPane(LeftPane.SHAPES) }
-                    .padding(horizontal = 11.dp, vertical = 5.dp),
+                    .fillMaxWidth()
+                    .widthIn(max = 680.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(7.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                ShapePreviewThumbnail(
-                    shape = uiState.snapshot.shape,
-                    accent = CyanAccent,
-                    modifier = Modifier.size(22.dp)
-                )
-                Column(Modifier.weight(1f, fill = false)) {
-                    Text(
-                        text = uiState.snapshot.shape.title,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = SlateTextPrimary,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                // Active Shape Selector Pill (opens 4-group 15-shape Bottom Sheet)
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .defaultMinSize(minHeight = 46.dp)
+                        .testTag("top_shape_selector_pill")
+                        .liquidGlassSurface(
+                            shape = CircleShape,
+                            pillShape = CircleShape,
+                            elevated = true,
+                            fallbackBg = SlateDark.copy(alpha = 0.90f),
+                            fallbackBorder = SlateBorder.copy(alpha = 0.8f),
+                            accentBorder = if (uiState.activeLeftPane == LeftPane.SHAPES) CyanAccent else null
+                        )
+                        .clip(CircleShape)
+                        .clickable { viewModel.toggleLeftPane(LeftPane.SHAPES) }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ShapePreviewThumbnail(
+                        shape = uiState.snapshot.shape,
+                        accent = CyanAccent,
+                        modifier = Modifier.size(24.dp)
                     )
-                    Text(
-                        text = uiState.snapshot.shape.subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = SlateTextSecondary,
-                        fontSize = 9.5.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                    Column(Modifier.weight(1f, fill = false)) {
+                        Text(
+                            text = uiState.snapshot.shape.title,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = SlateTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = uiState.snapshot.shape.subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = SlateTextSecondary,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Chọn khối hình khác",
+                        tint = CyanAccent,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
-                Icon(
-                    imageVector = Icons.Default.KeyboardArrowDown,
-                    contentDescription = "Chọn khối hình khác",
-                    tint = CyanAccent,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
 
-            Row(
-                modifier = Modifier
-                    .liquidGlassSurface(
-                        shape = RoundedCornerShape(12.dp),
-                        pillShape = CircleShape,
-                        fallbackBg = SlateDark.copy(alpha = 0.90f),
-                        fallbackBorder = SlateBorder.copy(alpha = 0.8f)
-                    )
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(1.dp)
-            ) {
-                TopIconBtn(
-                    icon = Icons.AutoMirrored.Filled.Undo,
-                    contentDescription = "Hoàn tác",
-                    enabled = uiState.canUndo,
-                    tint = SlateTextPrimary,
-                    testTag = "undo_btn",
-                    onClick = { viewModel.undo() }
-                )
-                TopIconBtn(
-                    icon = Icons.AutoMirrored.Filled.Redo,
-                    contentDescription = "Làm lại",
-                    enabled = uiState.canRedo,
-                    tint = SlateTextPrimary,
-                    testTag = "redo_btn",
-                    onClick = { viewModel.redo() }
-                )
-                if (uiState.snapshot.vertexOverrides.isNotEmpty()) {
-                    TopIconBtn(
-                        icon = Icons.Default.RestartAlt,
-                        contentDescription = "Đưa đỉnh về vị trí chuẩn",
-                        tint = RoseLight,
-                        testTag = "reset_vertices_button",
-                        onClick = { viewModel.resetMovedVertices() }
-                    )
-                }
-                TopIconBtn(
-                    icon = Icons.Default.PlayCircleOutline,
-                    contentDescription = "Tua lại từng bước dựng hình",
-                    tint = AmberAccent,
-                    testTag = "replay_3d_btn",
-                    onClick = { viewModel.startReplay() }
-                )
-                TopIconBtn(
-                    icon = Icons.Default.CenterFocusStrong,
-                    contentDescription = "Đặt lại góc nhìn camera chuẩn",
-                    tint = CyanAccent,
-                    testTag = "reset_camera_button",
-                    onClick = { viewModel.resetCamera() }
-                )
-                TopIconBtn(
-                    icon = Icons.Default.Save,
-                    contentDescription = "Lưu bài hoặc xuất PNG/SVG/OBJ/JSON",
-                    tint = EmeraldLight,
-                    testTag = "rail_save_btn",
-                    onClick = { viewModel.openSaveModal() }
-                )
-            }
-        }
-
-        // Row 3: Live Metrics Pill + 1-Tap Camera Angle Presets (when in Rotate & View mode)
-        Row(
-            modifier = Modifier.fillMaxWidth().widthIn(max = 680.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                modifier = Modifier
-                    .weight(1f, fill = false)
-                    .testTag("live_metrics_pill")
-                    .liquidGlassSurface(
-                        shape = RoundedCornerShape(10.dp),
-                        pillShape = CircleShape,
-                        fallbackBg = SlateDeepest.copy(alpha = 0.88f),
-                        fallbackBorder = SlateBorder.copy(alpha = 0.85f)
-                    )
-                    .clickable { viewModel.toggleLeftPane(LeftPane.FORMULAS) }
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 10.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(7.dp)
-            ) {
-                MetricPill("h", f2(m.realH), PinkLight)
-                VerticalDividerTiny()
-                MetricPill("Sđ", f2(m.sDay), CyanAccent)
-                if (!isCompactWidth) {
-                    VerticalDividerTiny()
-                    MetricPill("Sxq", f2(m.sXq), CyanAccent)
-                    VerticalDividerTiny()
-                    MetricPill("Stp", f2(m.sTp), CyanAccent)
-                }
-                VerticalDividerTiny()
-                MetricPill("V", f2(m.vol), AmberAccent)
-            }
-
-            if (uiState.interactionMode == InteractionMode.VIEW) {
-                Spacer(Modifier.width(6.dp))
+                // Right Floating Action Pill: Camera View Menu · Save/Export · Fullscreen
                 Row(
                     modifier = Modifier
                         .liquidGlassSurface(
-                            shape = RoundedCornerShape(10.dp),
+                            shape = CircleShape,
                             pillShape = CircleShape,
-                            fallbackBg = SlateDark.copy(alpha = 0.88f),
+                            elevated = true,
+                            fallbackBg = SlateDark.copy(alpha = 0.90f),
                             fallbackBorder = SlateBorder.copy(alpha = 0.8f)
                         )
-                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                        .padding(horizontal = 4.dp, vertical = 3.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    horizontalArrangement = Arrangement.spacedBy(1.dp)
                 ) {
-                    CameraViewPreset.entries.forEach { preset ->
-                        Box(
-                            modifier = Modifier
-                                .testTag("camera_preset_${preset.name.lowercase()}")
-                                .clip(RoundedCornerShape(7.dp))
-                                .clickable { viewModel.setCameraPreset(preset) }
-                                .padding(horizontal = 6.dp, vertical = 4.dp),
-                            contentAlignment = Alignment.Center
+                    // Quick Camera View Preset Menu (3D / Trước / Trên / Bên / Reset)
+                    Box {
+                        TopIconBtn(
+                            icon = Icons.Default.CenterFocusStrong,
+                            contentDescription = "Chuyển góc nhìn nhanh 3D",
+                            tint = CyanAccent,
+                            testTag = "camera_presets_menu_btn",
+                            onClick = { cameraMenuExpanded = true }
+                        )
+                        DropdownMenu(
+                            expanded = cameraMenuExpanded,
+                            onDismissRequest = { cameraMenuExpanded = false },
+                            containerColor = SlateDark
                         ) {
-                            Text(
-                                text = preset.label,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = CyanAccent,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 10.sp
+                            CameraViewPreset.entries.forEach { preset ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = "Góc nhìn: ${preset.label}",
+                                            color = SlateTextPrimary,
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Default.Visibility,
+                                            contentDescription = null,
+                                            tint = CyanAccent,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    },
+                                    modifier = Modifier.testTag("camera_preset_${preset.name.lowercase()}"),
+                                    onClick = {
+                                        cameraMenuExpanded = false
+                                        viewModel.setCameraPreset(preset)
+                                    }
+                                )
+                            }
+                            HorizontalDivider(color = SlateBorder.copy(alpha = 0.6f))
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = "Đặt lại góc nhìn chuẩn",
+                                        color = IndigoBright,
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.RestartAlt,
+                                        contentDescription = null,
+                                        tint = IndigoBright,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                modifier = Modifier.testTag("reset_camera_button"),
+                                onClick = {
+                                    cameraMenuExpanded = false
+                                    viewModel.resetCamera()
+                                }
+                            )
+                        }
+                    }
+
+                    TopIconBtn(
+                        icon = Icons.Default.SaveAlt,
+                        contentDescription = "Lưu & Xuất file JSON/PNG/SVG/OBJ",
+                        tint = EmeraldLight,
+                        testTag = "rail_save_btn",
+                        onClick = { viewModel.openSaveModal() }
+                    )
+
+                    TopIconBtn(
+                        icon = Icons.Default.Fullscreen,
+                        contentDescription = "Chế độ toàn màn hình",
+                        tint = SlateTextPrimary,
+                        testTag = "geo3d_fullscreen_btn",
+                        onClick = onToggleImmersive
+                    )
+                }
+            }
+
+            // Row 2: Ultra-compact Undo/Redo + Live Metrics Micro-Strip (hidden while editing sheet)
+            AnimatedVisibility(visible = uiState.activeLeftPane == null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 680.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    // Clickable Live Metrics Summary Pill -> opens Oxyz & Formulas Sheet
+                    Row(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .testTag("live_metrics_pill")
+                            .liquidGlassSurface(
+                                shape = CircleShape,
+                                pillShape = CircleShape,
+                                fallbackBg = SlateDeepest.copy(alpha = 0.84f),
+                                fallbackBorder = SlateBorder.copy(alpha = 0.75f)
+                            )
+                            .clip(CircleShape)
+                            .clickable { viewModel.toggleLeftPane(LeftPane.FORMULAS) }
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 11.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        MetricPill("h", f2(m.realH), PinkLight)
+                        VerticalDividerTiny()
+                        MetricPill("Sđ", f2(m.sDay), CyanAccent)
+                        if (!isCompactWidth) {
+                            VerticalDividerTiny()
+                            MetricPill("Stp", f2(m.sTp), CyanAccent)
+                        }
+                        VerticalDividerTiny()
+                        MetricPill("V", f2(m.vol), AmberAccent)
+                    }
+
+                    Spacer(Modifier.width(8.dp))
+
+                    // Compact Undo / Redo / Reset Moved Vertices Pill
+                    Row(
+                        modifier = Modifier
+                            .liquidGlassSurface(
+                                shape = CircleShape,
+                                pillShape = CircleShape,
+                                fallbackBg = SlateDeepest.copy(alpha = 0.84f),
+                                fallbackBorder = SlateBorder.copy(alpha = 0.75f)
+                            )
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        SmallMicroIconBtn(
+                            icon = Icons.AutoMirrored.Filled.Undo,
+                            contentDescription = "Hoàn tác",
+                            enabled = uiState.canUndo,
+                            tint = SlateTextPrimary,
+                            testTag = "undo_btn",
+                            onClick = { viewModel.undo() }
+                        )
+                        SmallMicroIconBtn(
+                            icon = Icons.AutoMirrored.Filled.Redo,
+                            contentDescription = "Làm lại",
+                            enabled = uiState.canRedo,
+                            tint = SlateTextPrimary,
+                            testTag = "redo_btn",
+                            onClick = { viewModel.redo() }
+                        )
+                        if (uiState.snapshot.vertexOverrides.isNotEmpty()) {
+                            SmallMicroIconBtn(
+                                icon = Icons.Default.RestartAlt,
+                                contentDescription = "Đưa đỉnh về vị trí chuẩn",
+                                tint = RoseLight,
+                                testTag = "reset_vertices_button",
+                                onClick = { viewModel.resetMovedVertices() }
                             )
                         }
                     }
@@ -265,8 +322,8 @@ private fun TopIconBtn(
     Box(
         modifier = Modifier
             .testTag(testTag)
-            .size(36.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .size(40.dp)
+            .clip(CircleShape)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
@@ -274,7 +331,33 @@ private fun TopIconBtn(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = if (enabled) tint else SlateTextSecondary.copy(alpha = 0.3f),
-            modifier = Modifier.size(18.dp)
+            modifier = Modifier.size(19.dp)
+        )
+    }
+}
+
+@Composable
+private fun SmallMicroIconBtn(
+    icon: ImageVector,
+    contentDescription: String,
+    tint: Color,
+    testTag: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .testTag(testTag)
+            .size(32.dp)
+            .clip(CircleShape)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (enabled) tint else SlateTextSecondary.copy(alpha = 0.32f),
+            modifier = Modifier.size(16.dp)
         )
     }
 }
@@ -301,69 +384,68 @@ private fun VerticalDividerTiny() {
 fun RightCanvasQuickControls(
     uiState: GeometryUiState,
     viewModel: GeometryViewModel,
+    visible: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val snap = uiState.snapshot
 
-    Column(
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End),
+        exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End),
         modifier = modifier
-            .padding(end = 8.dp)
-            .liquidGlassSurface(
-                shape = RoundedCornerShape(14.dp),
-                pillShape = RoundedCornerShape(26.dp),
-                fallbackBg = SlateDark.copy(alpha = 0.88f),
-                fallbackBorder = SlateBorder.copy(alpha = 0.75f)
-            )
-            .padding(vertical = 6.dp, horizontal = 3.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        QuickCanvasButton(
-            icon = Icons.Default.GridOn,
-            label = "Oxyz",
-            active = snap.showAxes,
-            activeColor = BlueAxis,
-            testTag = "quick_axes_btn",
-            contentDescription = "Bật hoặc tắt hệ trục tọa độ Oxyz",
-            onClick = { viewModel.toggleAxes() }
-        )
-        QuickCanvasButton(
-            icon = Icons.Default.GpsFixed,
-            label = "Hút",
-            active = snap.snapEnabled,
-            activeColor = EmeraldDark,
-            testTag = "snap_toggle_btn",
-            contentDescription = "Bật hoặc tắt nam châm hút tọa độ",
-            onClick = { viewModel.toggleSnapEnabled() }
-        )
-        QuickCanvasButton(
-            icon = if (uiState.autoRotate) Icons.Default.Pause else Icons.Default.Autorenew,
-            label = "Tự xoay",
-            active = uiState.autoRotate,
-            activeColor = IndigoPrimary,
-            testTag = "quick_autorotate_btn",
-            contentDescription = "Bật hoặc tắt tự động xoay mô hình 3D",
-            onClick = { viewModel.toggleAutoRotate(!uiState.autoRotate) }
-        )
-        HorizontalDivider(color = SlateBorder, modifier = Modifier.width(26.dp))
-        QuickCanvasButton(
-            icon = Icons.Default.Add,
-            label = null,
-            active = false,
-            activeColor = IndigoPrimary,
-            testTag = "quick_zoom_in_btn",
-            contentDescription = "Phóng to mô hình 3D",
-            onClick = { viewModel.stepZoom(zoomIn = true) }
-        )
-        QuickCanvasButton(
-            icon = Icons.Default.Remove,
-            label = null,
-            active = false,
-            activeColor = IndigoPrimary,
-            testTag = "quick_zoom_out_btn",
-            contentDescription = "Thu nhỏ mô hình 3D",
-            onClick = { viewModel.stepZoom(zoomIn = false) }
-        )
+        Column(
+            modifier = Modifier
+                .padding(end = 8.dp)
+                .liquidGlassSurface(
+                    shape = RoundedCornerShape(22.dp),
+                    pillShape = RoundedCornerShape(24.dp),
+                    fallbackBg = SlateDark.copy(alpha = 0.84f),
+                    fallbackBorder = SlateBorder.copy(alpha = 0.72f)
+                )
+                .padding(vertical = 5.dp, horizontal = 3.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            QuickCanvasButton(
+                icon = Icons.Default.GridOn,
+                label = "Oxyz",
+                active = snap.showAxes,
+                activeColor = BlueAxis,
+                testTag = "quick_axes_btn",
+                contentDescription = "Bật hoặc tắt hệ trục tọa độ Oxyz",
+                onClick = { viewModel.toggleAxes() }
+            )
+            QuickCanvasButton(
+                icon = if (uiState.autoRotate) Icons.Default.Pause else Icons.Default.Autorenew,
+                label = "Xoay",
+                active = uiState.autoRotate,
+                activeColor = IndigoPrimary,
+                testTag = "quick_autorotate_btn",
+                contentDescription = "Bật hoặc tắt tự động xoay mô hình 3D",
+                onClick = { viewModel.toggleAutoRotate(!uiState.autoRotate) }
+            )
+            HorizontalDivider(color = SlateBorder.copy(alpha = 0.65f), modifier = Modifier.width(22.dp))
+            QuickCanvasButton(
+                icon = Icons.Default.Add,
+                label = null,
+                active = false,
+                activeColor = IndigoPrimary,
+                testTag = "quick_zoom_in_btn",
+                contentDescription = "Phóng to mô hình 3D",
+                onClick = { viewModel.stepZoom(zoomIn = true) }
+            )
+            QuickCanvasButton(
+                icon = Icons.Default.Remove,
+                label = null,
+                active = false,
+                activeColor = IndigoPrimary,
+                testTag = "quick_zoom_out_btn",
+                contentDescription = "Thu nhỏ mô hình 3D",
+                onClick = { viewModel.stepZoom(zoomIn = false) }
+            )
+        }
     }
 }
 
@@ -380,10 +462,9 @@ private fun QuickCanvasButton(
     Column(
         modifier = Modifier
             .testTag(testTag)
-            .size(width = 48.dp, height = if (label != null) 46.dp else 38.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .size(width = 44.dp, height = if (label != null) 42.dp else 36.dp)
+            .clip(RoundedCornerShape(12.dp))
             .background(if (active) activeColor.copy(alpha = 0.88f) else Color.Transparent)
-            .border(1.dp, if (active) Color.White.copy(alpha = 0.35f) else Color.Transparent, RoundedCornerShape(10.dp))
             .clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -392,7 +473,7 @@ private fun QuickCanvasButton(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = if (active) Color.White else SlateTextLight,
-            modifier = Modifier.size(18.dp)
+            modifier = Modifier.size(17.dp)
         )
         if (label != null) {
             Text(
@@ -417,13 +498,13 @@ fun ToastBanner(
         exit = fadeOut(),
         modifier = modifier
             .statusBarsPadding()
-            .padding(top = 136.dp)
+            .padding(top = 104.dp)
     ) {
         Box(
             modifier = Modifier
-                .clip(RoundedCornerShape(20.dp))
+                .clip(CircleShape)
                 .background(EmeraldDark.copy(alpha = 0.95f))
-                .border(1.dp, EmeraldLight, RoundedCornerShape(20.dp))
+                .border(1.dp, EmeraldLight, CircleShape)
                 .padding(horizontal = 16.dp, vertical = 7.dp)
         ) {
             Text(
@@ -436,355 +517,242 @@ fun ToastBanner(
     }
 }
 
+/**
+ * Collapsible Floating Dock for 3D Space (positioned neatly above the root Floating Bottom Nav Bar):
+ * Consolidates all 3D tools into 3 crisp sheet triggers + a collapse toggle:
+ * 1. Kích thước & Đỉnh (Dimensions, Direct Vertex Drag, Replay, Display)
+ * 2. Dựng hình & Thiết diện (Edge/XYZ Points, Lines/Vectors, Planes, Dynamic 3-Point Section)
+ * 3. Oxyz & Công thức (Axes/Origin/Angle-Distance Calc + Formulas & Verify Mode)
+ */
 @Composable
 fun BottomStudioDock(
     uiState: GeometryUiState,
     viewModel: GeometryViewModel,
+    isImmersive: Boolean,
     modifier: Modifier = Modifier
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        // 1. Active Interactive Hint Pill + Quick "Xong" exit button
-        val statusText = buildInteractiveStatusText(uiState)
-        AnimatedVisibility(visible = statusText != null && uiState.activeLeftPane == null, enter = fadeIn(), exit = fadeOut()) {
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(IndigoPrimary.copy(alpha = 0.95f))
-                    .border(1.dp, IndigoLight, RoundedCornerShape(18.dp))
-                    .padding(start = 12.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = statusText ?: "",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(SlateDark.copy(alpha = 0.7f))
-                        .clickable { viewModel.setInteractionMode(InteractionMode.VIEW) }
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                ) {
-                    Text("Xong", style = MaterialTheme.typography.labelSmall, color = CyanAccent)
-                }
-            }
-        }
+    var dockCollapsed by remember { mutableStateOf(false) }
 
-        // 2. Drag Constraint Sub-bar (when Drag Point mode is active)
-        AnimatedVisibility(
-            visible = uiState.dragSubdrawerOpen && !uiState.bottomDockCollapsed && uiState.activeLeftPane == null,
-            enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
-            exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom)
+    AnimatedVisibility(
+        visible = !isImmersive,
+        enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
+        exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom),
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(start = 10.dp, end = 10.dp, bottom = 78.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .liquidGlassSurface(
-                        shape = RoundedCornerShape(12.dp),
-                        elevated = true,
-                        fallbackBg = SlateDark.copy(alpha = 0.96f),
-                        accentBorder = PinkAccent
-                    )
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                SubDragChip(
-                    label = "↔ Ngang Oxy",
-                    active = uiState.dragConstraint == DragConstraintMode.HORIZONTAL,
-                    testTag = "drag_horizontal_btn",
-                    onClick = { viewModel.setDragConstraint(DragConstraintMode.HORIZONTAL) }
-                )
-                SubDragChip(
-                    label = "↕ Cao Oz",
-                    active = uiState.dragConstraint == DragConstraintMode.VERTICAL,
-                    testTag = "drag_vertical_btn",
-                    onClick = { viewModel.setDragConstraint(DragConstraintMode.VERTICAL) }
-                )
-                SubDragChip(
-                    label = "Trên đoạn",
-                    active = uiState.dragConstraint == DragConstraintMode.SEGMENT,
-                    testTag = "drag_segment_btn",
-                    onClick = { viewModel.setDragConstraint(DragConstraintMode.SEGMENT) }
-                )
-                VerticalDividerTiny()
-                val relOn = uiState.snapshot.keepRelations
+            // Active Interactive Mode Hint Pill + Quick "Xong" exit
+            val statusText = buildInteractiveStatusText(uiState)
+            AnimatedVisibility(visible = statusText != null && uiState.activeLeftPane == null, enter = fadeIn(), exit = fadeOut()) {
                 Row(
                     modifier = Modifier
-                        .testTag("relation_toggle_btn")
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (relOn) SkyBlue.copy(alpha = 0.28f) else SlateSurface)
-                        .border(1.dp, if (relOn) SkyBlue else SlateMuted, RoundedCornerShape(8.dp))
-                        .clickable { viewModel.toggleKeepRelations() }
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                        .clip(CircleShape)
+                        .background(IndigoPrimary.copy(alpha = 0.94f))
+                        .border(1.dp, IndigoLight, CircleShape)
+                        .padding(start = 12.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = statusText ?: "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(SlateDark.copy(alpha = 0.75f))
+                            .clickable { viewModel.setInteractionMode(InteractionMode.VIEW) }
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text("Xong", style = MaterialTheme.typography.labelSmall, color = CyanAccent, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            // Drag Constraint Sub-bar (shown automatically when Direct Drag Point mode is active)
+            AnimatedVisibility(
+                visible = uiState.interactionMode == InteractionMode.DRAG_POINT && uiState.activeLeftPane == null,
+                enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
+                exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .liquidGlassSurface(
+                            shape = CircleShape,
+                            pillShape = CircleShape,
+                            elevated = true,
+                            fallbackBg = SlateDark.copy(alpha = 0.95f),
+                            accentBorder = PinkAccent
+                        )
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    SubDragChip(
+                        label = "↔ Ngang",
+                        active = uiState.dragConstraint == DragConstraintMode.HORIZONTAL,
+                        testTag = "drag_horizontal_btn",
+                        onClick = { viewModel.setDragConstraint(DragConstraintMode.HORIZONTAL) }
+                    )
+                    SubDragChip(
+                        label = "↕ Cao Oz",
+                        active = uiState.dragConstraint == DragConstraintMode.VERTICAL,
+                        testTag = "drag_vertical_btn",
+                        onClick = { viewModel.setDragConstraint(DragConstraintMode.VERTICAL) }
+                    )
+                    SubDragChip(
+                        label = "Trên đoạn",
+                        active = uiState.dragConstraint == DragConstraintMode.SEGMENT,
+                        testTag = "drag_segment_btn",
+                        onClick = { viewModel.setDragConstraint(DragConstraintMode.SEGMENT) }
+                    )
+                    val relOn = uiState.snapshot.keepRelations
+                    SubDragChip(
+                        label = if (relOn) "Khóa hình" else "Tự do",
+                        active = relOn,
+                        testTag = "relation_toggle_btn",
+                        onClick = { viewModel.toggleKeepRelations() }
+                    )
+                }
+            }
+
+            // Collapsible 3-Action Floating Dock (hidden while an Inspector Bottom Sheet is expanded)
+            AnimatedVisibility(visible = uiState.activeLeftPane == null) {
+                Row(
+                    modifier = Modifier
+                        .liquidGlassSurface(
+                            shape = CircleShape,
+                            pillShape = CircleShape,
+                            elevated = true,
+                            fallbackBg = SlateDark.copy(alpha = 0.94f),
+                            fallbackBorder = SlateBorder
+                        )
+                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                        .testTag("geo3d_collapsible_dock"),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Icon(
-                        imageVector = if (relOn) Icons.Default.Link else Icons.Default.LinkOff,
-                        contentDescription = "Bật hoặc tắt ràng buộc hình học",
-                        tint = if (relOn) CyanAccent else SlateTextSecondary,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Text(
-                        text = if (relOn) "Ràng buộc" else "Tự do",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (relOn) CyanAccent else SlateTextSecondary
-                    )
+                    if (!dockCollapsed) {
+                        DockSheetChip(
+                            icon = Icons.Default.Tune,
+                            label = "Kích thước & Đỉnh",
+                            active = uiState.interactionMode == InteractionMode.DRAG_POINT,
+                            accent = PinkAccent,
+                            testTag = "rail_settings_btn",
+                            onClick = { viewModel.toggleLeftPane(LeftPane.SETTINGS) }
+                        )
+                        DockSheetChip(
+                            icon = Icons.Default.Edit,
+                            label = "Dựng hình",
+                            active = uiState.interactionMode in listOf(
+                                InteractionMode.ADD_POINT,
+                                InteractionMode.DRAW_DASHED,
+                                InteractionMode.DRAW_SOLID,
+                                InteractionMode.DRAW_VECTOR
+                            ),
+                            accent = CyanAccent,
+                            testTag = "rail_draw_btn",
+                            onClick = { viewModel.toggleLeftPane(LeftPane.DRAW) }
+                        )
+                        DockSheetChip(
+                            icon = Icons.Default.Analytics,
+                            label = "Oxyz & Công thức",
+                            active = uiState.verifyHideAnswers,
+                            accent = AmberAccent,
+                            testTag = "rail_coords_btn",
+                            onClick = { viewModel.toggleLeftPane(LeftPane.COORDS) }
+                        )
+                    } else {
+                        Row(
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .clickable { dockCollapsed = false }
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(Icons.Default.Build, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(16.dp))
+                            Text(
+                                text = "Công cụ 3D",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = SlateTextPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    // Collapse / Expand Dock Handle
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(SlateSurface.copy(alpha = 0.65f))
+                            .clickable { dockCollapsed = !dockCollapsed }
+                            .testTag("geo3d_dock_collapse_btn"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (dockCollapsed) Icons.Default.ChevronRight else Icons.Default.ChevronLeft,
+                            contentDescription = if (dockCollapsed) "Mở rộng công cụ 3D" else "Thu gọn công cụ 3D",
+                            tint = SlateTextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
-        }
-
-        // 3. Tier 1: Direct 3D Interaction Mode Strip (Hidden while bottom sheet is open)
-        AnimatedVisibility(visible = uiState.activeLeftPane == null) {
-            Row(
-                modifier = Modifier
-                    .liquidGlassSurface(
-                        shape = RoundedCornerShape(13.dp),
-                        pillShape = CircleShape,
-                        fallbackBg = SlateDark.copy(alpha = 0.92f),
-                        fallbackBorder = SlateBorder
-                    )
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                ModePillButton(
-                    icon = Icons.Default.RotateRight,
-                    label = "Xoay & Xem",
-                    active = uiState.interactionMode == InteractionMode.VIEW,
-                    activeBg = IndigoPrimary,
-                    testTag = "mode_view_btn",
-                    onClick = { viewModel.setInteractionMode(InteractionMode.VIEW) }
-                )
-                ModePillButton(
-                    icon = Icons.Default.OpenWith,
-                    label = "Kéo điểm",
-                    active = uiState.interactionMode == InteractionMode.DRAG_POINT,
-                    activeBg = PinkAccent,
-                    testTag = "mode_drag_btn",
-                    onClick = { viewModel.setInteractionMode(InteractionMode.DRAG_POINT) }
-                )
-                ModePillButton(
-                    icon = Icons.Default.AddLocationAlt,
-                    label = "Điểm",
-                    active = uiState.interactionMode == InteractionMode.ADD_POINT,
-                    activeBg = AmberDeep,
-                    testTag = "mode_add_point_btn",
-                    onClick = { viewModel.setInteractionMode(InteractionMode.ADD_POINT) }
-                )
-                ModePillButton(
-                    icon = Icons.Default.LinearScale,
-                    label = "Nét đứt",
-                    active = uiState.interactionMode == InteractionMode.DRAW_DASHED,
-                    activeBg = SkyBlue,
-                    testTag = "mode_dashed_btn",
-                    onClick = { viewModel.setInteractionMode(InteractionMode.DRAW_DASHED) }
-                )
-                ModePillButton(
-                    icon = Icons.Default.Timeline,
-                    label = "Nét liền",
-                    active = uiState.interactionMode == InteractionMode.DRAW_SOLID,
-                    activeBg = EmeraldDark,
-                    testTag = "mode_solid_btn",
-                    onClick = { viewModel.setInteractionMode(InteractionMode.DRAW_SOLID) }
-                )
-                ModePillButton(
-                    icon = Icons.Default.NorthEast,
-                    label = "Vectơ",
-                    active = uiState.interactionMode == InteractionMode.DRAW_VECTOR,
-                    activeBg = RoseAccent,
-                    testTag = "mode_vector_btn",
-                    onClick = { viewModel.setInteractionMode(InteractionMode.DRAW_VECTOR) }
-                )
-            }
-        }
-
-        // 4. Tier 2: Floating Liquid Glass Capsule 5-Tab 3D Figure Navigation Bar
-        Row(
-            modifier = Modifier
-                .widthIn(max = 520.dp)
-                .fillMaxWidth()
-                .liquidGlassSurface(
-                    shape = RoundedCornerShape(16.dp),
-                    pillShape = CircleShape,
-                    elevated = true,
-                    fallbackBg = SlateDark.copy(alpha = 0.96f),
-                    fallbackBorder = SlateBorder
-                )
-                .padding(horizontal = 6.dp, vertical = 5.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            StudioBottomTab(
-                icon = Icons.Default.Category,
-                label = "Khối hình",
-                active = uiState.activeLeftPane == LeftPane.SHAPES,
-                testTag = "rail_shapes_btn",
-                modifier = Modifier.weight(1f),
-                onClick = { viewModel.toggleLeftPane(LeftPane.SHAPES) }
-            )
-            StudioBottomTab(
-                icon = Icons.Default.Edit,
-                label = "Kẻ hình",
-                active = uiState.activeLeftPane == LeftPane.DRAW,
-                testTag = "rail_draw_btn",
-                modifier = Modifier.weight(1f),
-                onClick = { viewModel.toggleLeftPane(LeftPane.DRAW) }
-            )
-            StudioBottomTab(
-                icon = Icons.Default.Public,
-                label = "Oxyz",
-                active = uiState.activeLeftPane == LeftPane.COORDS,
-                testTag = "rail_coords_btn",
-                modifier = Modifier.weight(1f),
-                onClick = { viewModel.toggleLeftPane(LeftPane.COORDS) }
-            )
-            StudioBottomTab(
-                icon = Icons.Default.Tune,
-                label = "Cài đặt hình",
-                active = uiState.activeLeftPane == LeftPane.SETTINGS,
-                testTag = "rail_settings_btn",
-                modifier = Modifier.weight(1f),
-                onClick = { viewModel.toggleLeftPane(LeftPane.SETTINGS) }
-            )
-            StudioBottomTab(
-                icon = Icons.Default.Analytics,
-                label = "Số liệu",
-                active = uiState.activeLeftPane == LeftPane.FORMULAS,
-                testTag = "rail_formulas_btn",
-                modifier = Modifier.weight(1f),
-                onClick = { viewModel.toggleLeftPane(LeftPane.FORMULAS) }
-            )
         }
     }
 }
 
 @Composable
-private fun ModePillButton(
+private fun DockSheetChip(
     icon: ImageVector,
     label: String,
     active: Boolean,
-    activeBg: Color,
+    accent: Color,
     testTag: String,
     onClick: () -> Unit
 ) {
-    val palette = ActiveThemeState.current
-    val isGlass = palette.liquidGlass.enabled
-    val pillShape = if (isGlass) CircleShape else RoundedCornerShape(9.dp)
-    val contentTint = when {
-        active && isGlass && !palette.isDark -> SlateTextPrimary
-        active -> Color.White
-        isGlass && palette.isDark -> Color.White.copy(alpha = 0.84f)
-        else -> SlateTextLight
-    }
-
     Row(
         modifier = Modifier
             .testTag(testTag)
-            .defaultMinSize(minHeight = 36.dp)
-            .liquidGlassActiveBubble(
-                active = active,
-                shape = pillShape,
-                fallbackActiveColor = activeBg
+            .defaultMinSize(minHeight = 40.dp)
+            .clip(CircleShape)
+            .background(if (active) accent.copy(alpha = 0.24f) else Color.Transparent)
+            .border(
+                width = 1.dp,
+                color = if (active) accent.copy(alpha = 0.7f) else Color.Transparent,
+                shape = CircleShape
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
     ) {
         Icon(
             imageVector = icon,
             contentDescription = label,
-            tint = contentTint,
-            modifier = Modifier.size(15.dp)
+            tint = if (active) accent else SlateTextPrimary,
+            modifier = Modifier.size(16.dp)
         )
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = contentTint,
-            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
-            fontSize = 11.sp
-        )
-    }
-}
-
-@Composable
-private fun StudioBottomTab(
-    icon: ImageVector,
-    label: String,
-    active: Boolean,
-    testTag: String,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    val palette = ActiveThemeState.current
-    val isGlass = palette.liquidGlass.enabled
-    val tabShape = if (isGlass) CircleShape else RoundedCornerShape(12.dp)
-    val iconTint = when {
-        active && isGlass && !palette.isDark -> SlateTextPrimary
-        active -> Color.White
-        isGlass && palette.isDark -> Color.White.copy(alpha = 0.84f)
-        else -> SlateTextSecondary
-    }
-    val labelTint = when {
-        active && isGlass && !palette.isDark -> SlateTextPrimary
-        active && isGlass -> Color.White
-        active -> CyanAccent
-        isGlass && palette.isDark -> Color.White.copy(alpha = 0.78f)
-        else -> SlateTextSecondary
-    }
-
-    Column(
-        modifier = modifier
-            .testTag(testTag)
-            .defaultMinSize(minHeight = 48.dp)
-            .liquidGlassActiveBubble(
-                active = active,
-                shape = tabShape,
-                fallbackActiveColor = IndigoPrimary.copy(alpha = 0.28f)
-            )
-            .clickable(onClick = onClick)
-            .padding(vertical = 5.dp, horizontal = 3.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Box(
-            modifier = Modifier
-                .clip(CircleShape)
-                .background(if (active && !isGlass) IndigoPrimary else Color.Transparent)
-                .padding(horizontal = 10.dp, vertical = 2.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = iconTint,
-                modifier = Modifier.size(18.dp)
-            )
-        }
-        Spacer(Modifier.height(1.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = labelTint,
-            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
-            fontSize = 9.5.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            color = if (active) accent else SlateTextPrimary,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 11.sp,
+            maxLines = 1
         )
     }
 }
@@ -799,11 +767,11 @@ private fun SubDragChip(
     Box(
         modifier = Modifier
             .testTag(testTag)
-            .clip(RoundedCornerShape(8.dp))
+            .clip(CircleShape)
             .background(if (active) PinkAccent else SlateSurface)
-            .border(1.dp, if (active) PinkLight else SlateBorder, RoundedCornerShape(8.dp))
+            .border(1.dp, if (active) PinkLight else SlateBorder, CircleShape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 9.dp, vertical = 6.dp)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
         Text(
             text = label,
@@ -818,14 +786,14 @@ private fun buildInteractiveStatusText(uiState: GeometryUiState): String? {
     return when (uiState.interactionMode) {
         InteractionMode.VIEW -> null
         InteractionMode.DRAG_POINT -> {
-            val rel = if (uiState.snapshot.keepRelations) " • Ràng buộc BẬT" else " • Tự do"
+            val rel = if (uiState.snapshot.keepRelations) " • Khóa hình" else " • Tự do"
             when (uiState.dragConstraint) {
-                DragConstraintMode.HORIZONTAL -> "Kéo ngang Oxy: chạm giữ đỉnh để trượt$rel"
-                DragConstraintMode.VERTICAL -> "Kéo cao Oz: chạm giữ đỉnh để nâng/hạ$rel"
-                DragConstraintMode.SEGMENT -> "Kéo trên đoạn: trượt điểm dọc theo cạnh"
+                DragConstraintMode.HORIZONTAL -> "Kéo ngang Oxy: giữ đỉnh để trượt$rel"
+                DragConstraintMode.VERTICAL -> "Kéo cao Oz: giữ đỉnh để nâng/hạ$rel"
+                DragConstraintMode.SEGMENT -> "Trượt điểm dọc theo cạnh"
             }
         }
-        InteractionMode.ADD_POINT -> "Chạm lên một cạnh bất kỳ để chấm điểm mới"
+        InteractionMode.ADD_POINT -> "Chạm lên cạnh bất kỳ để chấm điểm mới"
         InteractionMode.DRAW_DASHED, InteractionMode.DRAW_SOLID, InteractionMode.DRAW_VECTOR -> {
             val kind = when (uiState.interactionMode) {
                 InteractionMode.DRAW_VECTOR -> "Vectơ"
@@ -833,8 +801,8 @@ private fun buildInteractiveStatusText(uiState: GeometryUiState): String? {
                 else -> "Nét liền"
             }
             val first = uiState.selectedFirstPoint
-            if (first == null) "[$kind] Chạm chọn điểm đầu (Gốc)"
-            else "[$kind] Từ \"$first\" → Chạm chọn điểm cuối"
+            if (first == null) "[$kind] Chạm chọn điểm đầu"
+            else "[$kind] Từ \"$first\" → Chọn điểm cuối"
         }
     }
 }

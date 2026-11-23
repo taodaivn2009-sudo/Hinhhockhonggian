@@ -17,11 +17,19 @@ class Geo2DPersistence(context: Context) {
         return runCatching { jsonToSnapshot(raw) }.getOrNull()
     }
 
+    fun isRememberLastWorkspaceEnabled(): Boolean =
+        prefs.getBoolean(KEY_REMEMBER_WORKSPACE, true)
+
+    fun setRememberLastWorkspace(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_REMEMBER_WORKSPACE, enabled).apply()
+    }
+
     fun saveLastWorkspace(workspace: MathWorkspace) {
         prefs.edit().putString(KEY_WORKSPACE, workspace.name).apply()
     }
 
     fun loadLastWorkspace(): MathWorkspace {
+        if (!isRememberLastWorkspaceEnabled()) return MathWorkspace.SPACE_3D
         val name = prefs.getString(KEY_WORKSPACE, null)
         return runCatching { MathWorkspace.valueOf(name ?: "") }.getOrDefault(MathWorkspace.SPACE_3D)
     }
@@ -30,6 +38,7 @@ class Geo2DPersistence(context: Context) {
         private const val PREFS_NAME = "geo2d_oxy_storage_v1"
         private const val KEY_SESSION = "auto_session_2d_json"
         private const val KEY_WORKSPACE = "last_workspace_mode"
+        private const val KEY_REMEMBER_WORKSPACE = "remember_last_workspace_v1"
 
         fun snapshotToJson(s: Geo2DSnapshot): String {
             val root = JSONObject()

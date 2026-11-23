@@ -17,9 +17,14 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,9 +48,12 @@ import com.example.geo2d.Geo2DStudioScreen
 import com.example.geo2d.Geo2DViewModel
 import com.example.geo2d.MathWorkspace
 import com.example.settings.AppSettingsScreen
+import com.example.settings.SettingsSubPage
 import com.example.ui.BottomStudioDock
 import com.example.ui.ConstructionReplayBar
+import com.example.ui.FloatingPillBottomNavBar
 import com.example.ui.GeometryCanvasView
+import com.example.ui.ImmersiveRestorePill
 import com.example.ui.RightCanvasQuickControls
 import com.example.ui.StudioInspectorSheet
 import com.example.ui.ToastBanner
@@ -62,9 +70,6 @@ import com.example.update.AppUpdateViewModel
 import com.example.update.UpdateAvailableBanner
 import com.example.update.UpdateDetailsDialog
 import com.example.viewmodel.GeometryViewModel
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
 import java.io.OutputStreamWriter
 
 class MainActivity : ComponentActivity() {
@@ -120,6 +125,9 @@ fun ToolToanRootScreen(
     val context = LocalContext.current
     val workspacePrefs = remember(context) { Geo2DPersistence(context.applicationContext) }
     var activeWorkspace by remember { mutableStateOf(workspacePrefs.loadLastWorkspace()) }
+    var rememberLastWorkspace by remember { mutableStateOf(workspacePrefs.isRememberLastWorkspaceEnabled()) }
+    var isImmersive by remember { mutableStateOf(false) }
+    var settingsSubPage by remember { mutableStateOf<SettingsSubPage?>(null) }
     var pending2DExpr by remember { mutableStateOf<String?>(null) }
     var pendingPdfPage by remember { mutableStateOf<Int?>(null) }
     val updateUiState by updateViewModel.uiState.collectAsStateWithLifecycle()
@@ -134,123 +142,196 @@ fun ToolToanRootScreen(
     val onSelectWorkspace: (MathWorkspace) -> Unit = { target ->
         if (target != activeWorkspace) {
             activeWorkspace = target
+            isImmersive = false
+            if (target != MathWorkspace.SETTINGS) {
+                settingsSubPage = null
+            }
             workspacePrefs.saveLastWorkspace(target)
+        } else if (target == MathWorkspace.SETTINGS && settingsSubPage != null) {
+            settingsSubPage = null
         }
     }
 
+    val isImeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val supportsImmersive = activeWorkspace == MathWorkspace.SPACE_3D ||
+        activeWorkspace == MathWorkspace.PLANE_2D ||
+        activeWorkspace == MathWorkspace.DOCUMENTS
+
+    val showBottomNav = !isImmersive &&
+        !(activeWorkspace == MathWorkspace.SETTINGS && settingsSubPage != null) &&
+        !isImeVisible
+
+    val rootNavBackdrop = rememberLiquidGlassBackdropState()
+
     Box(modifier = Modifier.fillMaxSize()) {
-        when (activeWorkspace) {
-            MathWorkspace.SPACE_3D -> GeometryStudioScreen(
-                onSwitchWorkspace = onSelectWorkspace,
-                hasUpdateBadge = updateUiState.hasUpdate,
-                viewModel = geometryViewModel
-            )
-            MathWorkspace.PLANE_2D -> Geo2DStudioScreen(
-                onSwitchWorkspace = onSelectWorkspace,
-                pendingPlotExpr = pending2DExpr,
-                onConsumePendingPlot = { pending2DExpr = null },
-                hasUpdateBadge = updateUiState.hasUpdate,
-                viewModel = geo2DViewModel
-            )
-            MathWorkspace.DOCUMENTS -> MathDocumentsScreen(
-                onSwitchWorkspace = onSelectWorkspace,
-                pendingOpenPage = pendingPdfPage,
-                onConsumePendingPage = { pendingPdfPage = null },
-                onAskAiAboutPage = { pageNum ->
-                    aiViewModel.prepareAskAboutPdfPage(pageNum)
-                    onSelectWorkspace(MathWorkspace.AI)
-                },
-                hasUpdateBadge = updateUiState.hasUpdate
-            )
-            MathWorkspace.AI -> AiWorkspaceScreen(
-                aiViewModel = aiViewModel,
-                onSwitchWorkspace = onSelectWorkspace,
-                onOpenPdfPage = { pageNum ->
-                    pendingPdfPage = pageNum
-                    onSelectWorkspace(MathWorkspace.DOCUMENTS)
-                },
-                onApplyDrawingPlan = { plan ->
-                    when (plan.target) {
-                        AiDrawTarget.SPACE_3D -> {
-                            plan.scene3D?.let { spec ->
-                                val snap3D = AiResponseParser.buildGeometrySnapshot(spec)
-                                geometryViewModel.applyAiSnapshot(snap3D, plan.title)
-                                onSelectWorkspace(MathWorkspace.SPACE_3D)
-                            }
-                        }
-                        AiDrawTarget.PLANE_2D -> {
-                            plan.scene2D?.let { spec ->
-                                val snap2D = AiResponseParser.buildGeo2DSnapshot(spec)
-                                geo2DViewModel.applyAiSnapshot(snap2D, plan.title)
-                                onSelectWorkspace(MathWorkspace.PLANE_2D)
-                            }
-                        }
+        // Layer 1: Active Workspace Screen (serves as live GPU backdrop for Floating Bottom Nav Bar)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .liquidGlassBackdropSource(rootNavBackdrop)
+        ) {
+            when (activeWorkspace) {
+                MathWorkspace.SPACE_3D -> GeometryStudioScreen(
+                    isImmersive = isImmersive,
+                    onToggleImmersive = { isImmersive = !isImmersive },
+                    viewModel = geometryViewModel
+                )
+                MathWorkspace.PLANE_2D -> Geo2DStudioScreen(
+                    isImmersive = isImmersive,
+                    onToggleImmersive = { isImmersive = !isImmersive },
+                    pendingPlotExpr = pending2DExpr,
+                    onConsumePendingPlot = { pending2DExpr = null },
+                    viewModel = geo2DViewModel
+                )
+                MathWorkspace.DOCUMENTS -> MathDocumentsScreen(
+                    isImmersive = isImmersive,
+                    onToggleImmersive = { isImmersive = !isImmersive },
+                    onSwitchWorkspace = onSelectWorkspace,
+                    pendingOpenPage = pendingPdfPage,
+                    onConsumePendingPage = { pendingPdfPage = null },
+                    onAskAiAboutPage = { pageNum ->
+                        aiViewModel.prepareAskAboutPdfPage(pageNum)
+                        onSelectWorkspace(MathWorkspace.AI)
                     }
-                },
-                hasUpdateBadge = updateUiState.hasUpdate
+                )
+                MathWorkspace.AI -> AiWorkspaceScreen(
+                    aiViewModel = aiViewModel,
+                    onSwitchWorkspace = onSelectWorkspace,
+                    onOpenPdfPage = { pageNum ->
+                        pendingPdfPage = pageNum
+                        onSelectWorkspace(MathWorkspace.DOCUMENTS)
+                    },
+                    onApplyDrawingPlan = { plan ->
+                        when (plan.target) {
+                            AiDrawTarget.SPACE_3D -> {
+                                plan.scene3D?.let { spec ->
+                                    val snap3D = AiResponseParser.buildGeometrySnapshot(spec)
+                                    geometryViewModel.applyAiSnapshot(snap3D, plan.title)
+                                    onSelectWorkspace(MathWorkspace.SPACE_3D)
+                                }
+                            }
+                            AiDrawTarget.PLANE_2D -> {
+                                plan.scene2D?.let { spec ->
+                                    val snap2D = AiResponseParser.buildGeo2DSnapshot(spec)
+                                    geo2DViewModel.applyAiSnapshot(snap2D, plan.title)
+                                    onSelectWorkspace(MathWorkspace.PLANE_2D)
+                                }
+                            }
+                        }
+                    },
+                    onOpenAiSettings = {
+                        activeWorkspace = MathWorkspace.SETTINGS
+                        settingsSubPage = SettingsSubPage.AI_PROVIDERS
+                        isImmersive = false
+                        workspacePrefs.saveLastWorkspace(MathWorkspace.SETTINGS)
+                    }
+                )
+                MathWorkspace.SETTINGS -> AppSettingsScreen(
+                    activeSubPage = settingsSubPage,
+                    onSelectSubPage = { settingsSubPage = it },
+                    themeConfig = themeUiState.config,
+                    onSelectThemeMode = { themeViewModel.setThemeMode(it) },
+                    onSelectThemePreset = { themeViewModel.selectPreset(it) },
+                    onSelectAccentColor = { themeViewModel.selectAccentColor(it) },
+                    onToggleLiquidGlass = { themeViewModel.toggleLiquidGlass(it) },
+                    onApplyLiquidGlassStyle = { themeViewModel.applyLiquidGlassStyle(it) },
+                    onUpdateLiquidGlass = { blur, ref, disp, t, s, r, b, sh, hc ->
+                        themeViewModel.updateLiquidGlass(
+                            blurRadius = blur,
+                            refraction = ref,
+                            chromaticDispersion = disp,
+                            translucency = t,
+                            specularGlow = s,
+                            refractionTint = r,
+                            borderIntensity = b,
+                            dynamicShimmer = sh,
+                            highContrastText = hc
+                        )
+                    },
+                    onResetThemeDefault = { themeViewModel.resetToDefault() },
+                    sensitivity = geoUiState.snapshot.sensitivity,
+                    geometryViewModel = geometryViewModel,
+                    sensitivity2D = geo2DUiState.snapshot.sensitivity,
+                    geo2DViewModel = geo2DViewModel,
+                    rememberLastWorkspace = rememberLastWorkspace,
+                    onToggleRememberLastWorkspace = { enabled ->
+                        rememberLastWorkspace = enabled
+                        workspacePrefs.setRememberLastWorkspace(enabled)
+                    },
+                    exportFolderUri = geoUiState.exportFolderUri ?: geo2DUiState.exportFolderUri,
+                    exportFolderLabel = geoUiState.exportFolderLabel ?: geo2DUiState.exportFolderLabel,
+                    exportTransparentPng = geoUiState.exportTransparentBg,
+                    onSetExportFolder = { uri, label ->
+                        geometryViewModel.setExportFolder(uri, label)
+                        geo2DViewModel.setExportFolder(uri, label)
+                    },
+                    onClearExportFolder = {
+                        geometryViewModel.clearExportFolder()
+                        geo2DViewModel.clearExportFolder()
+                    },
+                    onToggleExportTransparentPng = { desired ->
+                        if (geoUiState.exportTransparentBg != desired) {
+                            geometryViewModel.toggleExportTransparentBg()
+                        }
+                        if (geo2DUiState.exportTransparentBg != desired) {
+                            geo2DViewModel.toggleExportTransparentBg()
+                        }
+                    },
+                    updateUiState = updateUiState,
+                    onCheckUpdateNow = { updateViewModel.checkForUpdates(isAutoStartup = false) },
+                    onSaveUpdateRepoAndCheck = { updateViewModel.saveRepoAndCheck(it) },
+                    onSkipUpdateVersion = { updateViewModel.skipCurrentAvailableVersion() },
+                    aiUiState = aiUiState,
+                    onSelectAiProvider = { aiViewModel.selectProvider(it) },
+                    onSelectCustomAiEndpoint = { aiViewModel.selectCustomEndpoint(it) },
+                    onCreateCustomAiEndpoint = { name, baseUrl, key, verify ->
+                        aiViewModel.createCustomEndpoint(name, baseUrl, key, verify)
+                    },
+                    onUpdateCustomAiEndpoint = { id, name, baseUrl, key, verify ->
+                        aiViewModel.updateCustomEndpoint(id, name, baseUrl, key, verify)
+                    },
+                    onDeleteCustomAiEndpoint = { aiViewModel.deleteCustomEndpoint(it) },
+                    onSignInWithGoogle = {
+                        context.findActivity()?.let { aiViewModel.signInWithGoogle(it) }
+                    },
+                    onSignOutGoogle = { aiViewModel.signOutGoogle(context) },
+                    onTestGoogleAi = { aiViewModel.testGoogleGeminiConnection() },
+                    onSaveAndVerifyAiKey = { key, model, baseUrl ->
+                        aiViewModel.saveAndVerifyApiKey(key, model, baseUrl)
+                    },
+                    onSaveAiKeyOnly = { key, model, baseUrl ->
+                        aiViewModel.saveApiKey(key, model, baseUrl)
+                    },
+                    onSelectAiModel = { aiViewModel.selectModel(it) },
+                    onSyncAiModels = { overrideKey, overrideUrl ->
+                        aiViewModel.syncAccountModels(overrideKey, overrideUrl)
+                    },
+                    onProbeAllAiModels = { overrideKey, overrideUrl, subset ->
+                        aiViewModel.probeAllModels(overrideKey, overrideUrl, subset)
+                    },
+                    onRefreshAiTokens = { aiViewModel.refreshTokenSync() },
+                    onAddCustomAiModel = { aiViewModel.addCustomModel(it) },
+                    onRemoveCustomAiModel = { aiViewModel.removeCustomModel(it) },
+                    onClearAiKey = { aiViewModel.clearApiKey() },
+                    onSwitchWorkspace = onSelectWorkspace
+                )
+            }
+        }
+
+        // Layer 2: Unified Floating Pill Bottom Navigation Bar & Immersive Restore Pill
+        CompositionLocalProvider(LocalLiquidGlassBackdrop provides rootNavBackdrop) {
+            FloatingPillBottomNavBar(
+                current = activeWorkspace,
+                hasUpdateBadge = updateUiState.hasUpdate,
+                visible = showBottomNav,
+                onSelect = onSelectWorkspace,
+                modifier = Modifier.align(Alignment.BottomCenter)
             )
-            MathWorkspace.SETTINGS -> AppSettingsScreen(
-                themeConfig = themeUiState.config,
-                onSelectThemeMode = { themeViewModel.setThemeMode(it) },
-                onSelectThemePreset = { themeViewModel.selectPreset(it) },
-                onSelectAccentColor = { themeViewModel.selectAccentColor(it) },
-                onToggleLiquidGlass = { themeViewModel.toggleLiquidGlass(it) },
-                onApplyLiquidGlassStyle = { themeViewModel.applyLiquidGlassStyle(it) },
-                onUpdateLiquidGlass = { blur, ref, disp, t, s, r, b, sh, hc ->
-                    themeViewModel.updateLiquidGlass(
-                        blurRadius = blur,
-                        refraction = ref,
-                        chromaticDispersion = disp,
-                        translucency = t,
-                        specularGlow = s,
-                        refractionTint = r,
-                        borderIntensity = b,
-                        dynamicShimmer = sh,
-                        highContrastText = hc
-                    )
-                },
-                onResetThemeDefault = { themeViewModel.resetToDefault() },
-                sensitivity = geoUiState.snapshot.sensitivity,
-                geometryViewModel = geometryViewModel,
-                sensitivity2D = geo2DUiState.snapshot.sensitivity,
-                geo2DViewModel = geo2DViewModel,
-                updateUiState = updateUiState,
-                onCheckUpdateNow = { updateViewModel.checkForUpdates(isAutoStartup = false) },
-                onSaveUpdateRepoAndCheck = { updateViewModel.saveRepoAndCheck(it) },
-                onSkipUpdateVersion = { updateViewModel.skipCurrentAvailableVersion() },
-                aiUiState = aiUiState,
-                onSelectAiProvider = { aiViewModel.selectProvider(it) },
-                onSelectCustomAiEndpoint = { aiViewModel.selectCustomEndpoint(it) },
-                onCreateCustomAiEndpoint = { name, baseUrl, key, verify ->
-                    aiViewModel.createCustomEndpoint(name, baseUrl, key, verify)
-                },
-                onUpdateCustomAiEndpoint = { id, name, baseUrl, key, verify ->
-                    aiViewModel.updateCustomEndpoint(id, name, baseUrl, key, verify)
-                },
-                onDeleteCustomAiEndpoint = { aiViewModel.deleteCustomEndpoint(it) },
-                onSignInWithGoogle = {
-                    context.findActivity()?.let { aiViewModel.signInWithGoogle(it) }
-                },
-                onSignOutGoogle = { aiViewModel.signOutGoogle(context) },
-                onTestGoogleAi = { aiViewModel.testGoogleGeminiConnection() },
-                onSaveAndVerifyAiKey = { key, model, baseUrl ->
-                    aiViewModel.saveAndVerifyApiKey(key, model, baseUrl)
-                },
-                onSaveAiKeyOnly = { key, model, baseUrl ->
-                    aiViewModel.saveApiKey(key, model, baseUrl)
-                },
-                onSelectAiModel = { aiViewModel.selectModel(it) },
-                onSyncAiModels = { overrideKey, overrideUrl ->
-                    aiViewModel.syncAccountModels(overrideKey, overrideUrl)
-                },
-                onProbeAllAiModels = { overrideKey, overrideUrl, subset ->
-                    aiViewModel.probeAllModels(overrideKey, overrideUrl, subset)
-                },
-                onRefreshAiTokens = { aiViewModel.refreshTokenSync() },
-                onAddCustomAiModel = { aiViewModel.addCustomModel(it) },
-                onRemoveCustomAiModel = { aiViewModel.removeCustomModel(it) },
-                onClearAiKey = { aiViewModel.clearApiKey() },
-                onSwitchWorkspace = onSelectWorkspace
+
+            ImmersiveRestorePill(
+                visible = isImmersive && supportsImmersive,
+                onExitImmersive = { isImmersive = false },
+                modifier = Modifier.align(Alignment.BottomEnd)
             )
         }
 
@@ -282,8 +363,8 @@ fun ToolToanRootScreen(
 
 @Composable
 fun GeometryStudioScreen(
-    onSwitchWorkspace: (MathWorkspace) -> Unit,
-    hasUpdateBadge: Boolean = false,
+    isImmersive: Boolean = false,
+    onToggleImmersive: () -> Unit = {},
     viewModel: GeometryViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -291,8 +372,12 @@ fun GeometryStudioScreen(
     val density = LocalDensity.current.density
     var canvasSize by remember { mutableStateOf(IntSize(1080, 1920)) }
 
-    BackHandler(enabled = uiState.replayStep != null) {
-        viewModel.stopReplay(restoreFull = true)
+    BackHandler(enabled = uiState.replayStep != null || uiState.activeLeftPane != null || isImmersive) {
+        when {
+            uiState.replayStep != null -> viewModel.stopReplay(restoreFull = true)
+            uiState.activeLeftPane != null -> viewModel.closeLeftPane()
+            isImmersive -> onToggleImmersive()
+        }
     }
 
     fun writePngToUri(uri: Uri, locationSuffix: String = "") {
@@ -451,139 +536,144 @@ fun GeometryStudioScreen(
     val backdropState = rememberLiquidGlassBackdropState()
 
     CompositionLocalProvider(LocalLiquidGlassBackdrop provides backdropState) {
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val isCompactWidth = maxWidth < 600.dp
-        val maxSheetHeight = (maxHeight * 0.56f).coerceIn(280.dp, 480.dp)
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val isCompactWidth = maxWidth < 600.dp
+            val maxSheetHeight = (maxHeight * 0.52f).coerceIn(260.dp, 460.dp)
 
-        // 1. Full-bleed Interactive 3D Viewport (live GPU backdrop source for all Liquid Glass HUD bars!)
-        GeometryCanvasView(
-            uiState = uiState,
-            viewModel = viewModel,
-            onCanvasSizeChanged = { canvasSize = it },
-            modifier = Modifier
-                .fillMaxSize()
-                .liquidGlassBackdropSource(backdropState)
-        )
+            // 1. Full-bleed Interactive 3D Viewport (live GPU backdrop source for all Liquid Glass HUD bars!)
+            GeometryCanvasView(
+                uiState = uiState,
+                viewModel = viewModel,
+                onCanvasSizeChanged = { canvasSize = it },
+                onEmptyCanvasTap = {
+                    if (uiState.activeLeftPane == null) {
+                        onToggleImmersive()
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .liquidGlassBackdropSource(backdropState)
+            )
 
-        // 2. Top Studio Header (Unified 4-Tab Switcher + Shape Selector + Live Metrics + Camera Presets)
-        TopStudioHeader(
-            uiState = uiState,
-            viewModel = viewModel,
-            isCompactWidth = isCompactWidth,
-            onSwitchWorkspace = onSwitchWorkspace,
-            hasUpdateBadge = hasUpdateBadge,
-            modifier = Modifier.align(Alignment.TopCenter)
-        )
+            // 2. Canvas-First Minimal Top Studio Header (Shape Pill + Camera Presets + Save + Fullscreen)
+            TopStudioHeader(
+                uiState = uiState,
+                viewModel = viewModel,
+                isCompactWidth = isCompactWidth,
+                isImmersive = isImmersive,
+                onToggleImmersive = onToggleImmersive,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
 
-        // 3. Right Floating Quick Controls (Oxyz, Snap, Auto-Rotate, Zoom +/-)
-        if (!isCompactWidth || uiState.activeLeftPane == null) {
+            // 3. Minimal Right Floating Quick Controls (Oxyz, Snap, Auto-Rotate, Zoom +/-)
             RightCanvasQuickControls(
                 uiState = uiState,
                 viewModel = viewModel,
+                visible = !isImmersive && (!isCompactWidth || uiState.activeLeftPane == null),
                 modifier = Modifier.align(Alignment.CenterEnd)
             )
-        }
 
-        // 3b. Tap anywhere on empty area outside open panel to close quickly
-        if (uiState.activeLeftPane != null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        viewModel.closeLeftPane()
-                    }
-                    .testTag("geo3d_dismiss_scrim")
-            )
-        }
+            // 3b. Tap anywhere on empty area outside open panel to close quickly
+            if (uiState.activeLeftPane != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            viewModel.closeLeftPane()
+                        }
+                        .testTag("geo3d_dismiss_scrim")
+                )
+            }
 
-        // 5. Adaptive Inspector Sheet (Bottom Sheet on mobile, Left Side Panel on tablet)
-        StudioInspectorSheet(
-            uiState = uiState,
-            viewModel = viewModel,
-            isCompactWidth = isCompactWidth,
-            maxSheetHeight = maxSheetHeight,
-            onImportJsonClick = { importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
-            modifier = Modifier.align(if (isCompactWidth) Alignment.BottomCenter else Alignment.CenterStart)
-        )
-
-        // 6. Intuitive 2-Tier Bottom Studio Dock OR Step-by-Step Construction Replay Bar
-        val replayStep = uiState.replayStep
-        if (replayStep != null) {
-            ConstructionReplayBar(
-                step = replayStep,
-                totalSteps = uiState.replayTotalSteps,
-                stepLabel = uiState.replayStepLabel,
-                isPlaying = uiState.replayPlaying,
-                onPrev = { viewModel.stepReplay(-1) },
-                onTogglePlay = { viewModel.toggleReplayPlay() },
-                onNext = { viewModel.stepReplay(1) },
-                onClose = { viewModel.stopReplay(restoreFull = true) },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(bottom = 14.dp)
-            )
-        } else {
-            BottomStudioDock(
+            // 5. Adaptive Inspector Sheet (Bottom Sheet on mobile, Left Side Panel on tablet)
+            StudioInspectorSheet(
                 uiState = uiState,
                 viewModel = viewModel,
-                modifier = Modifier.align(Alignment.BottomCenter)
+                isCompactWidth = isCompactWidth,
+                maxSheetHeight = maxSheetHeight,
+                onImportJsonClick = { importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
+                modifier = Modifier.align(if (isCompactWidth) Alignment.BottomCenter else Alignment.CenterStart)
+            )
+
+            // 6. Collapsible 3-Action Bottom Dock OR Step-by-Step Construction Replay Bar
+            val replayStep = uiState.replayStep
+            if (replayStep != null) {
+                ConstructionReplayBar(
+                    step = replayStep,
+                    totalSteps = uiState.replayTotalSteps,
+                    stepLabel = uiState.replayStepLabel,
+                    isPlaying = uiState.replayPlaying,
+                    onPrev = { viewModel.stepReplay(-1) },
+                    onTogglePlay = { viewModel.toggleReplayPlay() },
+                    onNext = { viewModel.stepReplay(1) },
+                    onClose = { viewModel.stopReplay(restoreFull = true) },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = if (isImmersive) 16.dp else 82.dp)
+                )
+            } else {
+                BottomStudioDock(
+                    uiState = uiState,
+                    viewModel = viewModel,
+                    isImmersive = isImmersive,
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
+            }
+
+            // 7. Floating Toast Notification
+            ToastBanner(
+                message = uiState.toastMessage,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
+
+            // 8. Save / Export Modal Dialog
+            SaveExportModal(
+                uiState = uiState,
+                viewModel = viewModel,
+                onPickExportFolderClick = { pickExportFolderLauncher.launch(null) },
+                onExportPngClick = { forcePicker ->
+                    handleExport(
+                        forcePicker = forcePicker,
+                        mimeType = "image/png",
+                        extension = "png",
+                        onDirectUri = ::writePngToUri,
+                        launchPicker = { exportPngLauncher.launch(it) }
+                    )
+                },
+                onExportSvgClick = { forcePicker ->
+                    handleExport(
+                        forcePicker = forcePicker,
+                        mimeType = "image/svg+xml",
+                        extension = "svg",
+                        onDirectUri = ::writeSvgToUri,
+                        launchPicker = { exportSvgLauncher.launch(it) }
+                    )
+                },
+                onExportObjClick = { forcePicker ->
+                    handleExport(
+                        forcePicker = forcePicker,
+                        mimeType = "application/octet-stream",
+                        extension = "obj",
+                        onDirectUri = ::writeObjToUri,
+                        launchPicker = { exportObjLauncher.launch(it) }
+                    )
+                },
+                onExportJsonClick = { forcePicker ->
+                    handleExport(
+                        forcePicker = forcePicker,
+                        mimeType = "application/json",
+                        extension = "json",
+                        onDirectUri = ::writeJsonToUri,
+                        launchPicker = { exportJsonLauncher.launch(it) }
+                    )
+                },
+                onImportJsonClick = { importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
             )
         }
-
-        // 7. Floating Toast Notification
-        ToastBanner(
-            message = uiState.toastMessage,
-            modifier = Modifier.align(Alignment.TopCenter)
-        )
-
-        // 8. Save / Export Modal Dialog
-        SaveExportModal(
-            uiState = uiState,
-            viewModel = viewModel,
-            onPickExportFolderClick = { pickExportFolderLauncher.launch(null) },
-            onExportPngClick = { forcePicker ->
-                handleExport(
-                    forcePicker = forcePicker,
-                    mimeType = "image/png",
-                    extension = "png",
-                    onDirectUri = ::writePngToUri,
-                    launchPicker = { exportPngLauncher.launch(it) }
-                )
-            },
-            onExportSvgClick = { forcePicker ->
-                handleExport(
-                    forcePicker = forcePicker,
-                    mimeType = "image/svg+xml",
-                    extension = "svg",
-                    onDirectUri = ::writeSvgToUri,
-                    launchPicker = { exportSvgLauncher.launch(it) }
-                )
-            },
-            onExportObjClick = { forcePicker ->
-                handleExport(
-                    forcePicker = forcePicker,
-                    mimeType = "application/octet-stream",
-                    extension = "obj",
-                    onDirectUri = ::writeObjToUri,
-                    launchPicker = { exportObjLauncher.launch(it) }
-                )
-            },
-            onExportJsonClick = { forcePicker ->
-                handleExport(
-                    forcePicker = forcePicker,
-                    mimeType = "application/json",
-                    extension = "json",
-                    onDirectUri = ::writeJsonToUri,
-                    launchPicker = { exportJsonLauncher.launch(it) }
-                )
-            },
-            onImportJsonClick = { importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
-        )
-    }
     }
 }
 

@@ -38,11 +38,13 @@ fun GeometryCanvasView(
     uiState: GeometryUiState,
     viewModel: GeometryViewModel,
     onCanvasSizeChanged: (IntSize) -> Unit,
+    onEmptyCanvasTap: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current.density
     var canvasSize by remember { mutableStateOf(IntSize(1080, 1920)) }
     val currentUiState by rememberUpdatedState(uiState)
+    val currentEmptyTap by rememberUpdatedState(onEmptyCanvasTap)
 
     // Smooth auto-rotate ticker
     LaunchedEffect(uiState.autoRotate) {
@@ -177,6 +179,7 @@ fun GeometryCanvasView(
                                 density
                             )
                         } else if (!isMultiTouch && !isOrbiting) {
+                            val hadTooltip = viewModel.uiState.value.tooltip != null
                             viewModel.onCanvasTap(
                                 sx = startPos.x,
                                 sy = startPos.y,
@@ -184,6 +187,9 @@ fun GeometryCanvasView(
                                 height = canvasSize.height.toFloat(),
                                 density = density
                             )
+                            if (mode == InteractionMode.VIEW && !hadTooltip && viewModel.uiState.value.tooltip == null) {
+                                currentEmptyTap()
+                            }
                         } else {
                             viewModel.commitCameraGesture()
                         }
