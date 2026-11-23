@@ -249,7 +249,9 @@ fun Geo2DStudioScreen(
         launchPicker(fileName)
     }
 
-    val backdropState = rememberLiquidGlassBackdropState()
+    val sharedBackdrop = LocalLiquidGlassBackdrop.current
+    val fallbackBackdrop = rememberLiquidGlassBackdropState()
+    val backdropState = sharedBackdrop ?: fallbackBackdrop
 
     CompositionLocalProvider(LocalLiquidGlassBackdrop provides backdropState) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -955,6 +957,7 @@ private fun Geo2DExpandableGraphSheet(
             .liquidGlassSurface(
                 shape = RoundedCornerShape(22.dp),
                 elevated = true,
+                liveBackdrop = !expanded,
                 fallbackBg = SlateDark.copy(alpha = 0.96f),
                 fallbackBorder = SlateBorder.copy(alpha = 0.85f)
             )
@@ -1191,6 +1194,7 @@ private fun Geo2DInspectorSheet(
                 .liquidGlassSurface(
                     shape = shape,
                     elevated = true,
+                    liveBackdrop = false,
                     fallbackBg = SlateDark.copy(alpha = 0.96f),
                     fallbackBorder = SlateBorder.copy(alpha = 0.85f)
                 )

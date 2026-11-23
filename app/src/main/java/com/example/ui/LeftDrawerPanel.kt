@@ -111,6 +111,7 @@ fun StudioInspectorSheet(
                 .liquidGlassSurface(
                     shape = RoundedCornerShape(22.dp),
                     elevated = true,
+                    liveBackdrop = false,
                     fallbackBg = SlateDark.copy(alpha = 0.96f),
                     fallbackBorder = SlateBorder
                 )

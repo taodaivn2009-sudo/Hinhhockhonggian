@@ -613,7 +613,7 @@ fun ThemeLivePreviewCard(palette: AppThemePalette) {
             Canvas(
                 modifier = Modifier
                     .fillMaxSize()
-                    .liquidGlassBackdropSource(previewBackdrop)
+                    .liquidGlassBackdropSource(previewBackdrop, staticCapture = true)
             ) {
                 drawRect(brush = Brush.verticalGradient(listOf(bgTop, bgBottom)))
 

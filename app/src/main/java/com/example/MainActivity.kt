@@ -43,6 +43,7 @@ import com.example.ai.AuthToastBanner
 import com.example.ai.configureAppCheck
 import com.example.ai.findActivity
 import com.example.docs.MathDocumentsScreen
+import com.example.docs.PdfBookRenderer
 import com.example.geo2d.Geo2DPersistence
 import com.example.geo2d.Geo2DStudioScreen
 import com.example.geo2d.Geo2DViewModel
@@ -70,6 +71,8 @@ import com.example.update.AppUpdateViewModel
 import com.example.update.UpdateAvailableBanner
 import com.example.update.UpdateDetailsDialog
 import com.example.viewmodel.GeometryViewModel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import java.io.OutputStreamWriter
 
 class MainActivity : ComponentActivity() {
@@ -123,32 +126,42 @@ fun ToolToanRootScreen(
     aiViewModel: AiAssistantViewModel = viewModel()
 ) {
     val context = LocalContext.current
-    val workspacePrefs = remember(context) { Geo2DPersistence(context.applicationContext) }
+    val appContext = context.applicationContext
+    val workspacePrefs = remember(appContext) { Geo2DPersistence(appContext) }
     var activeWorkspace by remember { mutableStateOf(workspacePrefs.loadLastWorkspace()) }
     var rememberLastWorkspace by remember { mutableStateOf(workspacePrefs.isRememberLastWorkspaceEnabled()) }
     var isImmersive by remember { mutableStateOf(false) }
     var settingsSubPage by remember { mutableStateOf<SettingsSubPage?>(null) }
     var pending2DExpr by remember { mutableStateOf<String?>(null) }
     var pendingPdfPage by remember { mutableStateOf<Int?>(null) }
-    val updateUiState by updateViewModel.uiState.collectAsStateWithLifecycle()
-    val geoUiState by geometryViewModel.uiState.collectAsStateWithLifecycle()
-    val geo2DUiState by geo2DViewModel.uiState.collectAsStateWithLifecycle()
-    val aiUiState by aiViewModel.uiState.collectAsStateWithLifecycle()
+
+    // Retain the 388-page PDF renderer + 36MB RGB_565 page cache across tab switches for 0ms instant return!
+    val sharedPdfRenderer = remember(appContext) { PdfBookRenderer(appContext) }
+    DisposableEffect(sharedPdfRenderer) {
+        onDispose { sharedPdfRenderer.close() }
+    }
+
+    // Collect ONLY the lightweight update badge boolean here — NEVER collect heavy 3D/2D/AI states at root!
+    val hasUpdateBadge by remember(updateViewModel) {
+        updateViewModel.uiState.map { it.hasUpdate }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = false)
 
     LaunchedEffect(Unit) {
         aiViewModel.attemptSilentGoogleSignIn(context)
     }
 
-    val onSelectWorkspace: (MathWorkspace) -> Unit = { target ->
-        if (target != activeWorkspace) {
-            activeWorkspace = target
-            isImmersive = false
-            if (target != MathWorkspace.SETTINGS) {
+    val onSelectWorkspace: (MathWorkspace) -> Unit = remember(workspacePrefs) {
+        { target ->
+            if (target != activeWorkspace) {
+                activeWorkspace = target
+                isImmersive = false
+                if (target != MathWorkspace.SETTINGS) {
+                    settingsSubPage = null
+                }
+                workspacePrefs.saveLastWorkspace(target)
+            } else if (target == MathWorkspace.SETTINGS && settingsSubPage != null) {
                 settingsSubPage = null
             }
-            workspacePrefs.saveLastWorkspace(target)
-        } else if (target == MathWorkspace.SETTINGS && settingsSubPage != null) {
-            settingsSubPage = null
         }
     }
 
@@ -161,15 +174,16 @@ fun ToolToanRootScreen(
         !(activeWorkspace == MathWorkspace.SETTINGS && settingsSubPage != null) &&
         !isImeVisible
 
-    val rootNavBackdrop = rememberLiquidGlassBackdropState()
+    // Single shared non-nested GPU backdrop: each workspace's raw Canvas or static Aurora background
+    // records into this layer ONCE (never wrapping floating glass chrome -> zero draw feedback loops!)
+    val sharedBackdrop = rememberLiquidGlassBackdropState()
+    LaunchedEffect(activeWorkspace) {
+        sharedBackdrop.resetStaticCache()
+    }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        // Layer 1: Active Workspace Screen (serves as live GPU backdrop for Floating Bottom Nav Bar)
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .liquidGlassBackdropSource(rootNavBackdrop)
-        ) {
+    CompositionLocalProvider(LocalLiquidGlassBackdrop provides sharedBackdrop) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            // Layer 1: Active Workspace Screen (state-isolated per tab!)
             when (activeWorkspace) {
                 MathWorkspace.SPACE_3D -> GeometryStudioScreen(
                     isImmersive = isImmersive,
@@ -192,7 +206,8 @@ fun ToolToanRootScreen(
                     onAskAiAboutPage = { pageNum ->
                         aiViewModel.prepareAskAboutPdfPage(pageNum)
                         onSelectWorkspace(MathWorkspace.AI)
-                    }
+                    },
+                    sharedPdfRenderer = sharedPdfRenderer
                 )
                 MathWorkspace.AI -> AiWorkspaceScreen(
                     aiViewModel = aiViewModel,
@@ -226,103 +241,28 @@ fun ToolToanRootScreen(
                         workspacePrefs.saveLastWorkspace(MathWorkspace.SETTINGS)
                     }
                 )
-                MathWorkspace.SETTINGS -> AppSettingsScreen(
+                MathWorkspace.SETTINGS -> SettingsWorkspaceHost(
                     activeSubPage = settingsSubPage,
                     onSelectSubPage = { settingsSubPage = it },
-                    themeConfig = themeUiState.config,
-                    onSelectThemeMode = { themeViewModel.setThemeMode(it) },
-                    onSelectThemePreset = { themeViewModel.selectPreset(it) },
-                    onSelectAccentColor = { themeViewModel.selectAccentColor(it) },
-                    onToggleLiquidGlass = { themeViewModel.toggleLiquidGlass(it) },
-                    onApplyLiquidGlassStyle = { themeViewModel.applyLiquidGlassStyle(it) },
-                    onUpdateLiquidGlass = { blur, ref, disp, t, s, r, b, sh, hc ->
-                        themeViewModel.updateLiquidGlass(
-                            blurRadius = blur,
-                            refraction = ref,
-                            chromaticDispersion = disp,
-                            translucency = t,
-                            specularGlow = s,
-                            refractionTint = r,
-                            borderIntensity = b,
-                            dynamicShimmer = sh,
-                            highContrastText = hc
-                        )
-                    },
-                    onResetThemeDefault = { themeViewModel.resetToDefault() },
-                    sensitivity = geoUiState.snapshot.sensitivity,
+                    themeViewModel = themeViewModel,
+                    themeUiState = themeUiState,
                     geometryViewModel = geometryViewModel,
-                    sensitivity2D = geo2DUiState.snapshot.sensitivity,
                     geo2DViewModel = geo2DViewModel,
+                    updateViewModel = updateViewModel,
+                    aiViewModel = aiViewModel,
                     rememberLastWorkspace = rememberLastWorkspace,
                     onToggleRememberLastWorkspace = { enabled ->
                         rememberLastWorkspace = enabled
                         workspacePrefs.setRememberLastWorkspace(enabled)
                     },
-                    exportFolderUri = geoUiState.exportFolderUri ?: geo2DUiState.exportFolderUri,
-                    exportFolderLabel = geoUiState.exportFolderLabel ?: geo2DUiState.exportFolderLabel,
-                    exportTransparentPng = geoUiState.exportTransparentBg,
-                    onSetExportFolder = { uri, label ->
-                        geometryViewModel.setExportFolder(uri, label)
-                        geo2DViewModel.setExportFolder(uri, label)
-                    },
-                    onClearExportFolder = {
-                        geometryViewModel.clearExportFolder()
-                        geo2DViewModel.clearExportFolder()
-                    },
-                    onToggleExportTransparentPng = { desired ->
-                        if (geoUiState.exportTransparentBg != desired) {
-                            geometryViewModel.toggleExportTransparentBg()
-                        }
-                        if (geo2DUiState.exportTransparentBg != desired) {
-                            geo2DViewModel.toggleExportTransparentBg()
-                        }
-                    },
-                    updateUiState = updateUiState,
-                    onCheckUpdateNow = { updateViewModel.checkForUpdates(isAutoStartup = false) },
-                    onSaveUpdateRepoAndCheck = { updateViewModel.saveRepoAndCheck(it) },
-                    onSkipUpdateVersion = { updateViewModel.skipCurrentAvailableVersion() },
-                    aiUiState = aiUiState,
-                    onSelectAiProvider = { aiViewModel.selectProvider(it) },
-                    onSelectCustomAiEndpoint = { aiViewModel.selectCustomEndpoint(it) },
-                    onCreateCustomAiEndpoint = { name, baseUrl, key, verify ->
-                        aiViewModel.createCustomEndpoint(name, baseUrl, key, verify)
-                    },
-                    onUpdateCustomAiEndpoint = { id, name, baseUrl, key, verify ->
-                        aiViewModel.updateCustomEndpoint(id, name, baseUrl, key, verify)
-                    },
-                    onDeleteCustomAiEndpoint = { aiViewModel.deleteCustomEndpoint(it) },
-                    onSignInWithGoogle = {
-                        context.findActivity()?.let { aiViewModel.signInWithGoogle(it) }
-                    },
-                    onSignOutGoogle = { aiViewModel.signOutGoogle(context) },
-                    onTestGoogleAi = { aiViewModel.testGoogleGeminiConnection() },
-                    onSaveAndVerifyAiKey = { key, model, baseUrl ->
-                        aiViewModel.saveAndVerifyApiKey(key, model, baseUrl)
-                    },
-                    onSaveAiKeyOnly = { key, model, baseUrl ->
-                        aiViewModel.saveApiKey(key, model, baseUrl)
-                    },
-                    onSelectAiModel = { aiViewModel.selectModel(it) },
-                    onSyncAiModels = { overrideKey, overrideUrl ->
-                        aiViewModel.syncAccountModels(overrideKey, overrideUrl)
-                    },
-                    onProbeAllAiModels = { overrideKey, overrideUrl, subset ->
-                        aiViewModel.probeAllModels(overrideKey, overrideUrl, subset)
-                    },
-                    onRefreshAiTokens = { aiViewModel.refreshTokenSync() },
-                    onAddCustomAiModel = { aiViewModel.addCustomModel(it) },
-                    onRemoveCustomAiModel = { aiViewModel.removeCustomModel(it) },
-                    onClearAiKey = { aiViewModel.clearApiKey() },
                     onSwitchWorkspace = onSelectWorkspace
                 )
             }
-        }
 
-        // Layer 2: Unified Floating Pill Bottom Navigation Bar & Immersive Restore Pill
-        CompositionLocalProvider(LocalLiquidGlassBackdrop provides rootNavBackdrop) {
+            // Layer 2: Unified Floating Pill Bottom Navigation Bar & Immersive Restore Pill
             FloatingPillBottomNavBar(
                 current = activeWorkspace,
-                hasUpdateBadge = updateUiState.hasUpdate,
+                hasUpdateBadge = hasUpdateBadge,
                 visible = showBottomNav,
                 onSelect = onSelectWorkspace,
                 modifier = Modifier.align(Alignment.BottomCenter)
@@ -333,32 +273,166 @@ fun ToolToanRootScreen(
                 onExitImmersive = { isImmersive = false },
                 modifier = Modifier.align(Alignment.BottomEnd)
             )
+
+            // Layer 3: Self-isolated Global Overlays (never recompose active workspace!)
+            RootAuthToastHost(
+                aiViewModel = aiViewModel,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
+
+            RootUpdateOverlayHost(
+                updateViewModel = updateViewModel,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
         }
-
-        // Global floating Google Sign-In / Sign-Out notification toast with user avatar
-        AuthToastBanner(
-            event = aiUiState.authToast,
-            onDismiss = { aiViewModel.dismissAuthToast() },
-            modifier = Modifier.align(Alignment.TopCenter)
-        )
-
-        // Global non-intrusive top notification banner when a newer GitHub Release is detected
-        UpdateAvailableBanner(
-            uiState = updateUiState,
-            onOpenDetails = { updateViewModel.openUpdateDialog() },
-            onDismiss = { updateViewModel.dismissBannerForNow() },
-            modifier = Modifier.align(Alignment.TopCenter)
-        )
-
-        // Full GitHub Release Update & Install Suggestion Modal (triggered from banner)
-        UpdateDetailsDialog(
-            uiState = updateUiState,
-            onCheckNow = { updateViewModel.checkForUpdates(isAutoStartup = false) },
-            onSaveRepoAndCheck = { updateViewModel.saveRepoAndCheck(it) },
-            onSkipVersion = { updateViewModel.skipCurrentAvailableVersion() },
-            onDismiss = { updateViewModel.closeUpdateDialog() }
-        )
     }
+}
+
+@Composable
+private fun SettingsWorkspaceHost(
+    activeSubPage: SettingsSubPage?,
+    onSelectSubPage: (SettingsSubPage?) -> Unit,
+    themeViewModel: AppThemeViewModel,
+    themeUiState: AppThemeUiState,
+    geometryViewModel: GeometryViewModel,
+    geo2DViewModel: Geo2DViewModel,
+    updateViewModel: AppUpdateViewModel,
+    aiViewModel: AiAssistantViewModel,
+    rememberLastWorkspace: Boolean,
+    onToggleRememberLastWorkspace: (Boolean) -> Unit,
+    onSwitchWorkspace: (MathWorkspace) -> Unit
+) {
+    val context = LocalContext.current
+    val geoUiState by geometryViewModel.uiState.collectAsStateWithLifecycle()
+    val geo2DUiState by geo2DViewModel.uiState.collectAsStateWithLifecycle()
+    val updateUiState by updateViewModel.uiState.collectAsStateWithLifecycle()
+    val aiUiState by aiViewModel.uiState.collectAsStateWithLifecycle()
+
+    AppSettingsScreen(
+        activeSubPage = activeSubPage,
+        onSelectSubPage = onSelectSubPage,
+        themeConfig = themeUiState.config,
+        onSelectThemeMode = { themeViewModel.setThemeMode(it) },
+        onSelectThemePreset = { themeViewModel.selectPreset(it) },
+        onSelectAccentColor = { themeViewModel.selectAccentColor(it) },
+        onToggleLiquidGlass = { themeViewModel.toggleLiquidGlass(it) },
+        onApplyLiquidGlassStyle = { themeViewModel.applyLiquidGlassStyle(it) },
+        onUpdateLiquidGlass = { blur, ref, disp, t, s, r, b, sh, hc ->
+            themeViewModel.updateLiquidGlass(
+                blurRadius = blur,
+                refraction = ref,
+                chromaticDispersion = disp,
+                translucency = t,
+                specularGlow = s,
+                refractionTint = r,
+                borderIntensity = b,
+                dynamicShimmer = sh,
+                highContrastText = hc
+            )
+        },
+        onResetThemeDefault = { themeViewModel.resetToDefault() },
+        sensitivity = geoUiState.snapshot.sensitivity,
+        geometryViewModel = geometryViewModel,
+        sensitivity2D = geo2DUiState.snapshot.sensitivity,
+        geo2DViewModel = geo2DViewModel,
+        rememberLastWorkspace = rememberLastWorkspace,
+        onToggleRememberLastWorkspace = onToggleRememberLastWorkspace,
+        exportFolderUri = geoUiState.exportFolderUri ?: geo2DUiState.exportFolderUri,
+        exportFolderLabel = geoUiState.exportFolderLabel ?: geo2DUiState.exportFolderLabel,
+        exportTransparentPng = geoUiState.exportTransparentBg,
+        onSetExportFolder = { uri, label ->
+            geometryViewModel.setExportFolder(uri, label)
+            geo2DViewModel.setExportFolder(uri, label)
+        },
+        onClearExportFolder = {
+            geometryViewModel.clearExportFolder()
+            geo2DViewModel.clearExportFolder()
+        },
+        onToggleExportTransparentPng = { desired ->
+            if (geoUiState.exportTransparentBg != desired) {
+                geometryViewModel.toggleExportTransparentBg()
+            }
+            if (geo2DUiState.exportTransparentBg != desired) {
+                geo2DViewModel.toggleExportTransparentBg()
+            }
+        },
+        updateUiState = updateUiState,
+        onCheckUpdateNow = { updateViewModel.checkForUpdates(isAutoStartup = false) },
+        onSaveUpdateRepoAndCheck = { updateViewModel.saveRepoAndCheck(it) },
+        onSkipUpdateVersion = { updateViewModel.skipCurrentAvailableVersion() },
+        aiUiState = aiUiState,
+        onSelectAiProvider = { aiViewModel.selectProvider(it) },
+        onSelectCustomAiEndpoint = { aiViewModel.selectCustomEndpoint(it) },
+        onCreateCustomAiEndpoint = { name, baseUrl, key, verify ->
+            aiViewModel.createCustomEndpoint(name, baseUrl, key, verify)
+        },
+        onUpdateCustomAiEndpoint = { id, name, baseUrl, key, verify ->
+            aiViewModel.updateCustomEndpoint(id, name, baseUrl, key, verify)
+        },
+        onDeleteCustomAiEndpoint = { aiViewModel.deleteCustomEndpoint(it) },
+        onSignInWithGoogle = {
+            context.findActivity()?.let { aiViewModel.signInWithGoogle(it) }
+        },
+        onSignOutGoogle = { aiViewModel.signOutGoogle(context) },
+        onTestGoogleAi = { aiViewModel.testGoogleGeminiConnection() },
+        onSaveAndVerifyAiKey = { key, model, baseUrl ->
+            aiViewModel.saveAndVerifyApiKey(key, model, baseUrl)
+        },
+        onSaveAiKeyOnly = { key, model, baseUrl ->
+            aiViewModel.saveApiKey(key, model, baseUrl)
+        },
+        onSelectAiModel = { aiViewModel.selectModel(it) },
+        onSyncAiModels = { overrideKey, overrideUrl ->
+            aiViewModel.syncAccountModels(overrideKey, overrideUrl)
+        },
+        onProbeAllAiModels = { overrideKey, overrideUrl, subset ->
+            aiViewModel.probeAllModels(overrideKey, overrideUrl, subset)
+        },
+        onRefreshAiTokens = { aiViewModel.refreshTokenSync() },
+        onAddCustomAiModel = { aiViewModel.addCustomModel(it) },
+        onRemoveCustomAiModel = { aiViewModel.removeCustomModel(it) },
+        onClearAiKey = { aiViewModel.clearApiKey() },
+        onSwitchWorkspace = onSwitchWorkspace
+    )
+}
+
+@Composable
+private fun RootAuthToastHost(
+    aiViewModel: AiAssistantViewModel,
+    modifier: Modifier = Modifier
+) {
+    val authToast by remember(aiViewModel) {
+        aiViewModel.uiState.map { it.authToast }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = null)
+
+    AuthToastBanner(
+        event = authToast,
+        onDismiss = { aiViewModel.dismissAuthToast() },
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun RootUpdateOverlayHost(
+    updateViewModel: AppUpdateViewModel,
+    modifier: Modifier = Modifier
+) {
+    val updateUiState by updateViewModel.uiState.collectAsStateWithLifecycle()
+
+    UpdateAvailableBanner(
+        uiState = updateUiState,
+        onOpenDetails = { updateViewModel.openUpdateDialog() },
+        onDismiss = { updateViewModel.dismissBannerForNow() },
+        modifier = modifier
+    )
+
+    UpdateDetailsDialog(
+        uiState = updateUiState,
+        onCheckNow = { updateViewModel.checkForUpdates(isAutoStartup = false) },
+        onSaveRepoAndCheck = { updateViewModel.saveRepoAndCheck(it) },
+        onSkipVersion = { updateViewModel.skipCurrentAvailableVersion() },
+        onDismiss = { updateViewModel.closeUpdateDialog() }
+    )
 }
 
 @Composable
@@ -533,14 +607,16 @@ fun GeometryStudioScreen(
         launchPicker(fileName)
     }
 
-    val backdropState = rememberLiquidGlassBackdropState()
+    val sharedBackdrop = LocalLiquidGlassBackdrop.current
+    val fallbackBackdrop = rememberLiquidGlassBackdropState()
+    val backdropState = sharedBackdrop ?: fallbackBackdrop
 
     CompositionLocalProvider(LocalLiquidGlassBackdrop provides backdropState) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val isCompactWidth = maxWidth < 600.dp
             val maxSheetHeight = (maxHeight * 0.52f).coerceIn(260.dp, 460.dp)
 
-            // 1. Full-bleed Interactive 3D Viewport (live GPU backdrop source for all Liquid Glass HUD bars!)
+            // 1. Full-bleed Interactive 3D Viewport (single GPU backdrop source for 3D HUD & root Bottom Nav!)
             GeometryCanvasView(
                 uiState = uiState,
                 viewModel = viewModel,

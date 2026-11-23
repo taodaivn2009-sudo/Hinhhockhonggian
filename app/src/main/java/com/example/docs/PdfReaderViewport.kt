@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.example.ui.theme.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -91,10 +92,15 @@ fun PdfReaderView(
 ) {
     val coroutineScope = rememberCoroutineScope()
     var totalPages by remember { mutableIntStateOf(renderer.pageCount) }
-    var isOpening by remember { mutableStateOf(true) }
+    var isOpening by remember { mutableStateOf(!renderer.isOpen) }
     var openError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(renderer) {
+        if (renderer.isOpen) {
+            totalPages = renderer.pageCount.coerceAtLeast(1)
+            isOpening = false
+            return@LaunchedEffect
+        }
         isOpening = true
         openError = null
         renderer.open()
@@ -125,7 +131,9 @@ fun PdfReaderView(
         }
     }
 
+    // Debounce SharedPreferences persistence so fast flinging never blocks the main thread
     LaunchedEffect(currentPage1Based) {
+        delay(300)
         onPageChanged(currentPage1Based)
     }
 
@@ -267,15 +275,16 @@ fun PdfReaderView(
                             }
                         }
                 ) {
+                    val isScrollEnabled by remember { derivedStateOf { zoom <= 1.03f } }
                     PdfPagesLazyColumn(
                         renderer = renderer,
                         totalPages = totalPages,
                         listState = listState,
-                        zoom = zoom,
-                        panOffset = panOffset,
+                        zoomProvider = { zoom },
+                        panOffsetProvider = { panOffset },
                         nightFilterEnabled = nightFilterEnabled,
                         isImmersive = isImmersive,
-                        userScrollEnabled = zoom <= 1.03f
+                        userScrollEnabled = isScrollEnabled
                     )
                 }
             }
@@ -398,8 +407,8 @@ private fun PdfPagesLazyColumn(
     renderer: PdfBookRenderer,
     totalPages: Int,
     listState: LazyListState,
-    zoom: Float,
-    panOffset: Offset,
+    zoomProvider: () -> Float,
+    panOffsetProvider: () -> Offset,
     nightFilterEnabled: Boolean,
     isImmersive: Boolean,
     userScrollEnabled: Boolean
@@ -421,7 +430,15 @@ private fun PdfPagesLazyColumn(
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val targetWidthPx = remember(maxWidth, density) {
-            with(density) { (maxWidth.coerceAtMost(840.dp).toPx() * 1.45f).roundToInt().coerceIn(720, 1600) }
+            with(density) { (maxWidth.coerceAtMost(840.dp).toPx() * 1.25f).roundToInt().coerceIn(720, 1280) }
+        }
+
+        // Prefetch immediate neighbor pages once scrolling settles so next/prev pages appear instantly
+        LaunchedEffect(listState.isScrollInProgress, targetWidthPx) {
+            if (!listState.isScrollInProgress) {
+                val center = listState.firstVisibleItemIndex
+                renderer.prefetchPages(listOf(center + 1, center - 1, center + 2), targetWidthPx)
+            }
         }
 
         LazyColumn(
@@ -439,10 +456,12 @@ private fun PdfPagesLazyColumn(
                 .fillMaxSize()
                 .statusBarsPadding()
                 .graphicsLayer {
-                    scaleX = zoom
-                    scaleY = zoom
-                    translationX = panOffset.x
-                    translationY = panOffset.y
+                    val s = zoomProvider()
+                    val pan = panOffsetProvider()
+                    scaleX = s
+                    scaleY = s
+                    translationX = pan.x
+                    translationY = pan.y
                 }
         ) {
             items(count = totalPages, key = { it }) { pageIndex ->
@@ -468,21 +487,17 @@ private fun PdfSinglePageItem(
     nightColorFilter: ColorFilter?,
     modifier: Modifier = Modifier
 ) {
-    var bitmap by remember(pageIndex0Based, targetWidthPx) {
-        mutableStateOf<Bitmap?>(renderer.getCachedPage(pageIndex0Based, targetWidthPx))
+    var pageAsset by remember(pageIndex0Based, targetWidthPx) {
+        mutableStateOf<CachedPdfPage?>(renderer.getCachedPageAsset(pageIndex0Based, targetWidthPx))
     }
 
     LaunchedEffect(pageIndex0Based, targetWidthPx) {
-        if (bitmap == null) {
-            bitmap = renderer.renderPage(pageIndex0Based, targetWidthPx)
+        if (pageAsset == null) {
+            pageAsset = renderer.renderPageAsset(pageIndex0Based, targetWidthPx)
         }
     }
 
-    val aspectRatio = remember(bitmap, renderer.aspectRatio) {
-        bitmap?.let { b ->
-            if (b.height > 0) (b.width.toFloat() / b.height.toFloat()).coerceIn(0.45f, 2.2f) else renderer.aspectRatio
-        } ?: renderer.aspectRatio
-    }
+    val aspectRatio = pageAsset?.aspectRatio ?: renderer.aspectRatio
 
     Box(
         modifier = modifier
@@ -492,10 +507,10 @@ private fun PdfSinglePageItem(
             .border(1.dp, SlateBorder.copy(alpha = 0.5f), RoundedCornerShape(10.dp)),
         contentAlignment = Alignment.Center
     ) {
-        val loaded = bitmap
+        val loaded = pageAsset
         if (loaded != null) {
             Image(
-                bitmap = loaded.asImageBitmap(),
+                bitmap = loaded.imageBitmap,
                 contentDescription = "Trang ${pageIndex0Based + 1} tài liệu Toán 10 11 12",
                 contentScale = ContentScale.FillWidth,
                 colorFilter = nightColorFilter,

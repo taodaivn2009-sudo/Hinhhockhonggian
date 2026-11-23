@@ -151,7 +151,9 @@ fun AppSettingsScreen(
         }
     }
 
-    val bgBackdrop = rememberLiquidGlassBackdropState()
+    val sharedBackdrop = LocalLiquidGlassBackdrop.current
+    val fallbackBackdrop = rememberLiquidGlassBackdropState()
+    val bgBackdrop = sharedBackdrop ?: fallbackBackdrop
 
     Box(
         modifier = Modifier
@@ -161,7 +163,7 @@ fun AppSettingsScreen(
         LiquidGlassBackdrop(
             modifier = Modifier
                 .fillMaxSize()
-                .liquidGlassBackdropSource(bgBackdrop)
+                .liquidGlassBackdropSource(bgBackdrop, staticCapture = true)
         )
 
         CompositionLocalProvider(LocalLiquidGlassBackdrop provides bgBackdrop) {
@@ -513,6 +515,7 @@ private fun SettingsHubRowCard(
             .liquidGlassSurface(
                 shape = RoundedCornerShape(18.dp),
                 elevated = false,
+                liveBackdrop = false,
                 fallbackBg = SlateDark,
                 fallbackBorder = SlateBorder
             )
@@ -671,6 +674,7 @@ private fun SettingsSubCard(
             .liquidGlassSurface(
                 shape = RoundedCornerShape(20.dp),
                 elevated = false,
+                liveBackdrop = false,
                 fallbackBg = SlateDark,
                 fallbackBorder = SlateBorder
             )
@@ -707,7 +711,7 @@ private fun LiquidGlassLivePreviewBanner(
                         )
                     )
                 )
-                .liquidGlassBackdropSource(previewBackdrop)
+                .liquidGlassBackdropSource(previewBackdrop, staticCapture = true)
         ) {
             Text(
                 text = "f(x) = x³ − 3mx + 1   ·   V = ⅓ Sđ · h   ·   Oxyz",
@@ -793,6 +797,7 @@ private fun ControlsSubScreenContent(
             .liquidGlassSurface(
                 shape = CircleShape,
                 pillShape = CircleShape,
+                liveBackdrop = false,
                 fallbackBg = SlateDark,
                 fallbackBorder = SlateBorder
             )

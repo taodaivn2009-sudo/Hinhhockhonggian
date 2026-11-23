@@ -41,15 +41,21 @@ fun MathDocumentsScreen(
     onSwitchWorkspace: (MathWorkspace) -> Unit,
     pendingOpenPage: Int? = null,
     onConsumePendingPage: () -> Unit = {},
-    onAskAiAboutPage: (Int) -> Unit = {}
+    onAskAiAboutPage: (Int) -> Unit = {},
+    sharedPdfRenderer: PdfBookRenderer? = null
 ) {
     val context = LocalContext.current
     val appContext = context.applicationContext
     val prefs = remember(appContext) { PdfDocsPreferences(appContext) }
-    val pdfRenderer = remember(appContext) { PdfBookRenderer(appContext) }
+    val ownsRenderer = sharedPdfRenderer == null
+    val pdfRenderer = remember(appContext, sharedPdfRenderer) {
+        sharedPdfRenderer ?: PdfBookRenderer(appContext)
+    }
 
-    DisposableEffect(pdfRenderer) {
-        onDispose { pdfRenderer.close() }
+    if (ownsRenderer) {
+        DisposableEffect(pdfRenderer) {
+            onDispose { pdfRenderer.close() }
+        }
     }
 
     var selectedTab by remember { mutableStateOf(prefs.loadLastTab()) }
@@ -102,7 +108,9 @@ fun MathDocumentsScreen(
         }
     }
 
-    val bgBackdrop = rememberLiquidGlassBackdropState()
+    val sharedBackdrop = LocalLiquidGlassBackdrop.current
+    val fallbackBackdrop = rememberLiquidGlassBackdropState()
+    val bgBackdrop = sharedBackdrop ?: fallbackBackdrop
 
     BoxWithConstraints(
         modifier = Modifier
@@ -114,7 +122,7 @@ fun MathDocumentsScreen(
         LiquidGlassBackdrop(
             modifier = Modifier
                 .fillMaxSize()
-                .liquidGlassBackdropSource(bgBackdrop)
+                .liquidGlassBackdropSource(bgBackdrop, staticCapture = true)
         )
 
         CompositionLocalProvider(LocalLiquidGlassBackdrop provides bgBackdrop) {

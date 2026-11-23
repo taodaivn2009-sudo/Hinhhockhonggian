@@ -92,7 +92,9 @@ fun AiWorkspaceScreen(
         }
     }
 
-    val bgOnlyBackdrop = rememberLiquidGlassBackdropState()
+    val sharedBackdrop = LocalLiquidGlassBackdrop.current
+    val fallbackBackdrop = rememberLiquidGlassBackdropState()
+    val bgOnlyBackdrop = sharedBackdrop ?: fallbackBackdrop
 
     Box(
         modifier = Modifier
@@ -102,7 +104,7 @@ fun AiWorkspaceScreen(
         LiquidGlassBackdrop(
             modifier = Modifier
                 .fillMaxSize()
-                .liquidGlassBackdropSource(bgOnlyBackdrop)
+                .liquidGlassBackdropSource(bgOnlyBackdrop, staticCapture = true)
         )
 
         CompositionLocalProvider(LocalLiquidGlassBackdrop provides bgOnlyBackdrop) {
@@ -404,6 +406,7 @@ private fun AiCompactStatusChip(
                 shape = RoundedCornerShape(14.dp),
                 cornerRadiusDp = 14.dp,
                 elevated = false,
+                liveBackdrop = false,
                 fallbackBg = SlateDark.copy(alpha = 0.85f),
                 accentBorder = accentColor.copy(alpha = 0.4f)
             )
@@ -767,6 +770,7 @@ private fun AiDocsQaTab(
                                 shape = RoundedCornerShape(18.dp),
                                 cornerRadiusDp = 18.dp,
                                 elevated = false,
+                                liveBackdrop = false,
                                 fallbackBg = SlateDark,
                                 accentBorder = CyanAccent.copy(alpha = 0.4f)
                             )
@@ -839,6 +843,7 @@ private fun AiDocsQaTab(
                                 .liquidGlassSurface(
                                     shape = RoundedCornerShape(16.dp),
                                     cornerRadiusDp = 16.dp,
+                                    liveBackdrop = false,
                                     fallbackBg = SlateDark,
                                     accentBorder = CyanAccent.copy(alpha = 0.45f)
                                 )
@@ -1151,6 +1156,7 @@ private fun AiChatBubbleCard(
                 shape = RoundedCornerShape(16.dp),
                 cornerRadiusDp = 16.dp,
                 elevated = !message.isUser,
+                liveBackdrop = false,
                 fallbackBg = bgColor,
                 accentBorder = borderColor
             )

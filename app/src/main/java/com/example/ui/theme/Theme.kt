@@ -74,9 +74,11 @@ fun Geo3DTheme(
         }
     }
 
-    MaterialTheme(
-        colorScheme = buildMaterialColorScheme(palette),
-        typography = AppTypography,
-        content = content
-    )
+    ProvideLiquidGlassShimmerClock(config = palette.liquidGlass) {
+        MaterialTheme(
+            colorScheme = buildMaterialColorScheme(palette),
+            typography = AppTypography,
+            content = content
+        )
+    }
 }

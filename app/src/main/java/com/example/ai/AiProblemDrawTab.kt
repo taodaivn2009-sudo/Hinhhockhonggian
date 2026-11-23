@@ -154,6 +154,7 @@ fun AiProblemDrawTab(
                         shape = RoundedCornerShape(18.dp),
                         cornerRadiusDp = 18.dp,
                         elevated = true,
+                        liveBackdrop = false,
                         fallbackBg = SlateDark,
                         accentBorder = PurpleAccent.copy(alpha = 0.5f)
                     )
@@ -464,6 +465,7 @@ private fun AiDrawingPlanResultCard(
                 shape = RoundedCornerShape(18.dp),
                 cornerRadiusDp = 18.dp,
                 elevated = true,
+                liveBackdrop = false,
                 fallbackBg = SlateDark,
                 accentBorder = accent.copy(alpha = 0.65f)
             )

@@ -7,6 +7,9 @@ import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import android.util.LruCache
+import androidx.compose.runtime.Immutable
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -15,12 +18,19 @@ import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.roundToInt
 
+@Immutable
+data class CachedPdfPage(
+    val bitmap: Bitmap,
+    val imageBitmap: ImageBitmap,
+    val aspectRatio: Float
+)
+
 /**
  * Thread-safe, memory-bounded native Android [PdfRenderer] engine for the bundled 388-page PDF.
- * - Lazily extracts the asset once into app cache using an atomic rename so [ParcelFileDescriptor]
- *   always opens reliably regardless of APK asset compression.
- * - Serializes all [PdfRenderer] page open/render/close calls via [Mutex] on [Dispatchers.IO].
- * - Caches recently rendered bitmaps inside a ~36 MB [LruCache] for smooth 60fps scrolling without OOM.
+ * - Uses [Bitmap.Config.RGB_565] for opaque white PDF pages -> 50% less RAM, 2x faster GPU upload,
+ *   and 2x more cached pages inside the ~36 MB [LruCache].
+ * - Pre-wraps [ImageBitmap] once per decoded page to avoid repeated conversions during recomposition.
+ * - Supports background neighbor prefetching for zero-spinner smooth scrolling.
  */
 class PdfBookRenderer(
     private val appContext: Context,
@@ -34,14 +44,17 @@ class PdfBookRenderer(
     private var defaultAspectRatio: Float = 210f / 297f
     private var isClosed: Boolean = false
 
-    // Cap decoded PDF page cache at ~36 MB so 388 pages never trigger OutOfMemoryError.
-    private val bitmapCache = object : LruCache<String, Bitmap>(36 * 1024) {
-        override fun sizeOf(key: String, value: Bitmap): Int = (value.allocationByteCount / 1024).coerceAtLeast(1)
+    // Cap decoded PDF page cache at ~36 MB (~25-35 pages in RGB_565) for instant 60fps scrolling without OOM.
+    private val pageCache = object : LruCache<String, CachedPdfPage>(36 * 1024) {
+        override fun sizeOf(key: String, value: CachedPdfPage): Int =
+            (value.bitmap.allocationByteCount / 1024).coerceAtLeast(1)
     }
 
     val pageCount: Int get() = if (cachedPageCount > 0) cachedPageCount else PDF_TOTAL_PAGES
 
     val aspectRatio: Float get() = defaultAspectRatio
+
+    val isOpen: Boolean get() = renderer != null && !isClosed
 
     suspend fun open(): Result<Int> = withContext(Dispatchers.IO) {
         mutex.withLock {
@@ -68,20 +81,20 @@ class PdfBookRenderer(
     }
 
     /**
-     * Renders a 0-based page index at [targetWidthPx] (bucketed for clean cache reuse).
+     * Renders a 0-based page index at [targetWidthPx] into a pre-wrapped [CachedPdfPage].
      */
-    suspend fun renderPage(pageIndex0Based: Int, targetWidthPx: Int): Bitmap? {
+    suspend fun renderPageAsset(pageIndex0Based: Int, targetWidthPx: Int): CachedPdfPage? {
         val bucketWidth = bucketizeWidth(targetWidthPx)
         val cacheKey = "${pageIndex0Based}_$bucketWidth"
-        synchronized(bitmapCache) {
-            bitmapCache.get(cacheKey)?.let { return it }
+        synchronized(pageCache) {
+            pageCache.get(cacheKey)?.let { return it }
         }
 
         return withContext(Dispatchers.IO) {
             mutex.withLock {
                 if (isClosed) return@withLock null
-                synchronized(bitmapCache) {
-                    bitmapCache.get(cacheKey)?.let { return@withLock it }
+                synchronized(pageCache) {
+                    pageCache.get(cacheKey)?.let { return@withLock it }
                 }
 
                 val activeRenderer = renderer ?: run {
@@ -99,31 +112,63 @@ class PdfBookRenderer(
                 runCatching {
                     activeRenderer.openPage(pageIndex0Based).use { page ->
                         val ratio = if (page.width > 0) page.height.toFloat() / page.width.toFloat() else (297f / 210f)
-                        val width = bucketWidth.coerceIn(480, 1800)
-                        val height = (width * ratio).roundToInt().coerceIn(480, 2800)
-                        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                        val width = bucketWidth.coerceIn(480, 1440)
+                        val height = (width * ratio).roundToInt().coerceIn(480, 2400)
+                        // RGB_565 uses half the memory & GPU upload bandwidth for opaque white PDF pages!
+                        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
                         val canvas = Canvas(bitmap)
                         canvas.drawColor(Color.WHITE)
                         page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                        synchronized(bitmapCache) {
-                            bitmapCache.put(cacheKey, bitmap)
+                        val aspect = if (height > 0) (width.toFloat() / height.toFloat()).coerceIn(0.45f, 2.2f) else defaultAspectRatio
+                        val asset = CachedPdfPage(
+                            bitmap = bitmap,
+                            imageBitmap = bitmap.asImageBitmap(),
+                            aspectRatio = aspect
+                        )
+                        synchronized(pageCache) {
+                            pageCache.put(cacheKey, asset)
                         }
-                        bitmap
+                        asset
                     }
                 }.getOrNull()
             }
         }
     }
 
-    fun getCachedPage(pageIndex0Based: Int, targetWidthPx: Int): Bitmap? {
+    /**
+     * Backwards-compatible raw [Bitmap] render API (used by AI page vision attachment).
+     */
+    suspend fun renderPage(pageIndex0Based: Int, targetWidthPx: Int): Bitmap? =
+        renderPageAsset(pageIndex0Based, targetWidthPx)?.bitmap
+
+    fun getCachedPageAsset(pageIndex0Based: Int, targetWidthPx: Int): CachedPdfPage? {
         val cacheKey = "${pageIndex0Based}_${bucketizeWidth(targetWidthPx)}"
-        return synchronized(bitmapCache) { bitmapCache.get(cacheKey) }
+        return synchronized(pageCache) { pageCache.get(cacheKey) }
+    }
+
+    fun getCachedPage(pageIndex0Based: Int, targetWidthPx: Int): Bitmap? =
+        getCachedPageAsset(pageIndex0Based, targetWidthPx)?.bitmap
+
+    /**
+     * Opportunistically prefetches adjacent pages on [Dispatchers.IO] so turning pages is instant.
+     */
+    suspend fun prefetchPages(pageIndices: List<Int>, targetWidthPx: Int) {
+        val bucketWidth = bucketizeWidth(targetWidthPx)
+        for (idx in pageIndices) {
+            if (isClosed) return
+            if (idx !in 0 until pageCount) continue
+            val cacheKey = "${idx}_$bucketWidth"
+            val alreadyCached = synchronized(pageCache) { pageCache.get(cacheKey) != null }
+            if (!alreadyCached) {
+                renderPageAsset(idx, targetWidthPx)
+            }
+        }
     }
 
     fun close() {
         isClosed = true
-        synchronized(bitmapCache) {
-            bitmapCache.evictAll()
+        synchronized(pageCache) {
+            pageCache.evictAll()
         }
         runCatching { renderer?.close() }
         runCatching { fileDescriptor?.close() }
@@ -132,7 +177,7 @@ class PdfBookRenderer(
     }
 
     private fun bucketizeWidth(rawWidthPx: Int): Int {
-        val clamped = rawWidthPx.coerceIn(640, 1600)
+        val clamped = rawWidthPx.coerceIn(640, 1440)
         return ((clamped + 159) / 160) * 160
     }
 

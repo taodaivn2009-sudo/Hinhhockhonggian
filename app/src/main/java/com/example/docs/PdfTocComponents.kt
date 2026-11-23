@@ -49,6 +49,7 @@ fun PdfHeroResumeCard(
         modifier = modifier
             .fillMaxWidth()
             .liquidGlassSurface(
+                liveBackdrop = false,
                 shape = RoundedCornerShape(20.dp),
                 cornerRadiusDp = 20.dp,
                 elevated = true,
@@ -183,6 +184,7 @@ fun PdfGradeTabBar(
         modifier = modifier
             .fillMaxWidth()
             .liquidGlassSurface(
+                liveBackdrop = false,
                 shape = RoundedCornerShape(16.dp),
                 pillShape = RoundedCornerShape(50),
                 cornerRadiusDp = 16.dp,
@@ -246,6 +248,7 @@ fun PdfGradeSectionBanner(
         modifier = modifier
             .fillMaxWidth()
             .liquidGlassSurface(
+                liveBackdrop = false,
                 shape = RoundedCornerShape(14.dp),
                 cornerRadiusDp = 14.dp,
                 elevated = false,
@@ -305,6 +308,7 @@ fun PdfTopicCard(
         modifier = modifier
             .fillMaxWidth()
             .liquidGlassSurface(
+                liveBackdrop = false,
                 shape = RoundedCornerShape(16.dp),
                 cornerRadiusDp = 16.dp,
                 elevated = false,
@@ -453,6 +457,7 @@ fun PdfSearchHitCard(
         modifier = modifier
             .fillMaxWidth()
             .liquidGlassSurface(
+                liveBackdrop = false,
                 shape = RoundedCornerShape(14.dp),
                 cornerRadiusDp = 14.dp,
                 elevated = false,
@@ -533,6 +538,7 @@ fun PdfBookmarkPageCard(
         modifier = modifier
             .fillMaxWidth()
             .liquidGlassSurface(
+                liveBackdrop = false,
                 shape = RoundedCornerShape(14.dp),
                 cornerRadiusDp = 14.dp,
                 elevated = false,
@@ -602,6 +608,7 @@ fun PdfEmptyStateCard(
         modifier = modifier
             .fillMaxWidth()
             .liquidGlassSurface(
+                liveBackdrop = false,
                 shape = RoundedCornerShape(18.dp),
                 cornerRadiusDp = 18.dp,
                 elevated = false,

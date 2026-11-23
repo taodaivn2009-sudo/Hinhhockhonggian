@@ -25,11 +25,11 @@ object GeometryRenderer {
 
     private val lightDir = Vec3(10f, 18f, 12f).normalized()
 
-    private class ProjectedFace(
-        val face: RenderFace,
-        val pts2d: List<ProjectedPoint>,
-        val avgDepth: Float
-    )
+    private class ProjectedFace {
+        lateinit var face: RenderFace
+        val pts2d: ArrayList<ProjectedPoint> = ArrayList(8)
+        var avgDepth: Float = 0f
+    }
 
     private class RenderScratch3D {
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -79,6 +79,14 @@ object GeometryRenderer {
         val scratchPath = Path()
         val scratchRect = RectF()
         val sortedFaces = ArrayList<ProjectedFace>(128)
+        val facePool = ArrayList<ProjectedFace>(160)
+
+        fun obtainProjectedFace(index: Int): ProjectedFace {
+            while (facePool.size <= index) {
+                facePool.add(ProjectedFace())
+            }
+            return facePool[index]
+        }
 
         fun ensureDensity(density: Float) {
             if (cachedDensity != density) {
@@ -147,9 +155,13 @@ object GeometryRenderer {
         // 3. Translucent 3D Surfaces: Polyhedra, Curved Meshes (Cylinder/Cone/Sphere), Sections & Custom Planes
         val sortedFaces = scratch.sortedFaces
         sortedFaces.clear()
+        var poolCursor = 0
         for (face in scene.faces) {
             val pts = face.points
-            val projected = ArrayList<ProjectedPoint>(pts.size)
+            if (pts.isEmpty()) continue
+            val pooled = scratch.obtainProjectedFace(poolCursor)
+            val projected = pooled.pts2d
+            projected.clear()
             var allVisible = true
             var depthSum = 0f
             for (i in pts.indices) {
@@ -162,7 +174,10 @@ object GeometryRenderer {
                 depthSum += p2.viewDepth
             }
             if (allVisible && projected.isNotEmpty()) {
-                sortedFaces.add(ProjectedFace(face, projected, depthSum / projected.size))
+                pooled.face = face
+                pooled.avgDepth = depthSum / projected.size
+                sortedFaces.add(pooled)
+                poolCursor++
             }
         }
         sortedFaces.sortByDescending { it.avgDepth }
