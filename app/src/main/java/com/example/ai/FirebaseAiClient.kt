@@ -451,12 +451,16 @@ object FirebaseAiClient {
             val counted = withTimeout(12_000L) {
                 model.countTokens(contents).totalTokens
             }
+            val resolvedInputLimit = knownInputLimit.takeIf { it > 0 }
+                ?: AiResponseParser.inferKnownContextWindow(safeModel, AiProvider.GOOGLE_ACCOUNT)
             Result.success(
                 AiExactContextTokenSync(
                     modelId = safeModel,
-                    inputTokenLimit = knownInputLimit,
+                    inputTokenLimit = resolvedInputLimit,
                     outputTokenLimit = knownOutputLimit,
-                    currentContextTokens = counted
+                    currentContextTokens = counted,
+                    isServerVerified = true,
+                    verificationSource = "Google countTokens"
                 )
             )
         } catch (e: CancellationException) {

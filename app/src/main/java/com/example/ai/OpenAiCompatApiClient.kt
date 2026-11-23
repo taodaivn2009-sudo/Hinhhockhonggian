@@ -38,9 +38,21 @@ object OpenAiCompatApiClient {
 
     private class HttpStatusException(val statusCode: Int, message: String) : IllegalStateException(message)
 
+    private data class RateLimitSnapshot(
+        val remainingTokens: Long? = null,
+        val limitTokens: Long? = null,
+        val remainingRequests: Long? = null,
+        val limitRequests: Long? = null
+    ) {
+        val hasAny: Boolean
+            get() = remainingTokens != null || limitTokens != null ||
+                remainingRequests != null || limitRequests != null
+    }
+
     private data class ChatCompletionRawResult(
         val text: String,
-        val usage: AiTokenUsage?
+        val usage: AiTokenUsage?,
+        val rateLimits: RateLimitSnapshot = RateLimitSnapshot()
     )
 
     suspend fun syncAccountModels(
@@ -333,9 +345,10 @@ object OpenAiCompatApiClient {
     }
 
     /**
-     * Synchronizes exact server context window (`context_length` / `context_window`) and, where supported,
-     * live account credit balance (OpenRouter `/key`, DeepSeek `/user/balance`).
-     * Never fabricates a fake server-side token count when the provider has no free `countTokens` endpoint.
+     * Synchronizes exact server context window (`context_length` / `context_window`), live account
+     * credit balance (OpenRouter `/credits` + `/key`, DeepSeek `/user/balance`), and when
+     * [forceLiveProbe] is true (user tapped "Kiểm tra"), performs a real live server verification
+     * to read live rate-limit headers (TPM + RPM/RPD) and surface real key/quota errors.
      */
     suspend fun syncContextTokens(
         provider: AiProvider,
@@ -346,12 +359,20 @@ object OpenAiCompatApiClient {
         knownOutputLimit: Int,
         lastMeasuredContextTokens: Int,
         lastRateLimitRemaining: Long? = null,
-        lastRateLimitTotal: Long? = null
+        lastRateLimitTotal: Long? = null,
+        lastRateLimitRemainingRequests: Long? = null,
+        lastRateLimitTotalRequests: Long? = null,
+        forceLiveProbe: Boolean = false
     ): Result<AiExactContextTokenSync> = withContext(Dispatchers.IO) {
         val cleanKey = AiResponseParser.sanitizeApiKey(apiKey)
         val cleanModel = modelId.trim()
         val baseUrl = resolveBaseUrl(provider, customBaseUrl)
             ?: return@withContext Result.failure(IllegalStateException("Chưa có Base URL hợp lệ"))
+        if (provider.requiresApiKey && cleanKey.isEmpty()) {
+            return@withContext Result.failure(
+                IllegalStateException("Chưa nhập API Key ${provider.shortTitle} để kiểm tra token.")
+            )
+        }
 
         runCatching {
             var inputLimit = knownInputLimit
@@ -368,12 +389,34 @@ object OpenAiCompatApiClient {
                 inputLimit = AiResponseParser.inferKnownContextWindow(cleanModel, provider)
             }
 
+            var rlRemTokens = lastRateLimitRemaining
+            var rlLimTokens = lastRateLimitTotal
+            var rlRemReqs = lastRateLimitRemainingRequests
+            var rlLimReqs = lastRateLimitTotalRequests
+            var liveVerified = false
+
             val balanceLabel = when {
                 provider == AiProvider.OPENROUTER && cleanKey.isNotEmpty() ->
-                    fetchOpenRouterBalance(baseUrl, cleanKey)
+                    fetchOpenRouterBalance(baseUrl, cleanKey, throwOnAuthError = forceLiveProbe)
                 provider == AiProvider.DEEPSEEK && cleanKey.isNotEmpty() ->
-                    fetchDeepSeekBalance(baseUrl, cleanKey)
+                    fetchDeepSeekBalance(baseUrl, cleanKey, throwOnAuthError = forceLiveProbe)
                 else -> null
+            }
+            if (balanceLabel != null) {
+                liveVerified = true
+            }
+
+            // When user manually clicks "Kiểm tra", verify live connectivity and capture real rate-limit headers
+            // for OpenAI / Groq / Custom URL (or if OpenRouter/DeepSeek didn't expose a balance endpoint).
+            if (forceLiveProbe && cleanModel.isNotEmpty() &&
+                (provider == AiProvider.OPENAI || provider == AiProvider.GROQ || provider == AiProvider.CUSTOM_OPENAI || balanceLabel == null)
+            ) {
+                val live = executeLiveTokenCheckProbe(provider, baseUrl, cleanKey, cleanModel)
+                liveVerified = true
+                live.rateLimits.remainingTokens?.let { rlRemTokens = it }
+                live.rateLimits.limitTokens?.let { rlLimTokens = it }
+                live.rateLimits.remainingRequests?.let { rlRemReqs = it }
+                live.rateLimits.limitRequests?.let { rlLimReqs = it }
             }
 
             AiExactContextTokenSync(
@@ -381,16 +424,76 @@ object OpenAiCompatApiClient {
                 inputTokenLimit = inputLimit,
                 outputTokenLimit = outputLimit,
                 currentContextTokens = lastMeasuredContextTokens.coerceAtLeast(0),
-                isServerVerified = lastMeasuredContextTokens > 0 || balanceLabel != null || lastRateLimitRemaining != null,
+                isServerVerified = liveVerified || lastMeasuredContextTokens > 0 ||
+                    balanceLabel != null || rlRemTokens != null || rlRemReqs != null,
                 verificationSource = when {
-                    balanceLabel != null -> "${provider.shortTitle} Balance + usage"
-                    lastRateLimitRemaining != null -> "${provider.shortTitle} Rate-limit + usage"
+                    balanceLabel != null -> "${provider.shortTitle} Balance"
+                    rlRemTokens != null || rlRemReqs != null -> "${provider.shortTitle} Rate-limit"
+                    liveVerified -> "${provider.shortTitle} Live"
                     else -> "${provider.shortTitle} usage"
                 },
-                rateLimitRemainingTokens = lastRateLimitRemaining,
-                rateLimitTotalTokens = lastRateLimitTotal,
+                rateLimitRemainingTokens = rlRemTokens,
+                rateLimitTotalTokens = rlLimTokens,
+                rateLimitRemainingRequests = rlRemReqs,
+                rateLimitTotalRequests = rlLimReqs,
                 accountBalanceLabel = balanceLabel
             )
+        }
+    }
+
+    private fun executeLiveTokenCheckProbe(
+        provider: AiProvider,
+        baseUrl: String,
+        apiKey: String,
+        modelId: String
+    ): ChatCompletionRawResult {
+        val payload = JSONObject().apply {
+            put("model", modelId)
+            put(
+                "messages",
+                JSONArray().put(JSONObject().put("role", "user").put("content", "ok"))
+            )
+            put("max_tokens", 1)
+            put("temperature", 0)
+        }
+        return try {
+            executeChatCompletionNonStream(
+                provider = provider,
+                baseUrl = baseUrl,
+                apiKey = apiKey,
+                payload = payload,
+                connectTimeoutMs = 9_000,
+                readTimeoutMs = PROBE_TIMEOUT_MS,
+                allowEmptyText = true
+            )
+        } catch (e: HttpStatusException) {
+            val msg = e.message.orEmpty()
+            if (e.statusCode == 400 && (
+                    msg.contains("max_completion_tokens", ignoreCase = true) ||
+                        msg.contains("max_tokens", ignoreCase = true) ||
+                        msg.contains("temperature", ignoreCase = true)
+                    )
+            ) {
+                val alt = JSONObject().apply {
+                    put("model", modelId)
+                    put(
+                        "messages",
+                        JSONArray().put(JSONObject().put("role", "user").put("content", "ok"))
+                    )
+                    put("max_completion_tokens", 16)
+                }
+                executeChatCompletionNonStream(
+                    provider = provider,
+                    baseUrl = baseUrl,
+                    apiKey = apiKey,
+                    payload = alt,
+                    connectTimeoutMs = 9_000,
+                    readTimeoutMs = PROBE_TIMEOUT_MS,
+                    allowEmptyText = true
+                )
+            } else {
+                throw e
+            }
         }
     }
 
@@ -417,27 +520,78 @@ object OpenAiCompatApiClient {
         }
     }
 
-    private fun fetchOpenRouterBalance(baseUrl: String, apiKey: String): String? {
-        val endpoints = listOf("$baseUrl/key", "$baseUrl/auth/key")
-        for (ep in endpoints) {
-            val conn = openConnection(ep, "GET", AiProvider.OPENROUTER, apiKey, connectTimeoutMs = 6_000, readTimeoutMs = 8_000)
+    private fun fetchOpenRouterBalance(
+        baseUrl: String,
+        apiKey: String,
+        throwOnAuthError: Boolean = false
+    ): String? {
+        // 1. Query `/credits` first to read exact account credit pool (`total_credits - total_usage`)
+        run {
+            val conn = openConnection("$baseUrl/credits", "GET", AiProvider.OPENROUTER, apiKey, connectTimeoutMs = 7_000, readTimeoutMs = 9_000)
             try {
                 val code = conn.responseCode
                 val body = readStream(if (code in 200..299) conn.inputStream else conn.errorStream)
+                if (code == 401 && throwOnAuthError) {
+                    throw HttpStatusException(code, formatHttpError(AiProvider.OPENROUTER, code, body))
+                }
+                if (code in 200..299) {
+                    val data = JSONObject(body).optJSONObject("data")
+                    if (data != null) {
+                        val totalCredits = data.optDouble("total_credits", Double.NaN)
+                        val totalUsage = data.optDouble("total_usage", Double.NaN)
+                        if (!totalCredits.isNaN() && !totalUsage.isNaN() && totalCredits > 0.0) {
+                            val remaining = (totalCredits - totalUsage).coerceAtLeast(0.0)
+                            return String.format(Locale.US, "Còn $%.3f / $%.2f", remaining, totalCredits)
+                        }
+                    }
+                }
+            } catch (e: HttpStatusException) {
+                throw e
+            } catch (_: Throwable) {
+                // fall through to /key
+            } finally {
+                conn.disconnect()
+            }
+        }
+
+        // 2. Fallback to `/key` (works for both free-tier and key-capped OpenRouter keys)
+        val endpoints = listOf("$baseUrl/key", "$baseUrl/auth/key")
+        for (ep in endpoints) {
+            val conn = openConnection(ep, "GET", AiProvider.OPENROUTER, apiKey, connectTimeoutMs = 7_000, readTimeoutMs = 9_000)
+            try {
+                val code = conn.responseCode
+                val body = readStream(if (code in 200..299) conn.inputStream else conn.errorStream)
+                if ((code == 401 || code == 403) && throwOnAuthError) {
+                    throw HttpStatusException(code, formatHttpError(AiProvider.OPENROUTER, code, body))
+                }
                 if (code in 200..299) {
                     val data = JSONObject(body).optJSONObject("data") ?: continue
                     val isFreeTier = data.optBoolean("is_free_tier", false)
                     val limitRemaining = if (data.has("limit_remaining") && !data.isNull("limit_remaining")) {
                         data.optDouble("limit_remaining", Double.NaN)
                     } else Double.NaN
+                    val limitTotal = if (data.has("limit") && !data.isNull("limit")) {
+                        data.optDouble("limit", Double.NaN)
+                    } else Double.NaN
+                    val usageDaily = data.optDouble("usage_daily", Double.NaN)
                     val usage = data.optDouble("usage", Double.NaN)
                     return when {
-                        !limitRemaining.isNaN() -> String.format(Locale.US, "Còn $%.3f", limitRemaining)
+                        !limitRemaining.isNaN() && !limitTotal.isNaN() && limitTotal > 0.0 ->
+                            String.format(Locale.US, "Còn $%.3f / $%.2f", limitRemaining, limitTotal)
+                        !limitRemaining.isNaN() ->
+                            String.format(Locale.US, "Còn $%.3f", limitRemaining)
+                        isFreeTier && !usageDaily.isNaN() && usageDaily > 0.0 ->
+                            String.format(Locale.US, "Free Tier · Hôm nay $%.4f", usageDaily)
                         isFreeTier -> "Gói Free Tier"
-                        !usage.isNaN() -> String.format(Locale.US, "Đã dùng $%.3f", usage)
-                        else -> null
+                        !usageDaily.isNaN() ->
+                            String.format(Locale.US, "Hôm nay $%.4f", usageDaily)
+                        !usage.isNaN() ->
+                            String.format(Locale.US, "Đã dùng $%.4f", usage)
+                        else -> "Key hợp lệ"
                     }
                 }
+            } catch (e: HttpStatusException) {
+                throw e
             } catch (_: Throwable) {
                 // ignore optional telemetry failure
             } finally {
@@ -447,20 +601,34 @@ object OpenAiCompatApiClient {
         return null
     }
 
-    private fun fetchDeepSeekBalance(baseUrl: String, apiKey: String): String? {
+    private fun fetchDeepSeekBalance(
+        baseUrl: String,
+        apiKey: String,
+        throwOnAuthError: Boolean = false
+    ): String? {
         val rootBase = baseUrl.removeSuffix("/v1")
-        val conn = openConnection("$rootBase/user/balance", "GET", AiProvider.DEEPSEEK, apiKey, connectTimeoutMs = 6_000, readTimeoutMs = 8_000)
+        val conn = openConnection("$rootBase/user/balance", "GET", AiProvider.DEEPSEEK, apiKey, connectTimeoutMs = 7_000, readTimeoutMs = 9_000)
         return try {
             val code = conn.responseCode
             val body = readStream(if (code in 200..299) conn.inputStream else conn.errorStream)
-            if (code !in 200..299) return null
+            if (code !in 200..299) {
+                if (throwOnAuthError && (code == 401 || code == 402 || code == 403)) {
+                    throw HttpStatusException(code, formatHttpError(AiProvider.DEEPSEEK, code, body))
+                }
+                return null
+            }
             val root = JSONObject(body)
+            val isAvailable = root.optBoolean("is_available", true)
             val infos = root.optJSONArray("balance_infos") ?: return null
             if (infos.length() == 0) return null
             val first = infos.optJSONObject(0) ?: return null
             val currency = first.optString("currency", "USD")
             val total = first.optString("total_balance", "").trim()
-            if (total.isNotEmpty()) "Số dư: $total $currency" else null
+            if (total.isNotEmpty()) {
+                if (isAvailable) "Số dư: $total $currency" else "Hết số dư ($total $currency)"
+            } else null
+        } catch (e: HttpStatusException) {
+            throw e
         } catch (_: Throwable) {
             null
         } finally {
@@ -597,7 +765,7 @@ object OpenAiCompatApiClient {
             conn.outputStream.use { it.write(bytes); it.flush() }
 
             val code = conn.responseCode
-            val (rlRemaining, rlTotal) = parseRateLimitHeaders(conn)
+            val rateLimits = parseRateLimitHeaders(conn)
             if (code !in 200..299) {
                 val errBody = readStream(conn.errorStream)
                 throw HttpStatusException(code, formatHttpError(provider, code, errBody))
@@ -607,7 +775,7 @@ object OpenAiCompatApiClient {
             if (!contentType.contains("text/event-stream")) {
                 // Server ignored stream=true and returned normal JSON
                 val body = readStream(conn.inputStream)
-                return parseNonStreamCompletionBody(body, rlRemaining, rlTotal)
+                return parseNonStreamCompletionBody(body, rateLimits, allowEmptyText = false)
             }
 
             val accumulated = StringBuilder()
@@ -622,7 +790,13 @@ object OpenAiCompatApiClient {
                     if (data == "[DONE]") break
                     val chunk = runCatching { JSONObject(data) }.getOrNull() ?: continue
 
-                    AiResponseParser.parseOpenAiUsage(chunk, rlRemaining, rlTotal)?.let { lastUsage = it }
+                    AiResponseParser.parseOpenAiUsage(
+                        root = chunk,
+                        rateLimitRemaining = rateLimits.remainingTokens,
+                        rateLimitTotal = rateLimits.limitTokens,
+                        rateLimitRemainingRequests = rateLimits.remainingRequests,
+                        rateLimitTotalRequests = rateLimits.limitRequests
+                    )?.let { lastUsage = it }
 
                     val choices = chunk.optJSONArray("choices")
                     val first = choices?.optJSONObject(0)
@@ -639,7 +813,7 @@ object OpenAiCompatApiClient {
             if (finalText.isEmpty()) {
                 throw IllegalStateException("AI trả về nội dung trống. Vui lòng thử lại.")
             }
-            return ChatCompletionRawResult(text = finalText, usage = lastUsage)
+            return ChatCompletionRawResult(text = finalText, usage = lastUsage, rateLimits = rateLimits)
         } catch (e: UnknownHostException) {
             throw IllegalStateException("Không có kết nối Internet hoặc không truy cập được máy chủ ${provider.shortTitle}.")
         } catch (e: SocketTimeoutException) {
@@ -655,7 +829,8 @@ object OpenAiCompatApiClient {
         apiKey: String,
         payload: JSONObject,
         connectTimeoutMs: Int = CONNECT_TIMEOUT_MS,
-        readTimeoutMs: Int = READ_TIMEOUT_MS
+        readTimeoutMs: Int = READ_TIMEOUT_MS,
+        allowEmptyText: Boolean = false
     ): ChatCompletionRawResult {
         val conn = openConnection("$baseUrl/chat/completions", "POST", provider, apiKey, connectTimeoutMs, readTimeoutMs)
         try {
@@ -664,12 +839,12 @@ object OpenAiCompatApiClient {
             conn.outputStream.use { it.write(bytes); it.flush() }
 
             val code = conn.responseCode
-            val (rlRemaining, rlTotal) = parseRateLimitHeaders(conn)
+            val rateLimits = parseRateLimitHeaders(conn)
             val body = readStream(if (code in 200..299) conn.inputStream else conn.errorStream)
             if (code !in 200..299) {
                 throw HttpStatusException(code, formatHttpError(provider, code, body))
             }
-            return parseNonStreamCompletionBody(body, rlRemaining, rlTotal)
+            return parseNonStreamCompletionBody(body, rateLimits, allowEmptyText = allowEmptyText)
         } catch (e: UnknownHostException) {
             throw IllegalStateException("Không có kết nối Internet hoặc không truy cập được máy chủ ${provider.shortTitle}.")
         } catch (e: SocketTimeoutException) {
@@ -681,20 +856,26 @@ object OpenAiCompatApiClient {
 
     private fun parseNonStreamCompletionBody(
         body: String,
-        rlRemaining: Long?,
-        rlTotal: Long?
+        rateLimits: RateLimitSnapshot,
+        allowEmptyText: Boolean
     ): ChatCompletionRawResult {
         val root = JSONObject(body)
-        val usage = AiResponseParser.parseOpenAiUsage(root, rlRemaining, rlTotal)
+        val usage = AiResponseParser.parseOpenAiUsage(
+            root = root,
+            rateLimitRemaining = rateLimits.remainingTokens,
+            rateLimitTotal = rateLimits.limitTokens,
+            rateLimitRemainingRequests = rateLimits.remainingRequests,
+            rateLimitTotalRequests = rateLimits.limitRequests
+        )
         val choices = root.optJSONArray("choices")
         val first = choices?.optJSONObject(0)
         val msg = first?.optJSONObject("message")
         val text = extractContentString(msg?.opt("content")).trim()
             .ifEmpty { first?.optString("text", "").orEmpty().trim() }
-        if (text.isEmpty()) {
+        if (text.isEmpty() && !allowEmptyText) {
             throw IllegalStateException("AI trả về nội dung trống. Vui lòng thử lại.")
         }
-        return ChatCompletionRawResult(text = text, usage = usage)
+        return ChatCompletionRawResult(text = text, usage = usage, rateLimits = rateLimits)
     }
 
     private fun extractContentString(raw: Any?): String = when (raw) {
@@ -735,10 +916,27 @@ object OpenAiCompatApiClient {
         }
     }
 
-    private fun parseRateLimitHeaders(conn: HttpURLConnection): Pair<Long?, Long?> {
-        val remaining = conn.getHeaderField("x-ratelimit-remaining-tokens")?.trim()?.toLongOrNull()
-        val limit = conn.getHeaderField("x-ratelimit-limit-tokens")?.trim()?.toLongOrNull()
-        return remaining to limit
+    private fun parseRateLimitHeaders(conn: HttpURLConnection): RateLimitSnapshot {
+        val lowerHeaders = LinkedHashMap<String, String>()
+        conn.headerFields?.forEach { (k, values) ->
+            val key = k?.lowercase()?.trim() ?: return@forEach
+            val value = values?.firstOrNull()?.trim().orEmpty()
+            if (value.isNotEmpty()) lowerHeaders[key] = value
+        }
+        fun longHeader(vararg names: String): Long? {
+            for (n in names) {
+                val raw = lowerHeaders[n] ?: conn.getHeaderField(n)?.trim()
+                val parsed = raw?.toLongOrNull()
+                if (parsed != null) return parsed
+            }
+            return null
+        }
+        return RateLimitSnapshot(
+            remainingTokens = longHeader("x-ratelimit-remaining-tokens", "x-ratelimit-remaining-tokens-minute"),
+            limitTokens = longHeader("x-ratelimit-limit-tokens", "x-ratelimit-limit-tokens-minute"),
+            remainingRequests = longHeader("x-ratelimit-remaining-requests", "x-ratelimit-remaining-requests-day"),
+            limitRequests = longHeader("x-ratelimit-limit-requests", "x-ratelimit-limit-requests-day")
+        )
     }
 
     private fun resolveBaseUrl(provider: AiProvider, customBaseUrl: String): String? {

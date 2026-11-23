@@ -186,28 +186,24 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     private fun createInitialState(): AiAssistantUiState {
         val allProfiles = keyPrefs.loadAllProfiles()
         val existingGoogleUser = GoogleAuthManager.currentUserProfile(appContext)
-        var activeProvider = keyPrefs.loadActiveProvider()
-        // If active provider is Google Account (not signed in) while another provider is configured, keep activeProvider
+        val activeProvider = keyPrefs.loadActiveProvider()
         val activeProfile = allProfiles[activeProvider] ?: AiProviderProfile(activeProvider)
         val ledgers = keyPrefs.loadTokenLedgers(activeProvider)
+        val restoredMessages = keyPrefs.loadChatMessages()
+        val maxRestoredSeq = restoredMessages.mapNotNull { m ->
+            m.id.substringAfter('_', "").toIntOrNull()
+        }.maxOrNull() ?: 0
+        if (maxRestoredSeq >= msgSeq) {
+            msgSeq = maxRestoredSeq + 1
+        }
         val ready = activeProfile.isReady(existingGoogleUser != null)
         val activeModelId = activeProfile.effectiveModelId
-        val matchedModel = activeProfile.syncedModels.firstOrNull { it.modelId.equals(activeModelId, ignoreCase = true) }
-        val activeLedger = ledgers[activeModelId.lowercase()]
-        val initialTokenState = AiContextTokenState(
+        val initialTokenState = buildBaselineTokenState(
+            provider = activeProvider,
             modelId = activeModelId,
-            inputTokenLimit = matchedModel?.inputTokenLimit?.takeIf { it > 0 }
-                ?: AiResponseParser.inferKnownContextWindow(activeModelId, activeProvider),
-            outputTokenLimit = matchedModel?.outputTokenLimit ?: 0,
-            usedTokensToday = activeLedger?.usedTokensToday ?: 0L,
-            requestsToday = activeLedger?.requestsToday ?: 0,
-            lastTurnUsage = activeLedger?.takeIf { it.lastTotalTokens > 0 }?.let {
-                AiTokenUsage(
-                    promptTokens = it.lastPromptTokens,
-                    outputTokens = it.lastOutputTokens,
-                    totalTokens = it.lastTotalTokens
-                )
-            }
+            models = activeProfile.syncedModels,
+            ledgers = ledgers,
+            hasConversationHistory = restoredMessages.isNotEmpty()
         )
         return AiAssistantUiState(
             activeProvider = activeProvider,
@@ -218,6 +214,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             syncedModelsUpdatedAt = activeProfile.syncedModelsUpdatedAt,
             tokenState = initialTokenState,
             tokenLedgers = ledgers,
+            messages = restoredMessages,
             activeSubTab = if (ready) AiSubTab.DOCS_QA else AiSubTab.API_KEY
         )
     }
@@ -1072,7 +1069,29 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun refreshTokenSync() {
-        syncContextTokens(forceFetchLimits = true)
+        syncContextTokens(forceFetchLimits = true, manualCheck = true)
+    }
+
+    private fun persistTokenSnapshot(provider: AiProvider, tokenState: AiContextTokenState) {
+        val cleanId = tokenState.modelId.trim()
+        if (cleanId.isEmpty()) return
+        keyPrefs.saveTokenSnapshot(
+            provider = provider,
+            snapshot = AiPersistedTokenSnapshot(
+                modelId = cleanId,
+                inputTokenLimit = tokenState.inputTokenLimit,
+                outputTokenLimit = tokenState.outputTokenLimit,
+                currentContextTokens = tokenState.currentContextTokens,
+                isServerVerified = tokenState.isServerVerified,
+                verificationSource = tokenState.verificationSource,
+                rateLimitRemainingTokens = tokenState.rateLimitRemainingTokens,
+                rateLimitTotalTokens = tokenState.rateLimitTotalTokens,
+                rateLimitRemainingRequests = tokenState.rateLimitRemainingRequests,
+                rateLimitTotalRequests = tokenState.rateLimitTotalRequests,
+                accountBalanceLabel = tokenState.accountBalanceLabel,
+                lastSyncedAtMillis = tokenState.lastSyncedAtMillis
+            )
+        )
     }
 
     private fun buildBaselineTokenState(
@@ -1080,20 +1099,32 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         modelId: String,
         models: List<AiSyncedModel>,
         ledgers: Map<String, AiModelTokenLedger>,
-        prev: AiContextTokenState? = null
+        prev: AiContextTokenState? = null,
+        hasConversationHistory: Boolean = false
     ): AiContextTokenState {
         val cleanId = modelId.trim().ifEmpty { provider.defaultModelId }
+        val keyLower = cleanId.lowercase()
         val matched = models.firstOrNull { it.modelId.equals(cleanId, ignoreCase = true) }
-        val ledger = ledgers[cleanId.lowercase()]
+        val ledger = ledgers[keyLower]
+        val snapshot = keyPrefs.loadTokenSnapshots(provider)[keyLower]
         val sameModelPrev = prev?.takeIf { it.modelId.equals(cleanId, ignoreCase = true) }
         val inferredLimit = matched?.inputTokenLimit?.takeIf { it > 0 }
             ?: sameModelPrev?.inputTokenLimit?.takeIf { it > 0 }
+            ?: snapshot?.inputTokenLimit?.takeIf { it > 0 }
             ?: AiResponseParser.inferKnownContextWindow(cleanId, provider)
+        val restoredContext = when {
+            sameModelPrev != null && sameModelPrev.currentContextTokens > 0 -> sameModelPrev.currentContextTokens
+            snapshot != null && snapshot.currentContextTokens > 0 -> snapshot.currentContextTokens
+            hasConversationHistory && (ledger?.lastTotalTokens ?: 0) > 0 -> ledger?.lastTotalTokens ?: 0
+            else -> 0
+        }
         return AiContextTokenState(
             modelId = cleanId,
             inputTokenLimit = inferredLimit,
-            outputTokenLimit = matched?.outputTokenLimit?.takeIf { it > 0 } ?: sameModelPrev?.outputTokenLimit ?: 0,
-            currentContextTokens = sameModelPrev?.currentContextTokens ?: 0,
+            outputTokenLimit = matched?.outputTokenLimit?.takeIf { it > 0 }
+                ?: sameModelPrev?.outputTokenLimit?.takeIf { it > 0 }
+                ?: snapshot?.outputTokenLimit ?: 0,
+            currentContextTokens = restoredContext,
             lastTurnUsage = ledger?.takeIf { it.lastTotalTokens > 0 }?.let {
                 AiTokenUsage(
                     promptTokens = it.lastPromptTokens,
@@ -1104,12 +1135,16 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             usedTokensToday = ledger?.usedTokensToday ?: 0L,
             requestsToday = ledger?.requestsToday ?: 0,
             isSyncingTokens = sameModelPrev?.isSyncingTokens ?: false,
-            isServerVerified = sameModelPrev?.isServerVerified ?: false,
-            verificationSource = sameModelPrev?.verificationSource.orEmpty(),
-            rateLimitRemainingTokens = sameModelPrev?.rateLimitRemainingTokens,
-            rateLimitTotalTokens = sameModelPrev?.rateLimitTotalTokens,
-            accountBalanceLabel = sameModelPrev?.accountBalanceLabel,
-            lastSyncedAtMillis = sameModelPrev?.lastSyncedAtMillis ?: 0L,
+            isServerVerified = sameModelPrev?.isServerVerified ?: snapshot?.isServerVerified ?: false,
+            verificationSource = sameModelPrev?.verificationSource?.ifBlank { null }
+                ?: snapshot?.verificationSource.orEmpty(),
+            rateLimitRemainingTokens = sameModelPrev?.rateLimitRemainingTokens ?: snapshot?.rateLimitRemainingTokens,
+            rateLimitTotalTokens = sameModelPrev?.rateLimitTotalTokens ?: snapshot?.rateLimitTotalTokens,
+            rateLimitRemainingRequests = sameModelPrev?.rateLimitRemainingRequests ?: snapshot?.rateLimitRemainingRequests,
+            rateLimitTotalRequests = sameModelPrev?.rateLimitTotalRequests ?: snapshot?.rateLimitTotalRequests,
+            accountBalanceLabel = sameModelPrev?.accountBalanceLabel ?: snapshot?.accountBalanceLabel,
+            lastSyncedAtMillis = sameModelPrev?.lastSyncedAtMillis?.takeIf { it > 0L }
+                ?: snapshot?.lastSyncedAtMillis ?: 0L,
             syncError = sameModelPrev?.syncError
         )
     }
@@ -1122,6 +1157,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     ) {
         if (usage == null || !usage.hasData) return
         val updatedLedgers = keyPrefs.recordTokenUsage(provider, modelId, usage)
+        val now = System.currentTimeMillis()
+        var snapshotToPersist: AiContextTokenState? = null
         _uiState.update { cur ->
             if (cur.activeProvider != provider) return@update cur
             val activeId = cur.activeProfile.effectiveModelId
@@ -1142,9 +1179,11 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     verificationSource = cur.tokenState.verificationSource.ifBlank { "${provider.shortTitle} usage" },
                     rateLimitRemainingTokens = usage.rateLimitRemainingTokens ?: cur.tokenState.rateLimitRemainingTokens,
                     rateLimitTotalTokens = usage.rateLimitTotalTokens ?: cur.tokenState.rateLimitTotalTokens,
-                    lastSyncedAtMillis = System.currentTimeMillis(),
+                    rateLimitRemainingRequests = usage.rateLimitRemainingRequests ?: cur.tokenState.rateLimitRemainingRequests,
+                    rateLimitTotalRequests = usage.rateLimitTotalRequests ?: cur.tokenState.rateLimitTotalRequests,
+                    lastSyncedAtMillis = now,
                     syncError = null
-                )
+                ).also { snapshotToPersist = it }
             } else {
                 cur.tokenState
             }
@@ -1153,12 +1192,32 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 tokenState = nextTokenState
             )
         }
+        snapshotToPersist?.let { persistTokenSnapshot(provider, it) }
     }
 
-    private fun syncContextTokens(forceFetchLimits: Boolean = false) {
+    private fun syncContextTokens(
+        forceFetchLimits: Boolean = false,
+        manualCheck: Boolean = false
+    ) {
         val state = _uiState.value
-        if (!state.isAiReady) return
         val provider = state.activeProvider
+        if (!state.isAiReady) {
+            if (manualCheck) {
+                _uiState.update { cur ->
+                    cur.copy(
+                        tokenState = cur.tokenState.copy(
+                            isSyncingTokens = false,
+                            syncError = if (provider == AiProvider.GOOGLE_ACCOUNT) {
+                                "Hãy đăng nhập Google hoặc chọn nhà cung cấp API Key trước khi kiểm tra token."
+                            } else {
+                                "Hãy nhập API Key / Base URL cho ${provider.shortTitle} trước khi kiểm tra token."
+                            }
+                        )
+                    )
+                }
+            }
+            return
+        }
         val profile = state.activeProfile
         val activeModelId = profile.effectiveModelId
         val matchedModel = state.syncedModels.firstOrNull { it.modelId.equals(activeModelId, ignoreCase = true) }
@@ -1168,26 +1227,35 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         val baseUrl = profile.effectiveBaseUrl
         val historySnapshot = state.messages
         val attachedPage = state.attachedPdfPage
-        val prevMeasured = if (state.messages.isEmpty()) 0 else state.tokenState.currentContextTokens
+        val prevMeasured = if (state.messages.isEmpty()) {
+            0
+        } else {
+            state.tokenState.currentContextTokens.takeIf { it > 0 }
+                ?: state.tokenState.lastTurnUsage?.totalTokens
+                ?: 0
+        }
         val prevRlRem = state.tokenState.rateLimitRemainingTokens
         val prevRlTotal = state.tokenState.rateLimitTotalTokens
+        val prevRlRemReq = state.tokenState.rateLimitRemainingRequests
+        val prevRlTotalReq = state.tokenState.rateLimitTotalRequests
 
         activeTokenSyncJob?.cancel()
         activeTokenSyncJob = viewModelScope.launch {
             _uiState.update { cur ->
                 cur.copy(
                     tokenState = buildBaselineTokenState(
-                        provider,
-                        activeModelId,
-                        cur.syncedModels,
-                        cur.tokenLedgers,
-                        cur.tokenState
+                        provider = provider,
+                        modelId = activeModelId,
+                        models = cur.syncedModels,
+                        ledgers = cur.tokenLedgers,
+                        prev = cur.tokenState,
+                        hasConversationHistory = cur.messages.isNotEmpty()
                     ).copy(isSyncingTokens = true, syncError = null)
                 )
             }
             try {
                 val pageBmp = attachedPage?.let { renderPdfPageForAi(it) }
-                val res = withTimeout(18_000L) {
+                val res = withTimeout(20_000L) {
                     when (provider) {
                         AiProvider.GOOGLE_ACCOUNT -> FirebaseAiClient.countDocsContextTokens(
                             modelId = activeModelId,
@@ -1228,11 +1296,15 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                             knownOutputLimit = knownOutput,
                             lastMeasuredContextTokens = prevMeasured,
                             lastRateLimitRemaining = prevRlRem,
-                            lastRateLimitTotal = prevRlTotal
+                            lastRateLimitTotal = prevRlTotal,
+                            lastRateLimitRemainingRequests = prevRlRemReq,
+                            lastRateLimitTotalRequests = prevRlTotalReq,
+                            forceLiveProbe = manualCheck
                         )
                     }
                 }
                 res.onSuccess { exact ->
+                    var persistedState: AiContextTokenState? = null
                     _uiState.update { cur ->
                         if (cur.activeProvider != provider) return@update cur
                         val updatedSynced = if (exact.inputTokenLimit > 0) {
@@ -1253,33 +1325,38 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                             )
                         }
                         val ledger = cur.tokenLedgers[activeModelId.lowercase()]
+                        val nextTokenState = cur.tokenState.copy(
+                            modelId = exact.modelId,
+                            inputTokenLimit = exact.inputTokenLimit.takeIf { it > 0 } ?: cur.tokenState.inputTokenLimit,
+                            outputTokenLimit = exact.outputTokenLimit.takeIf { it > 0 } ?: cur.tokenState.outputTokenLimit,
+                            currentContextTokens = exact.currentContextTokens,
+                            usedTokensToday = ledger?.usedTokensToday ?: cur.tokenState.usedTokensToday,
+                            requestsToday = ledger?.requestsToday ?: cur.tokenState.requestsToday,
+                            isSyncingTokens = false,
+                            isServerVerified = exact.isServerVerified,
+                            verificationSource = exact.verificationSource,
+                            rateLimitRemainingTokens = exact.rateLimitRemainingTokens ?: cur.tokenState.rateLimitRemainingTokens,
+                            rateLimitTotalTokens = exact.rateLimitTotalTokens ?: cur.tokenState.rateLimitTotalTokens,
+                            rateLimitRemainingRequests = exact.rateLimitRemainingRequests ?: cur.tokenState.rateLimitRemainingRequests,
+                            rateLimitTotalRequests = exact.rateLimitTotalRequests ?: cur.tokenState.rateLimitTotalRequests,
+                            accountBalanceLabel = exact.accountBalanceLabel ?: cur.tokenState.accountBalanceLabel,
+                            lastSyncedAtMillis = exact.syncedAtMillis,
+                            syncError = null
+                        )
+                        persistedState = nextTokenState
                         cur.copy(
                             syncedModels = updatedSynced,
-                            tokenState = cur.tokenState.copy(
-                                modelId = exact.modelId,
-                                inputTokenLimit = exact.inputTokenLimit.takeIf { it > 0 } ?: cur.tokenState.inputTokenLimit,
-                                outputTokenLimit = exact.outputTokenLimit.takeIf { it > 0 } ?: cur.tokenState.outputTokenLimit,
-                                currentContextTokens = exact.currentContextTokens,
-                                usedTokensToday = ledger?.usedTokensToday ?: cur.tokenState.usedTokensToday,
-                                requestsToday = ledger?.requestsToday ?: cur.tokenState.requestsToday,
-                                isSyncingTokens = false,
-                                isServerVerified = exact.isServerVerified,
-                                verificationSource = exact.verificationSource,
-                                rateLimitRemainingTokens = exact.rateLimitRemainingTokens ?: cur.tokenState.rateLimitRemainingTokens,
-                                rateLimitTotalTokens = exact.rateLimitTotalTokens ?: cur.tokenState.rateLimitTotalTokens,
-                                accountBalanceLabel = exact.accountBalanceLabel ?: cur.tokenState.accountBalanceLabel,
-                                lastSyncedAtMillis = exact.syncedAtMillis,
-                                syncError = null
-                            )
+                            tokenState = nextTokenState
                         )
                     }
+                    persistedState?.let { persistTokenSnapshot(provider, it) }
                 }.onFailure { err ->
                     _uiState.update { cur ->
                         if (cur.activeProvider != provider) return@update cur
                         cur.copy(
                             tokenState = cur.tokenState.copy(
                                 isSyncingTokens = false,
-                                syncError = err.localizedMessage?.take(120)
+                                syncError = err.localizedMessage?.take(160)
                             )
                         )
                     }
@@ -1292,7 +1369,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     cur.copy(
                         tokenState = cur.tokenState.copy(
                             isSyncingTokens = false,
-                            syncError = (e.localizedMessage ?: "Không thể đồng bộ token").take(120)
+                            syncError = (e.localizedMessage ?: "Không thể đồng bộ token").take(160)
                         )
                     )
                 }
@@ -1490,7 +1567,12 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     fun clearChatHistory() {
         activeDocsJob?.cancel()
         activeDocsJob = null
+        keyPrefs.saveChatMessages(emptyList())
+        val activeProvider = _uiState.value.activeProvider
+        var resetTokenState: AiContextTokenState? = null
         _uiState.update {
+            val nextTok = it.tokenState.copy(currentContextTokens = 0)
+            resetTokenState = nextTok
             it.copy(
                 messages = emptyList(),
                 isAskingDocs = false,
@@ -1498,9 +1580,11 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 docsStatusText = "",
                 docsElapsedSeconds = 0,
                 lastFailedDocsQuestion = null,
-                attachedPdfPage = null
+                attachedPdfPage = null,
+                tokenState = nextTok
             )
         }
+        resetTokenState?.let { persistTokenSnapshot(activeProvider, it) }
         syncContextTokens()
     }
 
@@ -1553,9 +1637,11 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         val historySnapshot = snapshot.messages
         val providerName = provider.shortTitle
 
+        val messagesWithUser = snapshot.messages + userMsg
+        keyPrefs.saveChatMessages(messagesWithUser)
         _uiState.update {
             it.copy(
-                messages = it.messages + userMsg,
+                messages = messagesWithUser,
                 isAskingDocs = true,
                 streamingDocsAnswer = "",
                 docsStatusText = if (explicitPage != null) {
@@ -1646,12 +1732,15 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                         text = reply.answer,
                         suggestedPages = reply.suggestedPages
                     )
+                    var updatedMsgs: List<AiChatMessage> = emptyList()
                     _uiState.update {
+                        updatedMsgs = it.messages + aiMsg
                         it.copy(
-                            messages = it.messages + aiMsg,
+                            messages = updatedMsgs,
                             lastFailedDocsQuestion = null
                         )
                     }
+                    keyPrefs.saveChatMessages(updatedMsgs)
                     val resolvedModel = _uiState.value.activeProfile.effectiveModelId
                     recordServerTokenUsage(provider, resolvedModel, reply.tokenUsage, updateContextFromTurn = true)
                     syncContextTokens()
@@ -1663,12 +1752,15 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                         text = err.localizedMessage ?: "Không thể nhận phản hồi từ AI.",
                         isError = true
                     )
+                    var updatedMsgs: List<AiChatMessage> = emptyList()
                     _uiState.update {
+                        updatedMsgs = it.messages + errMsg
                         it.copy(
-                            messages = it.messages + errMsg,
+                            messages = updatedMsgs,
                             lastFailedDocsQuestion = question
                         )
                     }
+                    keyPrefs.saveChatMessages(updatedMsgs)
                 }
             } catch (e: TimeoutCancellationException) {
                 Log.e(TAG, "Document Q&A timed out after 90s", e)
@@ -1678,12 +1770,15 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     text = "AI không phản hồi sau 90 giây. Hãy kiểm tra kết nối mạng, bấm Thử lại hoặc chọn Gemini 3.5 Flash-Lite trong mục Tài khoản / Key.",
                     isError = true
                 )
+                var updatedMsgs: List<AiChatMessage> = emptyList()
                 _uiState.update {
+                    updatedMsgs = it.messages + errMsg
                     it.copy(
-                        messages = it.messages + errMsg,
+                        messages = updatedMsgs,
                         lastFailedDocsQuestion = question
                     )
                 }
+                keyPrefs.saveChatMessages(updatedMsgs)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -1694,12 +1789,15 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     text = "Lỗi không mong muốn khi gọi AI (${e.javaClass.simpleName}): ${e.localizedMessage ?: "Vui lòng thử lại."}",
                     isError = true
                 )
+                var updatedMsgs: List<AiChatMessage> = emptyList()
                 _uiState.update {
+                    updatedMsgs = it.messages + errMsg
                     it.copy(
-                        messages = it.messages + errMsg,
+                        messages = updatedMsgs,
                         lastFailedDocsQuestion = question
                     )
                 }
+                keyPrefs.saveChatMessages(updatedMsgs)
             } finally {
                 timerJob.cancel()
                 _uiState.update {

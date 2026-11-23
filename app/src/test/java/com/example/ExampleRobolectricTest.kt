@@ -1432,7 +1432,52 @@ class ExampleRobolectricTest {
         assertTrue(prefs.loadProfile(AiProvider.ANTHROPIC).hasKey)
         assertTrue(prefs.loadProfile(AiProvider.CUSTOM_OPENAI).isReady(false))
 
+        // 6. Token snapshots & chat history persist across app restarts (fresh AiKeyPreferences instance)
+        prefs.saveTokenSnapshot(
+            AiProvider.OPENROUTER,
+            AiPersistedTokenSnapshot(
+                modelId = "openai/gpt-4o-mini",
+                inputTokenLimit = 128_000,
+                outputTokenLimit = 16_384,
+                currentContextTokens = 4_250,
+                isServerVerified = true,
+                verificationSource = "OpenRouter Balance",
+                rateLimitRemainingTokens = 42_000L,
+                rateLimitTotalTokens = 60_000L,
+                rateLimitRemainingRequests = 95L,
+                rateLimitTotalRequests = 100L,
+                accountBalanceLabel = "Còn $4.820 / $5.00",
+                lastSyncedAtMillis = 1_700_000_000_000L
+            )
+        )
+        prefs.saveChatMessages(
+            listOf(
+                AiChatMessage(id = "u_1", isUser = true, text = "Tóm tắt nguyên hàm từng phần", attachedPdfPage = 120),
+                AiChatMessage(
+                    id = "a_2",
+                    isUser = false,
+                    text = "Công thức: ∫ u dv = uv - ∫ v du",
+                    suggestedPages = listOf(AiPdfPageSuggestion(120, "Nguyên hàm từng phần", "Trang có công thức"))
+                )
+            )
+        )
+        val freshPrefsAfterRestart = AiKeyPreferences(context)
+        val restoredSnap = freshPrefsAfterRestart.loadTokenSnapshots(AiProvider.OPENROUTER)["openai/gpt-4o-mini"]
+        assertEquals(4_250, restoredSnap?.currentContextTokens)
+        assertEquals(128_000, restoredSnap?.inputTokenLimit)
+        assertEquals(42_000L, restoredSnap?.rateLimitRemainingTokens)
+        assertEquals(95L, restoredSnap?.rateLimitRemainingRequests)
+        assertEquals("Còn $4.820 / $5.00", restoredSnap?.accountBalanceLabel)
+        assertTrue(restoredSnap?.isServerVerified == true)
+
+        val restoredMsgs = freshPrefsAfterRestart.loadChatMessages()
+        assertEquals(2, restoredMsgs.size)
+        assertEquals(120, restoredMsgs[0].attachedPdfPage)
+        assertEquals(1, restoredMsgs[1].suggestedPages.size)
+        assertEquals(120, restoredMsgs[1].suggestedPages[0].page)
+
         // Clean up test prefs
+        freshPrefsAfterRestart.saveChatMessages(emptyList())
         prefs.clearProviderKey(AiProvider.ANTHROPIC)
         prefs.clearProviderKey(AiProvider.CUSTOM_OPENAI)
     }

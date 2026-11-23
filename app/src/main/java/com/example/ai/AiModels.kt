@@ -80,7 +80,9 @@ data class AiTokenUsage(
     val thoughtsTokens: Int = 0,
     val totalTokens: Int = 0,
     val rateLimitRemainingTokens: Long? = null,
-    val rateLimitTotalTokens: Long? = null
+    val rateLimitTotalTokens: Long? = null,
+    val rateLimitRemainingRequests: Long? = null,
+    val rateLimitTotalRequests: Long? = null
 ) {
     val hasData: Boolean get() = totalTokens > 0 || promptTokens > 0 || outputTokens > 0
 }
@@ -98,6 +100,21 @@ data class AiModelTokenLedger(
     val lastUpdatedAtMillis: Long = 0L
 )
 
+data class AiPersistedTokenSnapshot(
+    val modelId: String,
+    val inputTokenLimit: Int = 0,
+    val outputTokenLimit: Int = 0,
+    val currentContextTokens: Int = 0,
+    val isServerVerified: Boolean = false,
+    val verificationSource: String = "",
+    val rateLimitRemainingTokens: Long? = null,
+    val rateLimitTotalTokens: Long? = null,
+    val rateLimitRemainingRequests: Long? = null,
+    val rateLimitTotalRequests: Long? = null,
+    val accountBalanceLabel: String? = null,
+    val lastSyncedAtMillis: Long = 0L
+)
+
 data class AiExactContextTokenSync(
     val modelId: String,
     val inputTokenLimit: Int,
@@ -108,6 +125,8 @@ data class AiExactContextTokenSync(
     val verificationSource: String = "Google countTokens",
     val rateLimitRemainingTokens: Long? = null,
     val rateLimitTotalTokens: Long? = null,
+    val rateLimitRemainingRequests: Long? = null,
+    val rateLimitTotalRequests: Long? = null,
     val accountBalanceLabel: String? = null
 )
 
@@ -124,6 +143,8 @@ data class AiContextTokenState(
     val verificationSource: String = "",
     val rateLimitRemainingTokens: Long? = null,
     val rateLimitTotalTokens: Long? = null,
+    val rateLimitRemainingRequests: Long? = null,
+    val rateLimitTotalRequests: Long? = null,
     val accountBalanceLabel: String? = null,
     val lastSyncedAtMillis: Long = 0L,
     val syncError: String? = null
@@ -399,6 +420,151 @@ class AiKeyPreferences(context: Context) {
         return currentMap
     }
 
+    fun loadTokenSnapshots(provider: AiProvider): Map<String, AiPersistedTokenSnapshot> {
+        val raw = prefs.getString(providerKey(provider, "token_snapshots_v1"), null).orEmpty()
+        if (raw.isBlank()) return emptyMap()
+        return runCatching {
+            val arr = JSONArray(raw)
+            val map = LinkedHashMap<String, AiPersistedTokenSnapshot>()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.optString("modelId").trim()
+                if (id.isEmpty()) continue
+                map[id.lowercase()] = AiPersistedTokenSnapshot(
+                    modelId = id,
+                    inputTokenLimit = o.optInt("inputTokenLimit", 0),
+                    outputTokenLimit = o.optInt("outputTokenLimit", 0),
+                    currentContextTokens = o.optInt("currentContextTokens", 0),
+                    isServerVerified = o.optBoolean("isServerVerified", false),
+                    verificationSource = o.optString("verificationSource", ""),
+                    rateLimitRemainingTokens = if (o.has("rateLimitRemainingTokens") && !o.isNull("rateLimitRemainingTokens")) {
+                        o.optLong("rateLimitRemainingTokens")
+                    } else null,
+                    rateLimitTotalTokens = if (o.has("rateLimitTotalTokens") && !o.isNull("rateLimitTotalTokens")) {
+                        o.optLong("rateLimitTotalTokens")
+                    } else null,
+                    rateLimitRemainingRequests = if (o.has("rateLimitRemainingRequests") && !o.isNull("rateLimitRemainingRequests")) {
+                        o.optLong("rateLimitRemainingRequests")
+                    } else null,
+                    rateLimitTotalRequests = if (o.has("rateLimitTotalRequests") && !o.isNull("rateLimitTotalRequests")) {
+                        o.optLong("rateLimitTotalRequests")
+                    } else null,
+                    accountBalanceLabel = o.optString("accountBalanceLabel", "").trim().ifEmpty { null },
+                    lastSyncedAtMillis = o.optLong("lastSyncedAtMillis", 0L)
+                )
+            }
+            map
+        }.getOrDefault(emptyMap())
+    }
+
+    fun saveTokenSnapshot(provider: AiProvider, snapshot: AiPersistedTokenSnapshot) {
+        val cleanId = snapshot.modelId.trim()
+            .removePrefix("publishers/google/models/")
+            .removePrefix("models/")
+        if (cleanId.isEmpty()) return
+        val currentMap = loadTokenSnapshots(provider).toMutableMap()
+        currentMap[cleanId.lowercase()] = snapshot.copy(modelId = cleanId)
+        val arr = JSONArray()
+        currentMap.values.forEach { s ->
+            arr.put(
+                JSONObject().apply {
+                    put("modelId", s.modelId)
+                    put("inputTokenLimit", s.inputTokenLimit)
+                    put("outputTokenLimit", s.outputTokenLimit)
+                    put("currentContextTokens", s.currentContextTokens)
+                    put("isServerVerified", s.isServerVerified)
+                    put("verificationSource", s.verificationSource)
+                    if (s.rateLimitRemainingTokens != null) put("rateLimitRemainingTokens", s.rateLimitRemainingTokens)
+                    if (s.rateLimitTotalTokens != null) put("rateLimitTotalTokens", s.rateLimitTotalTokens)
+                    if (s.rateLimitRemainingRequests != null) put("rateLimitRemainingRequests", s.rateLimitRemainingRequests)
+                    if (s.rateLimitTotalRequests != null) put("rateLimitTotalRequests", s.rateLimitTotalRequests)
+                    if (!s.accountBalanceLabel.isNullOrBlank()) put("accountBalanceLabel", s.accountBalanceLabel)
+                    put("lastSyncedAtMillis", s.lastSyncedAtMillis)
+                }
+            )
+        }
+        prefs.edit().putString(providerKey(provider, "token_snapshots_v1"), arr.toString()).apply()
+    }
+
+    fun loadChatMessages(): List<AiChatMessage> {
+        val raw = prefs.getString(KEY_DOCS_CHAT_HISTORY, null).orEmpty()
+        if (raw.isBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optString("id").trim()
+                    val text = o.optString("text", "")
+                    if (id.isEmpty() || text.isBlank()) continue
+                    val pagesArr = o.optJSONArray("suggestedPages")
+                    val pages = buildList {
+                        if (pagesArr != null) {
+                            for (j in 0 until pagesArr.length()) {
+                                val p = pagesArr.optJSONObject(j) ?: continue
+                                val pageNum = p.optInt("page", 0)
+                                if (pageNum in 1..PDF_TOTAL_PAGES) {
+                                    add(
+                                        AiPdfPageSuggestion(
+                                            page = pageNum,
+                                            title = p.optString("title", "Trang $pageNum"),
+                                            reason = p.optString("reason", "")
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    val attached = o.optInt("attachedPdfPage", 0).takeIf { it in 1..PDF_TOTAL_PAGES }
+                    add(
+                        AiChatMessage(
+                            id = id,
+                            isUser = o.optBoolean("isUser", false),
+                            text = text,
+                            suggestedPages = pages,
+                            attachedPdfPage = attached,
+                            isError = o.optBoolean("isError", false)
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun saveChatMessages(messages: List<AiChatMessage>) {
+        val trimmed = messages.filter { it.text.isNotBlank() }.takeLast(40)
+        if (trimmed.isEmpty()) {
+            prefs.edit().remove(KEY_DOCS_CHAT_HISTORY).apply()
+            return
+        }
+        val arr = JSONArray()
+        trimmed.forEach { msg ->
+            arr.put(
+                JSONObject().apply {
+                    put("id", msg.id)
+                    put("isUser", msg.isUser)
+                    put("text", msg.text)
+                    put("isError", msg.isError)
+                    if (msg.attachedPdfPage != null) put("attachedPdfPage", msg.attachedPdfPage)
+                    if (msg.suggestedPages.isNotEmpty()) {
+                        val pArr = JSONArray()
+                        msg.suggestedPages.forEach { p ->
+                            pArr.put(
+                                JSONObject().apply {
+                                    put("page", p.page)
+                                    put("title", p.title)
+                                    put("reason", p.reason)
+                                }
+                            )
+                        }
+                        put("suggestedPages", pArr)
+                    }
+                }
+            )
+        }
+        prefs.edit().putString(KEY_DOCS_CHAT_HISTORY, arr.toString()).apply()
+    }
+
     // Legacy single-provider convenience wrappers (preserve backward compatibility for callers & unit tests)
     fun load(): AiKeyConfig {
         val active = loadActiveProvider()
@@ -556,6 +722,7 @@ class AiKeyPreferences(context: Context) {
         private const val KEY_TOKEN_LEDGERS = "gemini_token_ledgers_v1"
         private const val KEY_ACTIVE_PROVIDER = "ai_active_provider_v2"
         private const val KEY_MULTI_PROVIDER_MIGRATED = "ai_multi_provider_migrated_v2"
+        private const val KEY_DOCS_CHAT_HISTORY = "ai_docs_chat_history_v1"
 
         fun currentDayKey(nowMillis: Long = System.currentTimeMillis()): String =
             SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(nowMillis))
@@ -713,7 +880,9 @@ object AiResponseParser {
     fun parseOpenAiUsage(
         root: JSONObject?,
         rateLimitRemaining: Long? = null,
-        rateLimitTotal: Long? = null
+        rateLimitTotal: Long? = null,
+        rateLimitRemainingRequests: Long? = null,
+        rateLimitTotalRequests: Long? = null
     ): AiTokenUsage? {
         val u = root?.optJSONObject("usage") ?: return null
         val prompt = u.optInt("prompt_tokens", u.optInt("input_tokens", 0)).coerceAtLeast(0)
@@ -728,7 +897,9 @@ object AiResponseParser {
                 thoughtsTokens = reasoning,
                 totalTokens = if (total > 0) total else (prompt + output),
                 rateLimitRemainingTokens = rateLimitRemaining,
-                rateLimitTotalTokens = rateLimitTotal
+                rateLimitTotalTokens = rateLimitTotal,
+                rateLimitRemainingRequests = rateLimitRemainingRequests,
+                rateLimitTotalRequests = rateLimitTotalRequests
             )
         } else null
     }
@@ -736,7 +907,9 @@ object AiResponseParser {
     fun parseAnthropicUsage(
         usageObj: JSONObject?,
         rateLimitRemaining: Long? = null,
-        rateLimitTotal: Long? = null
+        rateLimitTotal: Long? = null,
+        rateLimitRemainingRequests: Long? = null,
+        rateLimitTotalRequests: Long? = null
     ): AiTokenUsage? {
         if (usageObj == null) return null
         val input = usageObj.optInt("input_tokens", 0).coerceAtLeast(0)
@@ -751,9 +924,18 @@ object AiResponseParser {
                 outputTokens = output,
                 totalTokens = total,
                 rateLimitRemainingTokens = rateLimitRemaining,
-                rateLimitTotalTokens = rateLimitTotal
+                rateLimitTotalTokens = rateLimitTotal,
+                rateLimitRemainingRequests = rateLimitRemainingRequests,
+                rateLimitTotalRequests = rateLimitTotalRequests
             )
         } else null
+    }
+
+    fun formatSyncTime(millis: Long): String {
+        if (millis <= 0L) return ""
+        return runCatching {
+            SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(millis))
+        }.getOrDefault("")
     }
 
     fun formatExactTokens(value: Long): String {
@@ -980,12 +1162,14 @@ object AiResponseParser {
     internal fun inferKnownContextWindow(modelId: String, provider: AiProvider): Int {
         val id = modelId.lowercase()
         return when {
+            id.contains("gemini") -> 1_048_576
             id.contains("gpt-4.1") -> 1_047_576
             id.contains("gpt-4o") || id.contains("gpt-4-turbo") -> 128_000
             id.startsWith("o1") || id.startsWith("o3") || id.startsWith("o4") -> 200_000
             id.contains("claude") -> 200_000
             id.contains("deepseek") -> 65_536
             id.contains("llama-4") || id.contains("llama-3.3") || id.contains("llama-3.1") -> 131_072
+            provider == AiProvider.GOOGLE_ACCOUNT || provider == AiProvider.GOOGLE_API_KEY -> 1_048_576
             provider == AiProvider.ANTHROPIC -> 200_000
             else -> 0
         }

@@ -5,7 +5,9 @@ import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
@@ -111,16 +113,17 @@ fun AiTokenStatusCard(
                     )
                 }
             }
-            Box(
+            Row(
                 modifier = Modifier
-                    .defaultMinSize(minWidth = 34.dp, minHeight = 32.dp)
+                    .defaultMinSize(minHeight = 36.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(CyanAccent.copy(alpha = 0.14f))
-                    .border(1.dp, CyanAccent.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                    .background(CyanAccent.copy(alpha = 0.16f))
+                    .border(1.dp, CyanAccent.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
                     .clickable(enabled = !tokenState.isSyncingTokens) { onRefreshTokens() }
-                    .padding(horizontal = 7.dp, vertical = 4.dp)
+                    .padding(horizontal = 9.dp, vertical = 5.dp)
                     .testTag("ai_refresh_tokens_btn"),
-                contentAlignment = Alignment.Center
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 if (tokenState.isSyncingTokens) {
                     CircularProgressIndicator(
@@ -128,12 +131,26 @@ fun AiTokenStatusCard(
                         strokeWidth = 1.8.dp,
                         modifier = Modifier.size(13.dp)
                     )
+                    Text(
+                        text = "Đang đo...",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = CyanAccent,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 } else {
                     Icon(
                         imageVector = Icons.Default.Refresh,
-                        contentDescription = "Đồng bộ lại số token chính xác",
+                        contentDescription = "Kiểm tra lại số token từ máy chủ",
                         tint = CyanAccent,
-                        modifier = Modifier.size(15.dp)
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = "Kiểm tra",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = CyanAccent,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
@@ -202,10 +219,15 @@ fun AiTokenStatusCard(
             )
         }
 
-        // Optional live rate-limit or credit balance telemetry returned by provider headers / balance endpoints
-        if (tokenState.rateLimitRemainingTokens != null || !tokenState.accountBalanceLabel.isNullOrBlank()) {
+        // Optional live rate-limit (TPM / RPM-RPD) or credit balance telemetry returned by provider headers / balance endpoints
+        if (tokenState.rateLimitRemainingTokens != null ||
+            tokenState.rateLimitRemainingRequests != null ||
+            !tokenState.accountBalanceLabel.isNullOrBlank()
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -251,6 +273,30 @@ fun AiTokenStatusCard(
                         )
                     }
                 }
+                tokenState.rateLimitRemainingRequests?.let { reqRem ->
+                    val reqLimit = tokenState.rateLimitTotalRequests
+                    val reqText = if (reqLimit != null && reqLimit > 0L) {
+                        "Lượt còn ${AiResponseParser.formatExactTokens(reqRem)}/${AiResponseParser.formatExactTokens(reqLimit)}"
+                    } else {
+                        "Lượt còn ${AiResponseParser.formatExactTokens(reqRem)}"
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(IndigoBright.copy(alpha = 0.16f))
+                            .border(1.dp, IndigoBright.copy(alpha = 0.45f), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = reqText,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = IndigoBright,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
         }
 
@@ -282,12 +328,25 @@ fun AiTokenStatusCard(
 
         if (!tokenState.syncError.isNullOrBlank()) {
             Text(
-                text = "Lưu ý đồng bộ: ${tokenState.syncError}",
+                text = "Lỗi kiểm tra token: ${tokenState.syncError}",
                 style = MaterialTheme.typography.labelSmall,
                 color = AmberAccent,
                 fontSize = 10.sp,
-                lineHeight = 14.sp
+                lineHeight = 14.sp,
+                modifier = Modifier.testTag("ai_token_sync_error")
             )
+        } else if (tokenState.lastSyncedAtMillis > 0L) {
+            val timeLabel = AiResponseParser.formatSyncTime(tokenState.lastSyncedAtMillis)
+            if (timeLabel.isNotEmpty()) {
+                Text(
+                    text = "Đã kiểm tra lúc $timeLabel · Tự động lưu khi thoát app",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = EmeraldLight.copy(alpha = 0.9f),
+                    fontSize = 9.5.sp,
+                    lineHeight = 13.sp,
+                    modifier = Modifier.testTag("ai_token_last_synced")
+                )
+            }
         }
 
         // Honest footer + 1-tap provider quota shortcut

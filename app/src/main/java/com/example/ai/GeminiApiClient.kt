@@ -497,6 +497,9 @@ object GeminiApiClient {
                     outputLimit = meta.second
                 }
             }
+            if (inputLimit <= 0) {
+                inputLimit = AiResponseParser.inferKnownContextWindow(safeModel, AiProvider.GOOGLE_API_KEY)
+            }
 
             val systemText = buildDocsSystemPrompt()
             val contents = JSONArray()

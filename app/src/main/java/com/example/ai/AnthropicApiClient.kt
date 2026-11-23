@@ -33,6 +33,13 @@ object AnthropicApiClient {
 
     private class HttpStatusException(val statusCode: Int, message: String) : IllegalStateException(message)
 
+    private data class ClaudeRateLimits(
+        val remainingTokens: Long? = null,
+        val limitTokens: Long? = null,
+        val remainingRequests: Long? = null,
+        val limitRequests: Long? = null
+    )
+
     private data class ClaudeRawResult(
         val text: String,
         val usage: AiTokenUsage?
@@ -193,6 +200,7 @@ object AnthropicApiClient {
                 conn.outputStream.use { it.write(bytes); it.flush() }
 
                 val code = conn.responseCode
+                val rateLimits = parseRateLimitHeaders(conn)
                 val body = readStream(if (code in 200..299) conn.inputStream else conn.errorStream)
                 if (code !in 200..299) {
                     throw HttpStatusException(code, formatHttpError(code, body))
@@ -203,11 +211,16 @@ object AnthropicApiClient {
                 }
                 AiExactContextTokenSync(
                     modelId = cleanModel,
-                    inputTokenLimit = knownInputLimit.takeIf { it > 0 } ?: 200_000,
+                    inputTokenLimit = knownInputLimit.takeIf { it > 0 }
+                        ?: AiResponseParser.inferKnownContextWindow(cleanModel, AiProvider.ANTHROPIC),
                     outputTokenLimit = knownOutputLimit.takeIf { it > 0 } ?: 8_192,
                     currentContextTokens = inputTokens,
                     isServerVerified = true,
-                    verificationSource = "Claude count_tokens"
+                    verificationSource = "Claude count_tokens",
+                    rateLimitRemainingTokens = rateLimits.remainingTokens,
+                    rateLimitTotalTokens = rateLimits.limitTokens,
+                    rateLimitRemainingRequests = rateLimits.remainingRequests,
+                    rateLimitTotalRequests = rateLimits.limitRequests
                 )
             } finally {
                 conn.disconnect()
@@ -405,7 +418,7 @@ object AnthropicApiClient {
             conn.outputStream.use { it.write(bytes); it.flush() }
 
             val code = conn.responseCode
-            val (rlRemaining, rlTotal) = parseRateLimitHeaders(conn)
+            val rateLimits = parseRateLimitHeaders(conn)
             if (code !in 200..299) {
                 val errBody = readStream(conn.errorStream)
                 throw HttpStatusException(code, formatHttpError(code, errBody))
@@ -464,8 +477,10 @@ object AnthropicApiClient {
                     promptTokens = inputTokens,
                     outputTokens = outputTokens,
                     totalTokens = total,
-                    rateLimitRemainingTokens = rlRemaining,
-                    rateLimitTotalTokens = rlTotal
+                    rateLimitRemainingTokens = rateLimits.remainingTokens,
+                    rateLimitTotalTokens = rateLimits.limitTokens,
+                    rateLimitRemainingRequests = rateLimits.remainingRequests,
+                    rateLimitTotalRequests = rateLimits.limitRequests
                 )
             } else null
             return ClaudeRawResult(text = text, usage = usage)
@@ -491,13 +506,19 @@ object AnthropicApiClient {
             conn.outputStream.use { it.write(bytes); it.flush() }
 
             val code = conn.responseCode
-            val (rlRemaining, rlTotal) = parseRateLimitHeaders(conn)
+            val rateLimits = parseRateLimitHeaders(conn)
             val body = readStream(if (code in 200..299) conn.inputStream else conn.errorStream)
             if (code !in 200..299) {
                 throw HttpStatusException(code, formatHttpError(code, body))
             }
             val root = JSONObject(body)
-            val usage = AiResponseParser.parseAnthropicUsage(root.optJSONObject("usage"), rlRemaining, rlTotal)
+            val usage = AiResponseParser.parseAnthropicUsage(
+                usageObj = root.optJSONObject("usage"),
+                rateLimitRemaining = rateLimits.remainingTokens,
+                rateLimitTotal = rateLimits.limitTokens,
+                rateLimitRemainingRequests = rateLimits.remainingRequests,
+                rateLimitTotalRequests = rateLimits.limitRequests
+            )
             val contentArr = root.optJSONArray("content")
             val sb = StringBuilder()
             if (contentArr != null) {
@@ -542,12 +563,27 @@ object AnthropicApiClient {
         }
     }
 
-    private fun parseRateLimitHeaders(conn: HttpURLConnection): Pair<Long?, Long?> {
-        val remaining = conn.getHeaderField("anthropic-ratelimit-tokens-remaining")?.trim()?.toLongOrNull()
-            ?: conn.getHeaderField("anthropic-ratelimit-input-tokens-remaining")?.trim()?.toLongOrNull()
-        val limit = conn.getHeaderField("anthropic-ratelimit-tokens-limit")?.trim()?.toLongOrNull()
-            ?: conn.getHeaderField("anthropic-ratelimit-input-tokens-limit")?.trim()?.toLongOrNull()
-        return remaining to limit
+    private fun parseRateLimitHeaders(conn: HttpURLConnection): ClaudeRateLimits {
+        val lowerHeaders = LinkedHashMap<String, String>()
+        conn.headerFields?.forEach { (k, values) ->
+            val key = k?.lowercase()?.trim() ?: return@forEach
+            val value = values?.firstOrNull()?.trim().orEmpty()
+            if (value.isNotEmpty()) lowerHeaders[key] = value
+        }
+        fun longHeader(vararg names: String): Long? {
+            for (n in names) {
+                val raw = lowerHeaders[n] ?: conn.getHeaderField(n)?.trim()
+                val parsed = raw?.toLongOrNull()
+                if (parsed != null) return parsed
+            }
+            return null
+        }
+        return ClaudeRateLimits(
+            remainingTokens = longHeader("anthropic-ratelimit-tokens-remaining", "anthropic-ratelimit-input-tokens-remaining"),
+            limitTokens = longHeader("anthropic-ratelimit-tokens-limit", "anthropic-ratelimit-input-tokens-limit"),
+            remainingRequests = longHeader("anthropic-ratelimit-requests-remaining"),
+            limitRequests = longHeader("anthropic-ratelimit-requests-limit")
+        )
     }
 
     private fun bitmapToClaudeImageBlock(source: Bitmap, maxDim: Int): JSONObject {
