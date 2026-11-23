@@ -76,10 +76,24 @@ fun AiProblemDrawTab(
     var pendingCameraUriStr by rememberSaveable { mutableStateOf<String?>(null) }
     var cameraPermissionMessage by remember { mutableStateOf<String?>(null) }
 
-    // Auto-scroll down to reveal AI drawing result or error banner immediately when it arrives
-    LaunchedEffect(uiState.latestDrawingPlan, uiState.problemError) {
-        if (uiState.latestDrawingPlan != null || !uiState.problemError.isNullOrBlank()) {
+    val isNearBottom by remember {
+        derivedStateOf {
+            scrollState.maxValue == 0 || (scrollState.maxValue - scrollState.value) < 220
+        }
+    }
+
+    // Auto-scroll down to reveal AI drawing result, error banner, or start of live streaming card
+    LaunchedEffect(uiState.latestDrawingPlan, uiState.problemError, uiState.isAnalyzingProblem) {
+        if (uiState.latestDrawingPlan != null || !uiState.problemError.isNullOrBlank() || uiState.isAnalyzingProblem) {
             scrollState.animateScrollTo(scrollState.maxValue)
+        }
+    }
+
+    // Gently follow live streaming text growth while user stays near the bottom
+    val previewCharBucket = (uiState.streamingProblemPreview?.rawChars ?: 0) / 48
+    LaunchedEffect(previewCharBucket) {
+        if (uiState.isAnalyzingProblem && previewCharBucket > 0 && isNearBottom && !scrollState.isScrollInProgress) {
+            scrollState.scrollTo(scrollState.maxValue)
         }
     }
 
@@ -434,6 +448,15 @@ fun AiProblemDrawTab(
                 }
             }
 
+            // Live Streaming Analysis Card while AI is generating the drawing plan
+            if (uiState.isAnalyzingProblem) {
+                AiProblemLiveStreamingCard(
+                    preview = uiState.streamingProblemPreview,
+                    statusText = uiState.problemStatusText,
+                    elapsedSeconds = uiState.problemElapsedSeconds
+                )
+            }
+
             // AI Drawing Result Card
             val plan = uiState.latestDrawingPlan
             if (plan != null) {
@@ -445,6 +468,221 @@ fun AiProblemDrawTab(
             }
 
             Spacer(Modifier.height(96.dp))
+        }
+    }
+}
+
+@Composable
+private fun AiProblemLiveStreamingCard(
+    preview: AiProblemStreamingPreview?,
+    statusText: String,
+    elapsedSeconds: Int
+) {
+    val accent = when (preview?.target) {
+        AiDrawTarget.SPACE_3D -> IndigoBright
+        AiDrawTarget.PLANE_2D -> EmeraldAccent
+        null -> PurpleAccent
+    }
+    val activeField = when {
+        preview == null || preview.isBuildingGeometry -> 0
+        preview.solutionHint.isNotBlank() -> 4
+        preview.drawingSummary.isNotBlank() -> 3
+        preview.problemText.isNotBlank() -> 2
+        preview.title.isNotBlank() -> 1
+        else -> 0
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .liquidGlassSurface(
+                shape = RoundedCornerShape(18.dp),
+                cornerRadiusDp = 18.dp,
+                elevated = true,
+                liveBackdrop = false,
+                fallbackBg = SlateDark,
+                accentBorder = accent.copy(alpha = 0.55f)
+            )
+            .padding(16.dp)
+            .testTag("ai_problem_live_streaming_card"),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            AiStreamingPulseDot(color = accent)
+            if (preview?.target != null) {
+                val badgeLabel = if (preview.target == AiDrawTarget.SPACE_3D) "3D" else "2D"
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(accent.copy(alpha = 0.2f))
+                        .border(1.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = badgeLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = accent,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+            }
+            Text(
+                text = statusText.ifBlank { "AI đang đọc & phân tích đề bài..." },
+                style = MaterialTheme.typography.labelMedium,
+                color = accent,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            if (elapsedSeconds > 0) {
+                Text(
+                    text = "${elapsedSeconds}s",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SlateTextSecondary,
+                    fontSize = 11.sp
+                )
+            }
+        }
+
+        HorizontalDivider(color = SlateBorder.copy(alpha = 0.35f))
+
+        if (preview == null || !preview.hasVisibleText) {
+            AiStreamingWaitingPlaceholder(
+                label = if ((preview?.thinkingChars ?: 0) > 0) {
+                    "AI đang suy luận đề bài & cấu trúc hình (${preview?.thinkingChars} ký tự)"
+                } else {
+                    "Đang nhận nội dung phân tích từng đoạn từ AI"
+                },
+                accentColor = accent,
+                textColor = SlateTextSecondary
+            )
+        } else {
+            if (preview.title.isNotBlank()) {
+                SmoothStreamingText(
+                    targetText = preview.title,
+                    isStreaming = true,
+                    showCursor = activeField == 1,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
+                    color = SlateTextPrimary,
+                    cursorColor = accent,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            if (preview.problemText.isNotBlank()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(SlateDeepest.copy(alpha = 0.55f))
+                        .border(1.dp, SlateBorder.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "Đề bài nhận diện",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = CyanAccent,
+                        fontWeight = FontWeight.Bold
+                    )
+                    SmoothStreamingText(
+                        targetText = preview.problemText,
+                        isStreaming = true,
+                        showCursor = activeField == 2,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SlateTextPrimary,
+                        cursorColor = CyanAccent,
+                        lineHeight = 19.sp,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
+            if (preview.drawingSummary.isNotBlank()) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Kế hoạch dựng hình",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = accent,
+                        fontWeight = FontWeight.Bold
+                    )
+                    SmoothStreamingText(
+                        targetText = preview.drawingSummary,
+                        isStreaming = true,
+                        showCursor = activeField == 3,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SlateTextPrimary,
+                        cursorColor = accent,
+                        lineHeight = 19.sp,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
+            if (preview.solutionHint.isNotBlank()) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Gợi ý hướng giải",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AmberAccent,
+                        fontWeight = FontWeight.Bold
+                    )
+                    SmoothStreamingText(
+                        targetText = preview.solutionHint,
+                        isStreaming = true,
+                        showCursor = activeField == 4,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SlateTextSecondary,
+                        cursorColor = AmberAccent,
+                        lineHeight = 19.sp,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
+            if (preview.isBuildingGeometry) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(accent.copy(alpha = 0.12f))
+                        .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            color = accent,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = if (preview.target == AiDrawTarget.PLANE_2D) {
+                                "Đang hoàn thiện tọa độ hình phẳng & đồ thị 2D..."
+                            } else {
+                                "Đang hoàn thiện tọa độ đỉnh, cạnh & vectơ 3D..."
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = accent,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    LinearProgressIndicator(
+                        color = accent,
+                        trackColor = accent.copy(alpha = 0.2f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(3.dp)
+                            .clip(CircleShape)
+                    )
+                }
+            }
         }
     }
 }

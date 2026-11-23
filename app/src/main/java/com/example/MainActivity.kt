@@ -44,6 +44,7 @@ import com.example.ai.configureAppCheck
 import com.example.ai.findActivity
 import com.example.docs.MathDocumentsScreen
 import com.example.docs.PdfBookRenderer
+import com.example.docs.PdfDocsPreferences
 import com.example.geo2d.Geo2DPersistence
 import com.example.geo2d.Geo2DStudioScreen
 import com.example.geo2d.Geo2DViewModel
@@ -135,10 +136,20 @@ fun ToolToanRootScreen(
     var pending2DExpr by remember { mutableStateOf<String?>(null) }
     var pendingPdfPage by remember { mutableStateOf<Int?>(null) }
 
-    // Retain the 388-page PDF renderer + 36MB RGB_565 page cache across tab switches for 0ms instant return!
+    // Retain the 388-page PDF renderer + progressive preview/HD caches across tab switches
     val sharedPdfRenderer = remember(appContext) { PdfBookRenderer(appContext) }
     DisposableEffect(sharedPdfRenderer) {
         onDispose { sharedPdfRenderer.close() }
+    }
+
+    // Background warm-up on IO after initial screen settles so tapping "Tài liệu" shows the page instantly!
+    LaunchedEffect(sharedPdfRenderer) {
+        kotlinx.coroutines.delay(400)
+        sharedPdfRenderer.open().onSuccess { count ->
+            val lastPageIdx = (PdfDocsPreferences(appContext).loadLastPage() - 1).coerceIn(0, (count - 1).coerceAtLeast(0))
+            sharedPdfRenderer.renderPreviewPageAsset(lastPageIdx)
+            sharedPdfRenderer.prefetchAround(lastPageIdx, 1080)
+        }
     }
 
     // Collect ONLY the lightweight update badge boolean here — NEVER collect heavy 3D/2D/AI states at root!

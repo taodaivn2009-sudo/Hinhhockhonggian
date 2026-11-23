@@ -179,6 +179,28 @@ data class AiModelProbeResult(
         }
 }
 
+/**
+ * Live incremental preview of an AI 3D/2D problem drawing plan while tokens are streaming in,
+ * so users immediately read the detected mode, title, problem statement, drawing plan, and
+ * solution hint before final geometry coordinates complete.
+ */
+data class AiProblemStreamingPreview(
+    val target: AiDrawTarget? = null,
+    val title: String = "",
+    val problemText: String = "",
+    val drawingSummary: String = "",
+    val solutionHint: String = "",
+    val isBuildingGeometry: Boolean = false,
+    val thinkingChars: Int = 0,
+    val rawChars: Int = 0
+) {
+    val hasVisibleText: Boolean
+        get() = title.isNotBlank() ||
+            problemText.isNotBlank() ||
+            drawingSummary.isNotBlank() ||
+            solutionHint.isNotBlank()
+}
+
 enum class AiSubTab(val key: String, val label: String) {
     DOCS_QA("docs_qa", "Hỏi tài liệu"),
     PROBLEM_DRAW("problem_draw", "Chụp đề vẽ hình"),
@@ -1583,51 +1605,153 @@ object AiResponseParser {
     }
 
     /**
+     * Incrementally extracts a single JSON string field value from a partially streamed JSON
+     * payload (e.g. `{"answer": "Công thức...\n`) while safely decoding escape sequences and
+     * ignoring incomplete trailing escapes like `\` or `\u00` until the next chunk arrives.
+     */
+    fun extractStreamingJsonStringField(rawPartialJson: String, fieldName: String): String {
+        val token = "\"$fieldName\""
+        var searchFrom = 0
+        while (searchFrom < rawPartialJson.length) {
+            val keyIndex = rawPartialJson.indexOf(token, startIndex = searchFrom)
+            if (keyIndex < 0) return ""
+            var i = keyIndex + token.length
+            while (i < rawPartialJson.length && rawPartialJson[i].isWhitespace()) i++
+            if (i >= rawPartialJson.length) return ""
+            if (rawPartialJson[i] != ':') {
+                searchFrom = keyIndex + token.length
+                continue
+            }
+            i++ // skip ':'
+            while (i < rawPartialJson.length && rawPartialJson[i].isWhitespace()) i++
+            if (i >= rawPartialJson.length) return ""
+            if (rawPartialJson[i] != '"') {
+                // Value is null / number / object / array — not a string
+                return ""
+            }
+            i++ // skip opening quote
+
+            val sb = StringBuilder()
+            while (i < rawPartialJson.length) {
+                val ch = rawPartialJson[i]
+                if (ch == '"') break
+                if (ch == '\\') {
+                    if (i + 1 >= rawPartialJson.length) break
+                    when (val next = rawPartialJson[i + 1]) {
+                        'n' -> { sb.append('\n'); i += 2 }
+                        't' -> { sb.append('\t'); i += 2 }
+                        'r' -> { i += 2 }
+                        '"' -> { sb.append('"'); i += 2 }
+                        '\\' -> { sb.append('\\'); i += 2 }
+                        '/' -> { sb.append('/'); i += 2 }
+                        'b' -> { sb.append('\b'); i += 2 }
+                        'f' -> { sb.append('\u000C'); i += 2 }
+                        'u' -> {
+                            if (i + 6 <= rawPartialJson.length) {
+                                val hex = rawPartialJson.substring(i + 2, i + 6)
+                                val code = hex.toIntOrNull(16)
+                                if (code != null) sb.append(code.toChar())
+                                i += 6
+                            } else {
+                                break
+                            }
+                        }
+                        else -> { sb.append(next); i += 2 }
+                    }
+                } else {
+                    sb.append(ch)
+                    i++
+                }
+            }
+            return sb.toString()
+        }
+        return ""
+    }
+
+    private fun stripLeadingMarkdownFence(raw: String): String {
+        val trimmed = raw.trimStart()
+        if (!trimmed.startsWith("```")) return trimmed
+        val firstNewline = trimmed.indexOf('\n')
+        return if (firstNewline >= 0) {
+            trimmed.substring(firstNewline + 1).trimStart()
+        } else {
+            ""
+        }
+    }
+
+    /**
      * Incrementally extracts the human-readable "answer" string from a partially streamed
-     * JSON response like `{"answer": "Công thức khoảng cách...\n` so the UI displays
-     * live typing immediately instead of raw JSON syntax.
+     * JSON response like `{"answer": "Công thức khoảng cách...\n` (or falls back immediately
+     * to streaming plain text when a provider/model ignores JSON formatting).
      */
     fun extractStreamingAnswerPreview(rawPartialJson: String): String {
-        val keyIndex = rawPartialJson.indexOf("\"answer\"")
-        if (keyIndex < 0) return ""
-        val colonIndex = rawPartialJson.indexOf(':', startIndex = keyIndex + 8)
-        if (colonIndex < 0) return ""
-        var i = colonIndex + 1
-        while (i < rawPartialJson.length && rawPartialJson[i].isWhitespace()) i++
-        if (i >= rawPartialJson.length || rawPartialJson[i] != '"') return ""
-        i++ // skip opening quote
+        if (rawPartialJson.isBlank()) return ""
+        val cleaned = stripLeadingMarkdownFence(rawPartialJson)
+        if (cleaned.isEmpty()) return ""
 
-        val sb = StringBuilder()
-        while (i < rawPartialJson.length) {
-            val ch = rawPartialJson[i]
-            if (ch == '"') break
-            if (ch == '\\') {
-                if (i + 1 >= rawPartialJson.length) break
-                when (val next = rawPartialJson[i + 1]) {
-                    'n' -> { sb.append('\n'); i += 2 }
-                    't' -> { sb.append('\t'); i += 2 }
-                    'r' -> { i += 2 }
-                    '"' -> { sb.append('"'); i += 2 }
-                    '\\' -> { sb.append('\\'); i += 2 }
-                    '/' -> { sb.append('/'); i += 2 }
-                    'u' -> {
-                        if (i + 6 <= rawPartialJson.length) {
-                            val hex = rawPartialJson.substring(i + 2, i + 6)
-                            val code = hex.toIntOrNull(16)
-                            if (code != null) sb.append(code.toChar())
-                            i += 6
-                        } else {
-                            break
-                        }
-                    }
-                    else -> { sb.append(next); i += 2 }
-                }
-            } else {
-                sb.append(ch)
-                i++
-            }
+        val extracted = extractStreamingJsonStringField(cleaned, "answer")
+        if (extracted.isNotEmpty()) return extracted
+
+        // If the stream doesn't look like a JSON object or an opening markdown fence, stream it directly as plain text
+        val rawTrimmed = rawPartialJson.trimStart()
+        val looksLikeFenceStart = rawTrimmed == "`" || rawTrimmed == "``" ||
+            (rawTrimmed.startsWith("```") && !rawTrimmed.contains('\n'))
+        if (looksLikeFenceStart) return ""
+        if (!cleaned.startsWith("{")) {
+            return cleaned.removeSuffix("```").trimEnd()
         }
-        return sb.toString()
+        return ""
+    }
+
+    /**
+     * Incrementally extracts live readable fields (`target`, `title`, `problemText`,
+     * `drawingSummary`, `solutionHint`) while the AI is streaming a 3D/2D drawing plan,
+     * and detects when generation advances into `scene3D` / `scene2D` coordinates.
+     */
+    fun extractStreamingProblemPreview(
+        rawPartial: String,
+        thinkingChars: Int = 0
+    ): AiProblemStreamingPreview {
+        val cleaned = stripLeadingMarkdownFence(rawPartial)
+        val targetStr = extractStreamingJsonStringField(cleaned, "target").trim().uppercase()
+        val detectedTarget = when {
+            targetStr.contains("2D") -> AiDrawTarget.PLANE_2D
+            targetStr.contains("3D") -> AiDrawTarget.SPACE_3D
+            cleaned.contains("\"scene2D\"", ignoreCase = true) || cleaned.contains("\"scene_2d\"", ignoreCase = true) -> AiDrawTarget.PLANE_2D
+            cleaned.contains("\"scene3D\"", ignoreCase = true) || cleaned.contains("\"scene_3d\"", ignoreCase = true) -> AiDrawTarget.SPACE_3D
+            else -> null
+        }
+
+        val title = extractStreamingJsonStringField(cleaned, "title")
+        val problemText = extractStreamingJsonStringField(cleaned, "problemText")
+        val drawingSummary = extractStreamingJsonStringField(cleaned, "drawingSummary")
+        val solutionHint = extractStreamingJsonStringField(cleaned, "solutionHint")
+
+        val isBuildingGeometry = cleaned.contains("\"scene3D\"", ignoreCase = true) ||
+            cleaned.contains("\"scene2D\"", ignoreCase = true) ||
+            cleaned.contains("\"scene_3d\"", ignoreCase = true) ||
+            cleaned.contains("\"scene_2d\"", ignoreCase = true)
+
+        // Plain-text fallback if a custom/non-JSON model streams prose instead of JSON
+        val fallbackHint = if (title.isEmpty() && problemText.isEmpty() && drawingSummary.isEmpty() && solutionHint.isEmpty()) {
+            val rawTrimmed = rawPartial.trimStart()
+            val looksLikeFenceStart = rawTrimmed == "`" || rawTrimmed == "``" ||
+                (rawTrimmed.startsWith("```") && !rawTrimmed.contains('\n'))
+            if (!looksLikeFenceStart && cleaned.isNotEmpty() && !cleaned.startsWith("{")) {
+                cleaned.removeSuffix("```").trimEnd()
+            } else ""
+        } else solutionHint
+
+        return AiProblemStreamingPreview(
+            target = detectedTarget,
+            title = title,
+            problemText = problemText,
+            drawingSummary = drawingSummary,
+            solutionHint = fallbackHint,
+            isBuildingGeometry = isBuildingGeometry,
+            thinkingChars = thinkingChars,
+            rawChars = rawPartial.length
+        )
     }
 
     fun parseDocsReply(rawText: String): AiDocsReply {

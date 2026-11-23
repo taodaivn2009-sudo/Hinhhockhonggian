@@ -235,7 +235,8 @@ object AnthropicApiClient {
         history: List<AiChatMessage>,
         attachedPageBitmap: Bitmap? = null,
         attachedPageNumber: Int? = null,
-        onPartialAnswer: (String) -> Unit = {}
+        onPartialAnswer: (String) -> Unit = {},
+        onThinkingChars: (Int) -> Unit = {}
     ): Result<AiDocsReply> = withContext(Dispatchers.IO) {
         val cleanKey = AiResponseParser.sanitizeApiKey(apiKey)
         if (cleanKey.isEmpty()) {
@@ -255,17 +256,17 @@ object AnthropicApiClient {
                 put("stream", true)
             }
             val rawResult = try {
-                executeMessagesStream(cleanKey, payload) { rawAccum ->
-                    val preview = AiResponseParser.extractStreamingAnswerPreview(rawAccum)
-                    if (preview.isNotEmpty()) {
-                        onPartialAnswer(preview)
-                    } else {
-                        val trimmed = rawAccum.trimStart()
-                        if (trimmed.isNotEmpty() && !trimmed.startsWith("{") && !trimmed.startsWith("```")) {
-                            onPartialAnswer(trimmed)
+                executeMessagesStream(
+                    apiKey = cleanKey,
+                    payload = payload,
+                    onRawAccumulated = { rawAccum ->
+                        val preview = AiResponseParser.extractStreamingAnswerPreview(rawAccum)
+                        if (preview.isNotEmpty()) {
+                            onPartialAnswer(preview)
                         }
-                    }
-                }
+                    },
+                    onThinkingChars = onThinkingChars
+                )
             } catch (e: HttpStatusException) {
                 if (e.statusCode == 400) {
                     payload.remove("stream")
@@ -283,7 +284,9 @@ object AnthropicApiClient {
         modelId: String,
         problemBitmap: Bitmap?,
         problemNote: String,
-        onProgressChars: (Int) -> Unit = {}
+        onProgressChars: (Int) -> Unit = {},
+        onStreamingPreview: (AiProblemStreamingPreview) -> Unit = {},
+        onThinkingChars: (Int) -> Unit = {}
     ): Result<AiDrawingPlan> = withContext(Dispatchers.IO) {
         val cleanKey = AiResponseParser.sanitizeApiKey(apiKey)
         if (cleanKey.isEmpty()) {
@@ -328,8 +331,21 @@ object AnthropicApiClient {
                 )
                 put("stream", true)
             }
+            var latestThinking = 0
             val rawResult = try {
-                executeMessagesStream(cleanKey, payload) { raw -> onProgressChars(raw.length) }
+                executeMessagesStream(
+                    apiKey = cleanKey,
+                    payload = payload,
+                    onRawAccumulated = { raw ->
+                        onProgressChars(raw.length)
+                        onStreamingPreview(AiResponseParser.extractStreamingProblemPreview(raw, latestThinking))
+                    },
+                    onThinkingChars = { thinkCount ->
+                        latestThinking = thinkCount
+                        onThinkingChars(thinkCount)
+                        onStreamingPreview(AiResponseParser.extractStreamingProblemPreview("", thinkCount))
+                    }
+                )
             } catch (e: HttpStatusException) {
                 if (e.statusCode == 400) {
                     payload.remove("stream")
@@ -409,10 +425,12 @@ object AnthropicApiClient {
     private fun executeMessagesStream(
         apiKey: String,
         payload: JSONObject,
-        onRawAccumulated: (String) -> Unit
+        onRawAccumulated: (String) -> Unit,
+        onThinkingChars: (Int) -> Unit = {}
     ): ClaudeRawResult {
         val conn = openConnection("$BASE_URL/messages", "POST", apiKey)
         try {
+            conn.setRequestProperty("Accept", "text/event-stream")
             conn.doOutput = true
             val bytes = payload.toString().toByteArray(Charsets.UTF_8)
             conn.outputStream.use { it.write(bytes); it.flush() }
@@ -425,6 +443,7 @@ object AnthropicApiClient {
             }
 
             val accumulated = StringBuilder()
+            var thinkingChars = 0
             var inputTokens = 0
             var outputTokens = 0
 
@@ -448,11 +467,20 @@ object AnthropicApiClient {
                         }
                         "content_block_delta" -> {
                             val delta = obj.optJSONObject("delta")
-                            if (delta?.optString("type") == "text_delta") {
-                                val piece = delta.optString("text", "")
-                                if (piece.isNotEmpty()) {
-                                    accumulated.append(piece)
-                                    onRawAccumulated(accumulated.toString())
+                            when (delta?.optString("type")) {
+                                "text_delta" -> {
+                                    val piece = delta.optString("text", "")
+                                    if (piece.isNotEmpty()) {
+                                        accumulated.append(piece)
+                                        onRawAccumulated(accumulated.toString())
+                                    }
+                                }
+                                "thinking_delta" -> {
+                                    val thinking = delta.optString("thinking", "")
+                                    if (thinking.isNotEmpty()) {
+                                        thinkingChars += thinking.length
+                                        onThinkingChars(thinkingChars)
+                                    }
                                 }
                             }
                         }

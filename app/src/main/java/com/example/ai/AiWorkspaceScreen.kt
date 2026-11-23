@@ -723,12 +723,32 @@ private fun AiDocsQaTab(
 
     val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
     val isImeVisible = imeBottomPx > 0
+    var streamDisplayedChars by remember { mutableIntStateOf(0) }
 
-    // Scroll accurately to the TRUE last item whenever chat updates
-    LaunchedEffect(uiState.messages.size, uiState.isAskingDocs, uiState.streamingDocsAnswer.length / 40) {
+    val isNearBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            info.totalItemsCount == 0 || lastVisible >= info.totalItemsCount - 2
+        }
+    }
+
+    // Always scroll when a new message is added or streaming starts
+    LaunchedEffect(uiState.messages.size, uiState.isAskingDocs) {
+        if (!uiState.isAskingDocs) streamDisplayedChars = 0
         val total = listState.layoutInfo.totalItemsCount
         if (total > 0) {
             listState.animateScrollToItem(total - 1)
+        }
+    }
+
+    // Follow smoothly as streamed text grows, without yanking users who manually scrolled up to read earlier messages
+    LaunchedEffect(streamDisplayedChars / 28) {
+        if (uiState.isAskingDocs && streamDisplayedChars > 0 && isNearBottom && !listState.isScrollInProgress) {
+            val total = listState.layoutInfo.totalItemsCount
+            if (total > 0) {
+                listState.scrollToItem(total - 1, scrollOffset = Int.MAX_VALUE / 4)
+            }
         }
     }
 
@@ -836,6 +856,7 @@ private fun AiDocsQaTab(
 
                 if (uiState.isAskingDocs) {
                     item(key = "ai_loading_bubble") {
+                        val isStreamingText = uiState.streamingDocsAnswer.isNotBlank()
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -845,9 +866,10 @@ private fun AiDocsQaTab(
                                     cornerRadiusDp = 16.dp,
                                     liveBackdrop = false,
                                     fallbackBg = SlateDark,
-                                    accentBorder = CyanAccent.copy(alpha = 0.45f)
+                                    accentBorder = CyanAccent.copy(alpha = 0.5f)
                                 )
-                                .padding(14.dp),
+                                .padding(14.dp)
+                                .testTag("ai_docs_streaming_bubble"),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Row(
@@ -855,7 +877,11 @@ private fun AiDocsQaTab(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                CircularProgressIndicator(color = CyanAccent, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                                if (isStreamingText) {
+                                    AiStreamingPulseDot(color = CyanAccent)
+                                } else {
+                                    CircularProgressIndicator(color = CyanAccent, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                                }
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = uiState.docsStatusText.ifBlank { "AI đang tra cứu tài liệu PDF 388 trang..." },
@@ -863,9 +889,19 @@ private fun AiDocsQaTab(
                                         color = CyanAccent,
                                         fontWeight = FontWeight.Bold
                                     )
-                                    if (uiState.docsElapsedSeconds > 0) {
+                                    val subLabel = when {
+                                        isStreamingText && uiState.docsElapsedSeconds > 0 ->
+                                            "Đang viết trực tiếp · ${uiState.docsElapsedSeconds}s"
+                                        isStreamingText -> "Đang viết trực tiếp..."
+                                        uiState.docsThinkingChars > 0 ->
+                                            "Đã suy luận ${uiState.docsThinkingChars} ký tự · ${uiState.docsElapsedSeconds}s"
+                                        uiState.docsElapsedSeconds > 0 ->
+                                            "Đã chờ ${uiState.docsElapsedSeconds}s · Đang nhận phản hồi"
+                                        else -> ""
+                                    }
+                                    if (subLabel.isNotEmpty()) {
                                         Text(
-                                            text = "Đã chờ ${uiState.docsElapsedSeconds}s · Đang nhận phản hồi",
+                                            text = subLabel,
                                             style = MaterialTheme.typography.labelSmall,
                                             color = SlateTextSecondary,
                                             fontSize = 11.sp
@@ -882,13 +918,29 @@ private fun AiDocsQaTab(
                                     Text("Hủy", color = RoseAccent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 }
                             }
-                            if (uiState.streamingDocsAnswer.isNotBlank()) {
-                                HorizontalDivider(color = SlateBorder.copy(alpha = 0.35f))
-                                Text(
-                                    text = uiState.streamingDocsAnswer,
+                            HorizontalDivider(color = SlateBorder.copy(alpha = 0.35f))
+                            if (isStreamingText) {
+                                SmoothStreamingText(
+                                    targetText = uiState.streamingDocsAnswer,
+                                    isStreaming = true,
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = SlateTextPrimary,
-                                    lineHeight = 21.sp
+                                    cursorColor = CyanAccent,
+                                    lineHeight = 21.sp,
+                                    onDisplayedLengthChanged = { streamDisplayedChars = it },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("ai_docs_streaming_text")
+                                )
+                            } else {
+                                AiStreamingWaitingPlaceholder(
+                                    label = if (uiState.docsThinkingChars > 0) {
+                                        "AI đang suy luận công thức & trang tài liệu phù hợp"
+                                    } else {
+                                        "Đang chờ những chữ đầu tiên từ AI"
+                                    },
+                                    accentColor = CyanAccent,
+                                    textColor = SlateTextSecondary
                                 )
                             }
                         }

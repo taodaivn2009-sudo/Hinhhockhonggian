@@ -433,14 +433,16 @@ private fun PdfPagesLazyColumn(
             with(density) { (maxWidth.coerceAtMost(840.dp).toPx() * 1.25f).roundToInt().coerceIn(720, 1280) }
         }
 
-        // Prefetch immediate neighbor pages once scrolling settles so visible page always renders first
+        // Progressive prefetch: fast previews for ±2/+3 pages first, then HD for immediate neighbors
         LaunchedEffect(listState.isScrollInProgress, targetWidthPx) {
             if (!listState.isScrollInProgress) {
-                delay(180)
+                delay(120)
                 val center = listState.firstVisibleItemIndex
-                renderer.prefetchPages(listOf(center + 1, center - 1), targetWidthPx)
+                renderer.prefetchAround(center, targetWidthPx)
             }
         }
+
+        val isScrolling by remember { derivedStateOf { listState.isScrollInProgress } }
 
         LazyColumn(
             state = listState,
@@ -470,6 +472,7 @@ private fun PdfPagesLazyColumn(
                     renderer = renderer,
                     pageIndex0Based = pageIndex,
                     targetWidthPx = targetWidthPx,
+                    isScrolling = isScrolling,
                     nightColorFilter = nightColorFilter,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -485,16 +488,39 @@ private fun PdfSinglePageItem(
     renderer: PdfBookRenderer,
     pageIndex0Based: Int,
     targetWidthPx: Int,
+    isScrolling: Boolean,
     nightColorFilter: ColorFilter?,
     modifier: Modifier = Modifier
 ) {
     var pageAsset by remember(pageIndex0Based, targetWidthPx) {
-        mutableStateOf<CachedPdfPage?>(renderer.getCachedPageAsset(pageIndex0Based, targetWidthPx))
+        mutableStateOf<CachedPdfPage?>(renderer.getBestCachedPageAsset(pageIndex0Based, targetWidthPx))
+    }
+    var loadFailed by remember(pageIndex0Based, targetWidthPx) { mutableStateOf(false) }
+
+    // Stage 1: Instant fast preview (~15-25ms) so content appears immediately without waiting!
+    LaunchedEffect(pageIndex0Based) {
+        if (pageAsset == null) {
+            val preview = renderer.renderPreviewPageAsset(pageIndex0Based)
+            if (preview != null && pageAsset == null) {
+                pageAsset = preview
+            }
+        }
     }
 
-    LaunchedEffect(pageIndex0Based, targetWidthPx) {
-        if (pageAsset == null) {
-            pageAsset = renderer.renderPageAsset(pageIndex0Based, targetWidthPx)
+    // Stage 2: Seamless HD sharpening once preview is on screen (defers slightly while rapidly flinging)
+    LaunchedEffect(pageIndex0Based, targetWidthPx, isScrolling) {
+        val current = pageAsset
+        if (current != null && current.isHd) return@LaunchedEffect
+        if (isScrolling) {
+            // While flinging fast, prioritize showing Stage-1 previews across pages before HD pass
+            delay(140)
+        }
+        val hd = renderer.renderHdPageAsset(pageIndex0Based, targetWidthPx)
+        if (hd != null) {
+            pageAsset = hd
+            loadFailed = false
+        } else if (pageAsset == null) {
+            loadFailed = true
         }
     }
 
@@ -517,21 +543,52 @@ private fun PdfSinglePageItem(
                 colorFilter = nightColorFilter,
                 modifier = Modifier.fillMaxSize()
             )
+            // Subtle ultra-thin 2dp progress hairline at top edge ONLY while upgrading from fast preview -> HD
+            if (!loaded.isHd) {
+                LinearProgressIndicator(
+                    color = CyanAccent.copy(alpha = 0.75f),
+                    trackColor = Color.Transparent,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .height(2.dp)
+                )
+            }
+        } else if (loadFailed) {
+            Text(
+                text = "Không tải được trang ${pageIndex0Based + 1}",
+                style = MaterialTheme.typography.labelSmall,
+                color = RoseAccent
+            )
         } else {
+            // Lightweight instant page skeleton shown only during the ~20ms Stage-1 preview decode
             Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                CircularProgressIndicator(
-                    color = CyanAccent,
-                    strokeWidth = 2.5.dp,
-                    modifier = Modifier.size(24.dp)
+                val skeletonColor = if (nightColorFilter != null) {
+                    Color.White.copy(alpha = 0.08f)
+                } else {
+                    Color(0xFF0F172A).copy(alpha = 0.07f)
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.55f)
+                        .height(16.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(skeletonColor)
                 )
-                Text(
-                    text = "Đang tải trang ${pageIndex0Based + 1}...",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (nightColorFilter != null) SlateTextSecondary else Color(0xFF475569)
-                )
+                repeat(6) { idx ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(if (idx % 3 == 2) 0.72f else 0.94f)
+                            .height(11.dp)
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(skeletonColor)
+                    )
+                }
             }
         }
 

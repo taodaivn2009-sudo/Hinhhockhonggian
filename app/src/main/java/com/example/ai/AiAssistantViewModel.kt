@@ -85,6 +85,7 @@ data class AiAssistantUiState(
     val messages: List<AiChatMessage> = emptyList(),
     val isAskingDocs: Boolean = false,
     val streamingDocsAnswer: String = "",
+    val docsThinkingChars: Int = 0,
     val docsStatusText: String = "",
     val docsElapsedSeconds: Int = 0,
     val lastFailedDocsQuestion: String? = null,
@@ -94,6 +95,7 @@ data class AiAssistantUiState(
     val problemBitmap: Bitmap? = null,
     val problemNote: String = "",
     val isAnalyzingProblem: Boolean = false,
+    val streamingProblemPreview: AiProblemStreamingPreview? = null,
     val problemStatusText: String = "",
     val problemElapsedSeconds: Int = 0,
     val problemError: String? = null,
@@ -2114,6 +2116,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 messages = emptyList(),
                 isAskingDocs = false,
                 streamingDocsAnswer = "",
+                docsThinkingChars = 0,
                 docsStatusText = "",
                 docsElapsedSeconds = 0,
                 lastFailedDocsQuestion = null,
@@ -2135,6 +2138,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             it.copy(
                 isAskingDocs = false,
                 streamingDocsAnswer = "",
+                docsThinkingChars = 0,
                 docsStatusText = "",
                 docsElapsedSeconds = 0
             )
@@ -2184,6 +2188,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 messages = messagesWithUser,
                 isAskingDocs = true,
                 streamingDocsAnswer = "",
+                docsThinkingChars = 0,
                 docsStatusText = if (explicitPage != null) {
                     "Đang đọc ảnh Trang $explicitPage & kết nối $providerName..."
                 } else {
@@ -2212,7 +2217,16 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                         _uiState.update {
                             it.copy(
                                 streamingDocsAnswer = partial,
-                                docsStatusText = "$providerName đang trả lời..."
+                                docsStatusText = "$providerName đang viết câu trả lời..."
+                            )
+                        }
+                    }
+                    val thinkingCallback: (Int) -> Unit = { thinkChars ->
+                        _uiState.update { cur ->
+                            if (cur.streamingDocsAnswer.isNotBlank()) cur
+                            else cur.copy(
+                                docsThinkingChars = thinkChars,
+                                docsStatusText = "$providerName đang suy luận... ($thinkChars ký tự)"
                             )
                         }
                     }
@@ -2237,7 +2251,9 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                                 _uiState.update {
                                     it.copy(docsStatusText = "Đã chuyển sang ${bestModel.modelId}, đang trả lời...")
                                 }
-                            }
+                            },
+                            onPartialAnswer = partialCallback,
+                            onThinkingChars = thinkingCallback
                         )
                         AiProvider.ANTHROPIC -> AnthropicApiClient.askDocumentAssistant(
                             apiKey = profile.trimmedKey,
@@ -2246,7 +2262,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                             history = historySnapshot,
                             attachedPageBitmap = pageBmp,
                             attachedPageNumber = explicitPage,
-                            onPartialAnswer = partialCallback
+                            onPartialAnswer = partialCallback,
+                            onThinkingChars = thinkingCallback
                         )
                         AiProvider.OPENAI,
                         AiProvider.OPENROUTER,
@@ -2261,7 +2278,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                             history = historySnapshot,
                             attachedPageBitmap = pageBmp,
                             attachedPageNumber = explicitPage,
-                            onPartialAnswer = partialCallback
+                            onPartialAnswer = partialCallback,
+                            onThinkingChars = thinkingCallback
                         )
                     }
                 }
@@ -2350,6 +2368,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     it.copy(
                         isAskingDocs = false,
                         streamingDocsAnswer = "",
+                        docsThinkingChars = 0,
                         docsStatusText = "",
                         docsElapsedSeconds = 0
                     )
@@ -2386,6 +2405,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 problemBitmap = null,
                 problemNote = "",
                 isAnalyzingProblem = false,
+                streamingProblemPreview = null,
                 problemStatusText = "",
                 problemElapsedSeconds = 0,
                 problemError = null,
@@ -2401,6 +2421,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         _uiState.update {
             it.copy(
                 isAnalyzingProblem = false,
+                streamingProblemPreview = null,
                 problemStatusText = "",
                 problemElapsedSeconds = 0,
                 problemError = "Đã hủy yêu cầu phân tích đề bài."
@@ -2455,6 +2476,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         _uiState.update {
             it.copy(
                 isAnalyzingProblem = true,
+                streamingProblemPreview = null,
                 problemError = null,
                 latestDrawingPlan = null,
                 problemElapsedSeconds = 0,
@@ -2479,8 +2501,35 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             try {
                 val res = withTimeout(90_000L) {
                     val progressCallback: (Int) -> Unit = { chars ->
-                        _uiState.update {
-                            it.copy(problemStatusText = "$providerName đang dựng cấu trúc hình... ($chars ký tự)")
+                        _uiState.update { cur ->
+                            val hasPreview = cur.streamingProblemPreview?.hasVisibleText == true
+                            val buildingGeo = cur.streamingProblemPreview?.isBuildingGeometry == true
+                            val nextStatus = when {
+                                buildingGeo -> {
+                                    val dimLabel = if (cur.streamingProblemPreview?.target == AiDrawTarget.PLANE_2D) "2D" else "3D"
+                                    "$providerName đang hoàn thiện tọa độ hình $dimLabel... ($chars ký tự)"
+                                }
+                                hasPreview -> "$providerName đang viết phân tích & hướng giải..."
+                                else -> "$providerName đang phân tích cấu trúc hình... ($chars ký tự)"
+                            }
+                            cur.copy(problemStatusText = nextStatus)
+                        }
+                    }
+                    val previewCallback: (AiProblemStreamingPreview) -> Unit = { preview ->
+                        _uiState.update { cur ->
+                            val nextStatus = when {
+                                preview.isBuildingGeometry -> {
+                                    val dimLabel = if (preview.target == AiDrawTarget.PLANE_2D) "2D" else "3D"
+                                    "$providerName đang hoàn thiện tọa độ hình $dimLabel..."
+                                }
+                                preview.hasVisibleText -> "$providerName đang viết phân tích & hướng giải..."
+                                preview.thinkingChars > 0 -> "$providerName đang suy luận đề bài... (${preview.thinkingChars} ký tự)"
+                                else -> cur.problemStatusText
+                            }
+                            cur.copy(
+                                streamingProblemPreview = preview,
+                                problemStatusText = nextStatus
+                            )
                         }
                     }
                     when (provider) {
@@ -2488,7 +2537,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                             modelId = profile.effectiveModelId,
                             problemBitmap = state.problemBitmap,
                             problemNote = state.problemNote,
-                            onProgressChars = progressCallback
+                            onProgressChars = progressCallback,
+                            onStreamingPreview = previewCallback
                         )
                         AiProvider.GOOGLE_API_KEY -> GeminiApiClient.analyzeProblemToDrawing(
                             apiKey = profile.trimmedKey,
@@ -2500,14 +2550,17 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                                 _uiState.update {
                                     it.copy(problemStatusText = "Đã chuyển sang ${bestModel.modelId}, đang dựng hình...")
                                 }
-                            }
+                            },
+                            onProgressChars = progressCallback,
+                            onStreamingPreview = previewCallback
                         )
                         AiProvider.ANTHROPIC -> AnthropicApiClient.analyzeProblemToDrawing(
                             apiKey = profile.trimmedKey,
                             modelId = profile.effectiveModelId,
                             problemBitmap = state.problemBitmap,
                             problemNote = state.problemNote,
-                            onProgressChars = progressCallback
+                            onProgressChars = progressCallback,
+                            onStreamingPreview = previewCallback
                         )
                         AiProvider.OPENAI,
                         AiProvider.OPENROUTER,
@@ -2520,7 +2573,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                             modelId = profile.effectiveModelId,
                             problemBitmap = state.problemBitmap,
                             problemNote = state.problemNote,
-                            onProgressChars = progressCallback
+                            onProgressChars = progressCallback,
+                            onStreamingPreview = previewCallback
                         )
                     }
                 }
@@ -2528,6 +2582,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     _uiState.update {
                         it.copy(
                             latestDrawingPlan = plan,
+                            streamingProblemPreview = null,
                             problemError = null
                         )
                     }
@@ -2568,6 +2623,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 _uiState.update {
                     it.copy(
                         isAnalyzingProblem = false,
+                        streamingProblemPreview = null,
                         problemStatusText = "",
                         problemElapsedSeconds = 0
                     )

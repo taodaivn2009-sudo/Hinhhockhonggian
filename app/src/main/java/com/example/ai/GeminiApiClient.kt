@@ -11,7 +11,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
+import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
@@ -408,7 +410,9 @@ object GeminiApiClient {
         history: List<AiChatMessage>,
         attachedPageBitmap: Bitmap? = null,
         attachedPageNumber: Int? = null,
-        onAutoResolvedModel: (AiSyncedModel, List<AiSyncedModel>) -> Unit = { _, _ -> }
+        onAutoResolvedModel: (AiSyncedModel, List<AiSyncedModel>) -> Unit = { _, _ -> },
+        onPartialAnswer: (String) -> Unit = {},
+        onThinkingChars: (Int) -> Unit = {}
     ): Result<AiDocsReply> = withContext(Dispatchers.IO) {
         val cleanKey = AiResponseParser.sanitizeApiKey(apiKey)
         if (cleanKey.isEmpty()) {
@@ -452,12 +456,19 @@ object GeminiApiClient {
                 })
             }
 
-            val rawResult = executeWithModelAutoRecovery(
+            val rawResult = executeWithModelAutoRecoveryStream(
                 apiKey = cleanKey,
                 modelId = modelId,
                 payload = payload,
                 systemText = systemText,
-                onAutoResolvedModel = onAutoResolvedModel
+                onAutoResolvedModel = onAutoResolvedModel,
+                onRawAccumulated = { rawAccum ->
+                    val preview = AiResponseParser.extractStreamingAnswerPreview(rawAccum)
+                    if (preview.isNotEmpty()) {
+                        onPartialAnswer(preview)
+                    }
+                },
+                onThinkingChars = onThinkingChars
             )
             AiResponseParser.parseDocsReply(rawResult.text).copy(tokenUsage = rawResult.usage)
         }
@@ -646,7 +657,10 @@ object GeminiApiClient {
         modelId: String,
         problemBitmap: Bitmap?,
         problemNote: String,
-        onAutoResolvedModel: (AiSyncedModel, List<AiSyncedModel>) -> Unit = { _, _ -> }
+        onAutoResolvedModel: (AiSyncedModel, List<AiSyncedModel>) -> Unit = { _, _ -> },
+        onProgressChars: (Int) -> Unit = {},
+        onStreamingPreview: (AiProblemStreamingPreview) -> Unit = {},
+        onThinkingChars: (Int) -> Unit = {}
     ): Result<AiDrawingPlan> = withContext(Dispatchers.IO) {
         val cleanKey = AiResponseParser.sanitizeApiKey(apiKey)
         if (cleanKey.isEmpty()) {
@@ -695,12 +709,22 @@ object GeminiApiClient {
                 })
             }
 
-            val rawResult = executeWithModelAutoRecovery(
+            var latestThinking = 0
+            val rawResult = executeWithModelAutoRecoveryStream(
                 apiKey = cleanKey,
                 modelId = modelId,
                 payload = payload,
                 systemText = systemText,
-                onAutoResolvedModel = onAutoResolvedModel
+                onAutoResolvedModel = onAutoResolvedModel,
+                onRawAccumulated = { rawAccum ->
+                    onProgressChars(rawAccum.length)
+                    onStreamingPreview(AiResponseParser.extractStreamingProblemPreview(rawAccum, latestThinking))
+                },
+                onThinkingChars = { thinkCount ->
+                    latestThinking = thinkCount
+                    onThinkingChars(thinkCount)
+                    onStreamingPreview(AiResponseParser.extractStreamingProblemPreview("", thinkCount))
+                }
             )
             val plan = AiResponseParser.parseDrawingPlan(rawResult.text)
                 ?: throw IllegalStateException("AI không trả về dữ liệu dựng hình hợp lệ. Hãy thử chụp ảnh rõ nét hơn hoặc mô tả thêm đề bài.")
@@ -714,6 +738,304 @@ object GeminiApiClient {
         val text: String,
         val usage: AiTokenUsage?
     )
+
+    /**
+     * Real-time SSE streaming version of [executeWithModelAutoRecovery] using
+     * `:streamGenerateContent?alt=sse`, preserving full 404 model auto-recovery, 400 compat retry
+     * (keeping streaming enabled!), and graceful fallback to unary `:generateContent` if SSE is rejected.
+     */
+    private suspend fun executeWithModelAutoRecoveryStream(
+        apiKey: String,
+        modelId: String,
+        payload: JSONObject,
+        systemText: String,
+        onAutoResolvedModel: (AiSyncedModel, List<AiSyncedModel>) -> Unit,
+        onRawAccumulated: (String) -> Unit,
+        onThinkingChars: (Int) -> Unit = {}
+    ): GenerateContentRawResult {
+        return try {
+            executeGenerateContentStreamWithCompat(
+                apiKey = apiKey,
+                modelId = modelId,
+                payload = payload,
+                systemText = systemText,
+                onRawAccumulated = onRawAccumulated,
+                onThinkingChars = onThinkingChars
+            )
+        } catch (e: HttpStatusException) {
+            if (e.statusCode != 404) throw e
+            val synced = syncAccountModels(apiKey).getOrNull()?.models.orEmpty()
+            val best = AiResponseParser.pickBestChatModel(synced)
+            if (best != null && !best.modelId.equals(modelId.trim().removePrefix("models/"), ignoreCase = true)) {
+                onAutoResolvedModel(best, synced)
+                executeGenerateContentStreamWithCompat(
+                    apiKey = apiKey,
+                    modelId = best.modelId,
+                    payload = payload,
+                    systemText = systemText,
+                    onRawAccumulated = onRawAccumulated,
+                    onThinkingChars = onThinkingChars
+                )
+            } else {
+                throw e
+            }
+        }
+    }
+
+    private fun executeGenerateContentStreamWithCompat(
+        apiKey: String,
+        modelId: String,
+        payload: JSONObject,
+        systemText: String,
+        onRawAccumulated: (String) -> Unit,
+        onThinkingChars: (Int) -> Unit
+    ): GenerateContentRawResult {
+        return try {
+            executeGenerateContentStream(apiKey, modelId, payload, onRawAccumulated, onThinkingChars)
+        } catch (e: HttpStatusException) {
+            val msg = e.message.orEmpty()
+            val isSchemaOrSystemUnsupported = e.statusCode == 400 && (
+                msg.contains("system", ignoreCase = true) ||
+                    msg.contains("developer instruction", ignoreCase = true) ||
+                    msg.contains("responseMimeType", ignoreCase = true) ||
+                    msg.contains("JSON mode", ignoreCase = true) ||
+                    msg.contains("not enabled", ignoreCase = true)
+                )
+            if (isSchemaOrSystemUnsupported) {
+                val compatPayload = buildCompatPayload(payload, systemText)
+                return try {
+                    executeGenerateContentStream(apiKey, modelId, compatPayload, onRawAccumulated, onThinkingChars)
+                } catch (e2: HttpStatusException) {
+                    if (e2.statusCode == 400 || e2.statusCode == 405 || e2.statusCode == 501) {
+                        executeGenerateContent(apiKey, modelId, compatPayload).also { res ->
+                            if (res.text.isNotEmpty()) onRawAccumulated(res.text)
+                        }
+                    } else throw e2
+                }
+            }
+            // Only fall back to non-stream generateContent if SSE endpoint itself is rejected (405/501)
+            if (e.statusCode == 405 || e.statusCode == 501) {
+                return executeGenerateContentWithCompat(apiKey, modelId, payload, systemText).also { res ->
+                    if (res.text.isNotEmpty()) onRawAccumulated(res.text)
+                }
+            }
+            throw e
+        }
+    }
+
+    private fun executeGenerateContentStream(
+        apiKey: String,
+        modelId: String,
+        payload: JSONObject,
+        onRawAccumulated: (String) -> Unit,
+        onThinkingChars: (Int) -> Unit,
+        connectTimeoutMs: Int = CONNECT_TIMEOUT_MS,
+        readTimeoutMs: Int = READ_TIMEOUT_MS
+    ): GenerateContentRawResult {
+        val safeModel = modelId.trim()
+            .removePrefix("publishers/google/models/")
+            .removePrefix("models/")
+            .ifEmpty { AiModelPreset.GEMINI_3_8_FLASH.modelId }
+
+        val geminiDevEndpoints = listOf(
+            "$BASE_URL/models/$safeModel:streamGenerateContent?alt=sse",
+            "$BASE_V1_URL/models/$safeModel:streamGenerateContent?alt=sse"
+        )
+        val vertexEndpoints = listOf(
+            "$VERTEX_V1_BASE/models/$safeModel:streamGenerateContent?alt=sse",
+            "$VERTEX_V1BETA1_BASE/models/$safeModel:streamGenerateContent?alt=sse"
+        )
+
+        val payloadBytes = payload.toString().toByteArray(Charsets.UTF_8)
+        val cachedBackend = preferredBackendByKey[apiKey]
+        val canTryVertex = isVertexExpressKey(apiKey)
+
+        if (cachedBackend == ApiBackend.VERTEX_EXPRESS && canTryVertex) {
+            return try {
+                postGenerateContentStreamGroup(
+                    vertexEndpoints, apiKey, payloadBytes, onRawAccumulated, onThinkingChars, connectTimeoutMs, readTimeoutMs
+                )
+            } catch (vertexErr: HttpStatusException) {
+                if (vertexErr.statusCode == 401 || vertexErr.statusCode == 403) {
+                    try {
+                        val res = postGenerateContentStreamGroup(
+                            geminiDevEndpoints, apiKey, payloadBytes, onRawAccumulated, onThinkingChars, connectTimeoutMs, readTimeoutMs
+                        )
+                        preferredBackendByKey[apiKey] = ApiBackend.GEMINI_DEV
+                        res
+                    } catch (devErr: HttpStatusException) {
+                        if (devErr.statusCode == 404) {
+                            preferredBackendByKey[apiKey] = ApiBackend.GEMINI_DEV
+                            throw devErr
+                        }
+                        throw vertexErr
+                    }
+                } else {
+                    throw vertexErr
+                }
+            }
+        }
+
+        return try {
+            val res = postGenerateContentStreamGroup(
+                geminiDevEndpoints, apiKey, payloadBytes, onRawAccumulated, onThinkingChars, connectTimeoutMs, readTimeoutMs
+            )
+            preferredBackendByKey[apiKey] = ApiBackend.GEMINI_DEV
+            res
+        } catch (devErr: HttpStatusException) {
+            if (devErr.statusCode == 404) {
+                preferredBackendByKey[apiKey] = ApiBackend.GEMINI_DEV
+                throw devErr
+            }
+            if ((devErr.statusCode == 401 || devErr.statusCode == 403) &&
+                canTryVertex &&
+                cachedBackend != ApiBackend.GEMINI_DEV
+            ) {
+                try {
+                    val res = postGenerateContentStreamGroup(
+                        vertexEndpoints, apiKey, payloadBytes, onRawAccumulated, onThinkingChars, connectTimeoutMs, readTimeoutMs
+                    )
+                    preferredBackendByKey[apiKey] = ApiBackend.VERTEX_EXPRESS
+                    res
+                } catch (vertexErr: HttpStatusException) {
+                    if (vertexErr.statusCode == 404) {
+                        preferredBackendByKey[apiKey] = ApiBackend.VERTEX_EXPRESS
+                        throw vertexErr
+                    }
+                    throw devErr
+                }
+            } else {
+                throw devErr
+            }
+        }
+    }
+
+    private fun postGenerateContentStreamGroup(
+        endpoints: List<String>,
+        apiKey: String,
+        payloadBytes: ByteArray,
+        onRawAccumulated: (String) -> Unit,
+        onThinkingChars: (Int) -> Unit,
+        connectTimeoutMs: Int = CONNECT_TIMEOUT_MS,
+        readTimeoutMs: Int = READ_TIMEOUT_MS
+    ): GenerateContentRawResult {
+        var lastError: HttpStatusException? = null
+        for ((idx, endpoint) in endpoints.withIndex()) {
+            val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                setRequestProperty("Accept", "text/event-stream")
+                setRequestProperty("x-goog-api-key", apiKey)
+            }
+            try {
+                conn.outputStream.use { out ->
+                    out.write(payloadBytes)
+                    out.flush()
+                }
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    val body = readStream(conn.errorStream)
+                    val err = HttpStatusException(code, formatHttpError(code, body))
+                    if (idx < endpoints.lastIndex && (code == 404 || code == 400)) {
+                        lastError = err
+                        continue
+                    }
+                    throw err
+                }
+
+                val accumulated = StringBuilder()
+                val nonSseBuffer = StringBuilder()
+                var isNonSseJson = false
+                var sawNonEmptyLine = false
+                var thinkingChars = 0
+                var lastUsage: AiTokenUsage? = null
+
+                fun consumeGeminiChunkJson(chunk: JSONObject) {
+                    AiResponseParser.parseUsageMetadata(chunk)?.let { lastUsage = it }
+                    val candidates = chunk.optJSONArray("candidates") ?: return
+                    val first = candidates.optJSONObject(0) ?: return
+                    val parts = first.optJSONObject("content")?.optJSONArray("parts") ?: return
+                    var appendedAny = false
+                    for (i in 0 until parts.length()) {
+                        val partObj = parts.optJSONObject(i) ?: continue
+                        val t = partObj.optString("text", "")
+                        if (t.isEmpty()) continue
+                        if (partObj.optBoolean("thought", false)) {
+                            thinkingChars += t.length
+                            onThinkingChars(thinkingChars)
+                        } else {
+                            accumulated.append(t)
+                            appendedAny = true
+                        }
+                    }
+                    if (appendedAny) {
+                        onRawAccumulated(accumulated.toString())
+                    }
+                }
+
+                BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8)).use { reader ->
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        val rawLine = line ?: continue
+                        val trimmed = rawLine.trim()
+                        if (trimmed.isEmpty()) continue
+
+                        if (!sawNonEmptyLine) {
+                            sawNonEmptyLine = true
+                            if ((trimmed.startsWith("{") || trimmed.startsWith("[")) && !trimmed.startsWith("data:")) {
+                                isNonSseJson = true
+                                nonSseBuffer.append(rawLine).append('\n')
+                                continue
+                            }
+                        }
+
+                        if (isNonSseJson) {
+                            nonSseBuffer.append(rawLine).append('\n')
+                            continue
+                        }
+
+                        if (trimmed.startsWith(":") || trimmed.startsWith("event:")) continue
+                        if (!trimmed.startsWith("data:")) continue
+                        val data = trimmed.removePrefix("data:").trim()
+                        if (data.isEmpty() || data == "[DONE]") {
+                            if (data == "[DONE]") break
+                            continue
+                        }
+                        val chunk = runCatching { JSONObject(data) }.getOrNull() ?: continue
+                        consumeGeminiChunkJson(chunk)
+                    }
+                }
+
+                if (isNonSseJson) {
+                    val rawJson = nonSseBuffer.toString().trim()
+                    if (rawJson.startsWith("[")) {
+                        val arr = JSONArray(rawJson)
+                        for (i in 0 until arr.length()) {
+                            arr.optJSONObject(i)?.let { consumeGeminiChunkJson(it) }
+                        }
+                    } else if (rawJson.startsWith("{")) {
+                        consumeGeminiChunkJson(JSONObject(rawJson))
+                    }
+                }
+
+                val result = accumulated.toString().trim()
+                if (result.isEmpty()) {
+                    throw IllegalStateException("AI trả về nội dung trống. Vui lòng thử lại.")
+                }
+                return GenerateContentRawResult(text = result, usage = lastUsage)
+            } catch (e: UnknownHostException) {
+                throw IllegalStateException("Không có kết nối Internet hoặc không truy cập được máy chủ Google AI. Hãy kiểm tra Wi-Fi/4G.")
+            } catch (e: SocketTimeoutException) {
+                throw IllegalStateException("Kết nối tới AI bị quá thời gian chờ. Hãy kiểm tra mạng và thử lại.")
+            } finally {
+                conn.disconnect()
+            }
+        }
+        throw lastError ?: IllegalStateException("Không thể kết nối tới máy chủ Google AI.")
+    }
 
     /**
      * Executes generateContent with automatic recovery:
@@ -1019,7 +1341,7 @@ NHIỆM VỤ:
 - Luôn chỉ ra chính xác các số trang liên quan trong tài liệu PDF 388 trang ở trên để người dùng bấm mở thẳng tới trang đó!
 - Nếu có hình ảnh trang PDF đính kèm, hãy đọc kỹ nội dung trong ảnh để giải thích hoặc tóm tắt chính xác.
 
-BẮT BUỘC TRẢ VỀ JSON HỢP LỆ (không bọc markdown):
+BẮT BUỘC TRẢ VỀ JSON HỢP LỆ (không bọc markdown) VÀ ĐẶT TRƯỜNG "answer" LÊN ĐẦU TIÊN TRƯỚC "suggestedPages" để ứng dụng hiển thị chữ trực tiếp ngay khi đang tạo:
 {
   "answer": "Nội dung trả lời chi tiết, công thức & mẹo nhớ bằng tiếng Việt",
   "suggestedPages": [
@@ -1081,7 +1403,7 @@ Chọn target="2D" cho các bài toán: khảo sát hàm số / vẽ đồ thị
 === 4. MỤC LỤC PDF ĐỂ GỢI Ý TRANG CÔNG THỨC LIÊN QUAN ===
 ${buildCompactProblemTocIndex()}
 
-BẮT BUỘC TRẢ VỀ JSON HỢP LỆ DUY NHẤT (không bọc markdown):
+BẮT BUỘC TRẢ VỀ JSON HỢP LỆ DUY NHẤT (không bọc markdown) VÀ XUẤT ĐÚNG THỨ TỰ CÁC TRƯỜNG: "target" → "title" → "problemText" → "drawingSummary" → "solutionHint" TRƯỚC, sau đó mới đến "scene3D" / "scene2D" và "relatedPages" để người dùng đọc trực tiếp ngay khi đang tạo:
 {
   "target": "3D" hoặc "2D",
   "title": "Tên ngắn gọn hình vẽ (vd: Chóp S.ABCD có SA ⊥ đáy & vectơ AM, SB)",

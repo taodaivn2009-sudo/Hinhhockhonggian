@@ -474,7 +474,8 @@ object FirebaseAiClient {
         modelId: String,
         problemBitmap: Bitmap?,
         problemNote: String,
-        onProgressChars: (Int) -> Unit = {}
+        onProgressChars: (Int) -> Unit = {},
+        onStreamingPreview: (AiProblemStreamingPreview) -> Unit = {}
     ): Result<AiDrawingPlan> = withContext(Dispatchers.IO) {
         if (problemBitmap == null && problemNote.isBlank()) {
             return@withContext Result.failure(
@@ -517,7 +518,9 @@ object FirebaseAiClient {
                 val part = chunk.text.orEmpty()
                 if (part.isNotEmpty()) {
                     accumulated.append(part)
-                    onProgressChars(accumulated.length)
+                    val current = accumulated.toString()
+                    onProgressChars(current.length)
+                    onStreamingPreview(AiResponseParser.extractStreamingProblemPreview(current))
                 }
             }
 

@@ -229,7 +229,8 @@ object OpenAiCompatApiClient {
         history: List<AiChatMessage>,
         attachedPageBitmap: Bitmap? = null,
         attachedPageNumber: Int? = null,
-        onPartialAnswer: (String) -> Unit = {}
+        onPartialAnswer: (String) -> Unit = {},
+        onThinkingChars: (Int) -> Unit = {}
     ): Result<AiDocsReply> = withContext(Dispatchers.IO) {
         val cleanKey = AiResponseParser.sanitizeApiKey(apiKey)
         val baseUrl = resolveBaseUrl(provider, customBaseUrl)
@@ -264,13 +265,9 @@ object OpenAiCompatApiClient {
                     val preview = AiResponseParser.extractStreamingAnswerPreview(rawAccum)
                     if (preview.isNotEmpty()) {
                         onPartialAnswer(preview)
-                    } else {
-                        val trimmed = rawAccum.trimStart()
-                        if (trimmed.isNotEmpty() && !trimmed.startsWith("{") && !trimmed.startsWith("```")) {
-                            onPartialAnswer(trimmed)
-                        }
                     }
-                }
+                },
+                onThinkingChars = onThinkingChars
             )
             AiResponseParser.parseDocsReply(rawResult.text).copy(tokenUsage = rawResult.usage)
         }
@@ -283,7 +280,9 @@ object OpenAiCompatApiClient {
         modelId: String,
         problemBitmap: Bitmap?,
         problemNote: String,
-        onProgressChars: (Int) -> Unit = {}
+        onProgressChars: (Int) -> Unit = {},
+        onStreamingPreview: (AiProblemStreamingPreview) -> Unit = {},
+        onThinkingChars: (Int) -> Unit = {}
     ): Result<AiDrawingPlan> = withContext(Dispatchers.IO) {
         val cleanKey = AiResponseParser.sanitizeApiKey(apiKey)
         val baseUrl = resolveBaseUrl(provider, customBaseUrl)
@@ -327,6 +326,7 @@ object OpenAiCompatApiClient {
                 put(JSONObject().put("role", "user").put("content", userContent))
             }
 
+            var latestThinking = 0
             val rawResult = executeChatCompletionStreamingWithFallback(
                 provider = provider,
                 baseUrl = baseUrl,
@@ -336,7 +336,15 @@ object OpenAiCompatApiClient {
                 temperature = 0.2,
                 preferJsonObject = true,
                 hasImageAttachment = problemBitmap != null,
-                onRawAccumulated = { raw -> onProgressChars(raw.length) }
+                onRawAccumulated = { raw ->
+                    onProgressChars(raw.length)
+                    onStreamingPreview(AiResponseParser.extractStreamingProblemPreview(raw, latestThinking))
+                },
+                onThinkingChars = { thinkCount ->
+                    latestThinking = thinkCount
+                    onThinkingChars(thinkCount)
+                    onStreamingPreview(AiResponseParser.extractStreamingProblemPreview("", thinkCount))
+                }
             )
             val plan = AiResponseParser.parseDrawingPlan(rawResult.text)
                 ?: throw IllegalStateException("AI không trả về dữ liệu dựng hình hợp lệ. Hãy thử chụp ảnh rõ nét hơn hoặc mô tả thêm đề bài.")
@@ -684,7 +692,8 @@ object OpenAiCompatApiClient {
         temperature: Double,
         preferJsonObject: Boolean,
         hasImageAttachment: Boolean,
-        onRawAccumulated: (String) -> Unit
+        onRawAccumulated: (String) -> Unit,
+        onThinkingChars: (Int) -> Unit = {}
     ): ChatCompletionRawResult {
         val streamPayload = buildChatPayload(
             modelId = modelId,
@@ -696,7 +705,7 @@ object OpenAiCompatApiClient {
         )
 
         return try {
-            executeChatCompletionStream(provider, baseUrl, apiKey, streamPayload, onRawAccumulated)
+            executeChatCompletionStream(provider, baseUrl, apiKey, streamPayload, onRawAccumulated, onThinkingChars)
         } catch (e: HttpStatusException) {
             val msg = e.message.orEmpty()
             if (hasImageAttachment && isVisionUnsupportedError(e.statusCode, msg)) {
@@ -705,19 +714,44 @@ object OpenAiCompatApiClient {
                         "Hãy chuyển sang mô hình có Vision (vd: gpt-4o-mini, claude-sonnet-4-5, llama-4-scout, gemini) hoặc gửi đề bằng văn bản."
                 )
             }
-            // Retry non-streaming without `stream_options` and without `response_format` if rejected (400/422)
-            if (e.statusCode == 400 || e.statusCode == 422 || e.statusCode == 501) {
-                val compatPayload = buildChatPayload(
+            // Tier 2: Keep stream=true! Many Custom URL proxies, Groq, or reasoning models only reject
+            // `stream_options`, `response_format`, or `temperature`, NOT streaming itself.
+            if (e.statusCode == 400 || e.statusCode == 422) {
+                val compatStreamPayload = buildChatPayload(
                     modelId = modelId,
                     messages = messages,
                     temperature = null,
                     preferJsonObject = false,
-                    stream = false,
+                    stream = true,
                     includeStreamUsage = false
                 )
-                executeChatCompletionNonStream(provider, baseUrl, apiKey, compatPayload)
-            } else {
+                try {
+                    return executeChatCompletionStream(
+                        provider,
+                        baseUrl,
+                        apiKey,
+                        compatStreamPayload,
+                        onRawAccumulated,
+                        onThinkingChars
+                    )
+                } catch (e2: HttpStatusException) {
+                    if (e2.statusCode != 400 && e2.statusCode != 422 && e2.statusCode != 501) throw e2
+                }
+            } else if (e.statusCode != 501) {
                 throw e
+            }
+
+            // Tier 3: Only fall back to non-streaming if the endpoint completely refuses SSE streaming
+            val compatNonStreamPayload = buildChatPayload(
+                modelId = modelId,
+                messages = messages,
+                temperature = null,
+                preferJsonObject = false,
+                stream = false,
+                includeStreamUsage = false
+            )
+            executeChatCompletionNonStream(provider, baseUrl, apiKey, compatNonStreamPayload).also { res ->
+                if (res.text.isNotEmpty()) onRawAccumulated(res.text)
             }
         }
     }
@@ -756,10 +790,12 @@ object OpenAiCompatApiClient {
         baseUrl: String,
         apiKey: String,
         payload: JSONObject,
-        onRawAccumulated: (String) -> Unit
+        onRawAccumulated: (String) -> Unit,
+        onThinkingChars: (Int) -> Unit = {}
     ): ChatCompletionRawResult {
         val conn = openConnection("$baseUrl/chat/completions", "POST", provider, apiKey)
         try {
+            conn.setRequestProperty("Accept", "text/event-stream")
             val bytes = payload.toString().toByteArray(Charsets.UTF_8)
             conn.doOutput = true
             conn.outputStream.use { it.write(bytes); it.flush() }
@@ -771,23 +807,45 @@ object OpenAiCompatApiClient {
                 throw HttpStatusException(code, formatHttpError(provider, code, errBody))
             }
 
-            val contentType = conn.contentType.orEmpty().lowercase()
-            if (!contentType.contains("text/event-stream")) {
-                // Server ignored stream=true and returned normal JSON
-                val body = readStream(conn.inputStream)
-                return parseNonStreamCompletionBody(body, rateLimits, allowEmptyText = false)
-            }
-
+            // Always read line-by-line instead of trusting Content-Type headers blindly:
+            // some Custom URL proxies label real SSE streams as application/json or text/plain,
+            // while non-streaming servers return a plain `{...}` JSON object handled below.
             val accumulated = StringBuilder()
+            val nonSseBuffer = StringBuilder()
+            var isNonSseJson = false
+            var sawAnyNonEmptyLine = false
+            var thinkingChars = 0
             var lastUsage: AiTokenUsage? = null
+
             BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8)).use { reader ->
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
-                    val trimmed = line?.trim().orEmpty()
-                    if (trimmed.isEmpty() || trimmed.startsWith(":")) continue
+                    val rawLine = line ?: continue
+                    val trimmed = rawLine.trim()
+                    if (trimmed.isEmpty()) continue
+
+                    if (!sawAnyNonEmptyLine) {
+                        sawAnyNonEmptyLine = true
+                        if (trimmed.startsWith("{") && !trimmed.startsWith("data:")) {
+                            // Proxy returned a plain JSON object without application/json Content-Type
+                            isNonSseJson = true
+                            nonSseBuffer.append(rawLine).append('\n')
+                            continue
+                        }
+                    }
+
+                    if (isNonSseJson) {
+                        nonSseBuffer.append(rawLine).append('\n')
+                        continue
+                    }
+
+                    if (trimmed.startsWith(":") || trimmed.startsWith("event:") || trimmed.startsWith("id:")) continue
                     if (!trimmed.startsWith("data:")) continue
                     val data = trimmed.removePrefix("data:").trim()
-                    if (data == "[DONE]") break
+                    if (data.isEmpty() || data == "[DONE]") {
+                        if (data == "[DONE]") break
+                        continue
+                    }
                     val chunk = runCatching { JSONObject(data) }.getOrNull() ?: continue
 
                     AiResponseParser.parseOpenAiUsage(
@@ -801,11 +859,25 @@ object OpenAiCompatApiClient {
                     val choices = chunk.optJSONArray("choices")
                     val first = choices?.optJSONObject(0)
                     val delta = first?.optJSONObject("delta")
+
+                    val reasoningPiece = extractContentString(delta?.opt("reasoning_content"))
+                        .ifEmpty { extractContentString(delta?.opt("reasoning")) }
+                    if (reasoningPiece.isNotEmpty()) {
+                        thinkingChars += reasoningPiece.length
+                        onThinkingChars(thinkingChars)
+                    }
+
                     val contentPiece = extractContentString(delta?.opt("content"))
                     if (contentPiece.isNotEmpty()) {
                         accumulated.append(contentPiece)
                         onRawAccumulated(accumulated.toString())
                     }
+                }
+            }
+
+            if (isNonSseJson) {
+                return parseNonStreamCompletionBody(nonSseBuffer.toString(), rateLimits, allowEmptyText = false).also { res ->
+                    if (res.text.isNotEmpty()) onRawAccumulated(res.text)
                 }
             }
 
