@@ -265,6 +265,65 @@ object FirebaseAiClient {
         }
     }
 
+    /**
+     * Sends a real lightweight `generateContent` request via Firebase AI Logic to check if [modelId]
+     * actively responds on Google Gemini.
+     */
+    suspend fun probeModelGenerateContent(modelId: String): AiModelProbeResult = withContext(Dispatchers.IO) {
+        val safeModel = sanitizeModelId(modelId)
+        val startMs = System.currentTimeMillis()
+        try {
+            val model = Firebase.ai.generativeModel(modelName = safeModel)
+            val reply = withTimeout(14_000L) {
+                model.generateContent("1+1=?")
+            }
+            val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+            val text = reply.text.orEmpty().trim()
+            if (text.isNotEmpty()) {
+                AiModelProbeResult(
+                    modelId = safeModel,
+                    status = AiModelProbeStatus.WORKING,
+                    latencyMs = elapsed,
+                    httpCode = 200,
+                    detail = "Google Gemini phản hồi OK (${elapsed}ms)"
+                )
+            } else {
+                AiModelProbeResult(
+                    modelId = safeModel,
+                    status = AiModelProbeStatus.FAILED,
+                    latencyMs = elapsed,
+                    detail = "Trả về nội dung trống"
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: TimeoutCancellationException) {
+            val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+            AiModelProbeResult(
+                modelId = safeModel,
+                status = AiModelProbeStatus.FAILED,
+                latencyMs = elapsed,
+                detail = "Quá thời gian chờ (14s)"
+            )
+        } catch (e: Throwable) {
+            val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+            val msg = e.localizedMessage.orEmpty()
+            val isQuota = msg.contains("429") || msg.contains("quota", ignoreCase = true) || msg.contains("RESOURCE_EXHAUSTED", ignoreCase = true)
+            AiModelProbeResult(
+                modelId = safeModel,
+                status = if (isQuota) AiModelProbeStatus.QUOTA_LIMIT else AiModelProbeStatus.FAILED,
+                latencyMs = elapsed,
+                httpCode = when {
+                    msg.contains("429") -> 429
+                    msg.contains("404") -> 404
+                    msg.contains("403") -> 403
+                    else -> 0
+                },
+                detail = formatFirebaseAiError(e, safeModel).take(120)
+            )
+        }
+    }
+
     suspend fun askDocumentAssistant(
         modelId: String,
         question: String,

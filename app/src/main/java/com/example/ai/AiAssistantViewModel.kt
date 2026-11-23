@@ -16,6 +16,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,8 +26,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import java.util.concurrent.atomic.AtomicInteger
 
 private const val TAG = "AiAssistantViewModel"
 
@@ -56,6 +62,13 @@ data class AiAssistantUiState(
     val modelSyncStatusMessage: String? = null,
     val modelSyncSuccess: Boolean = false,
     val syncedModelsUpdatedAt: Long = 0L,
+
+    // Live batch request testing across all models
+    val isProbingAllModels: Boolean = false,
+    val probeProgressDone: Int = 0,
+    val probeProgressTotal: Int = 0,
+    val modelProbeResults: Map<String, AiModelProbeResult> = emptyMap(),
+    val modelProbeSummary: String? = null,
 
     // Document Q&A chat state
     val messages: List<AiChatMessage> = emptyList(),
@@ -138,6 +151,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     private var activeProblemJob: Job? = null
     private var activeTestJob: Job? = null
     private var activeSyncJob: Job? = null
+    private var activeProbeAllJob: Job? = null
     private var attemptedSilentAuth = false
 
     private val _uiState = MutableStateFlow(createInitialState())
@@ -175,6 +189,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         activeProblemJob?.cancel()
         activeTestJob?.cancel()
         activeSyncJob?.cancel()
+        activeProbeAllJob?.cancel()
         pdfRenderer?.close()
         pdfRenderer = null
     }
@@ -615,6 +630,208 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 _uiState.update { it.copy(isSyncingModels = false) }
             }
         }
+    }
+
+    /**
+     * Sends a real lightweight `generateContent` request to EVERY model in the catalog (3 concurrent workers
+     * to stay friendly with rate limits), streaming per-model status + latency live into the UI.
+     * If no account models are synced yet and an API key is available, automatically syncs first.
+     */
+    fun probeAllModels(overrideApiKey: String? = null) {
+        if (_uiState.value.isProbingAllModels) {
+            cancelProbeAllModels()
+            return
+        }
+        val state = _uiState.value
+        val cleanedOverride = overrideApiKey?.let { AiResponseParser.sanitizeApiKey(it) }.orEmpty()
+        val candidateKey = cleanedOverride.ifEmpty { state.keyConfig.trimmedKey }
+        val useApiKey = candidateKey.isNotEmpty() && (!state.useGoogleGeminiActive || cleanedOverride.isNotEmpty())
+
+        if (!useApiKey && !state.isSignedInWithGoogle) {
+            _uiState.update {
+                it.copy(
+                    modelProbeSummary = "Hãy đăng nhập Google hoặc nhập API Key rồi bấm Test tất cả mô hình."
+                )
+            }
+            return
+        }
+
+        activeProbeAllJob?.cancel()
+        activeProbeAllJob = viewModelScope.launch {
+            try {
+                // Ensure the saved key is persisted & activated if the user typed a fresh key draft
+                if (useApiKey && cleanedOverride.isNotEmpty() && cleanedOverride != state.keyConfig.trimmedKey) {
+                    val updatedCfg = state.keyConfig.copy(
+                        apiKey = cleanedOverride,
+                        providerMode = AiProviderMode.PERSONAL_API_KEY
+                    )
+                    keyPrefs.save(updatedCfg)
+                    _uiState.update { it.copy(keyConfig = updatedCfg) }
+                }
+
+                // If user hasn't synced their account catalog yet, auto-sync first so we test ALL their real models
+                if (useApiKey && _uiState.value.syncedModels.isEmpty()) {
+                    _uiState.update {
+                        it.copy(
+                            isProbingAllModels = true,
+                            probeProgressDone = 0,
+                            probeProgressTotal = 0,
+                            modelProbeResults = emptyMap(),
+                            modelProbeSummary = "Đang tải danh sách mô hình từ tài khoản trước khi test..."
+                        )
+                    }
+                    val existingCustom = _uiState.value.syncedModels.filter { it.source == "custom" }
+                    val syncRes = runCatching {
+                        withTimeout(25_000L) {
+                            GeminiApiClient.syncAccountModels(
+                                apiKey = candidateKey,
+                                preferredModelId = _uiState.value.keyConfig.effectiveModelId,
+                                extraModelIds = existingCustom.map { it.modelId }
+                            )
+                        }
+                    }.getOrNull()
+                    syncRes?.onSuccess { result ->
+                        val merged = AiResponseParser.sortSyncedModels(existingCustom + result.models)
+                        val now = System.currentTimeMillis()
+                        keyPrefs.saveSyncedModels(merged, now)
+                        _uiState.update {
+                            it.copy(
+                                syncedModels = merged,
+                                syncedModelsUpdatedAt = now,
+                                modelSyncStatusMessage = result.message,
+                                modelSyncSuccess = true
+                            )
+                        }
+                    }
+                }
+
+                val targetModels = _uiState.value.displayModels
+                if (targetModels.isEmpty()) {
+                    _uiState.update {
+                        it.copy(
+                            isProbingAllModels = false,
+                            modelProbeSummary = "Không có mô hình nào để kiểm tra."
+                        )
+                    }
+                    return@launch
+                }
+
+                _uiState.update {
+                    it.copy(
+                        isProbingAllModels = true,
+                        probeProgressDone = 0,
+                        probeProgressTotal = targetModels.size,
+                        modelProbeResults = emptyMap(),
+                        modelProbeSummary = "Đang gửi request kiểm tra ${targetModels.size} mô hình..."
+                    )
+                }
+
+                val semaphore = Semaphore(permits = 3)
+                val completedCounter = AtomicInteger(0)
+                val total = targetModels.size
+
+                val results = coroutineScope {
+                    targetModels.map { model ->
+                        async(Dispatchers.IO) {
+                            semaphore.withPermit {
+                                val keyLower = model.modelId.lowercase()
+                                _uiState.update { cur ->
+                                    cur.copy(
+                                        modelProbeResults = cur.modelProbeResults + (
+                                            keyLower to AiModelProbeResult(
+                                                modelId = model.modelId,
+                                                status = AiModelProbeStatus.TESTING
+                                            )
+                                            )
+                                    )
+                                }
+                                val probeRes = if (useApiKey) {
+                                    GeminiApiClient.probeModelGenerateContent(candidateKey, model.modelId)
+                                } else {
+                                    FirebaseAiClient.probeModelGenerateContent(model.modelId)
+                                }
+                                val done = completedCounter.incrementAndGet()
+                                _uiState.update { cur ->
+                                    val updatedMap = cur.modelProbeResults + (keyLower to probeRes)
+                                    val okCount = updatedMap.values.count { it.status == AiModelProbeStatus.WORKING }
+                                    cur.copy(
+                                        probeProgressDone = done,
+                                        modelProbeResults = updatedMap,
+                                        modelProbeSummary = "Đang kiểm tra $done / $total mô hình · Hoạt động: $okCount"
+                                    )
+                                }
+                                probeRes
+                            }
+                        }
+                    }.awaitAll()
+                }
+
+                val workingList = results.filter { it.status == AiModelProbeStatus.WORKING }
+                val quotaCount = results.count { it.status == AiModelProbeStatus.QUOTA_LIMIT }
+                val failedCount = results.count { it.status == AiModelProbeStatus.FAILED }
+
+                // If currently selected model failed/quota-limited while working models exist, auto-switch to the best working model
+                val curCfg = _uiState.value.keyConfig
+                val currentWorking = workingList.any { it.modelId.equals(curCfg.effectiveModelId, ignoreCase = true) }
+                var autoSwitchedText = ""
+                if (!currentWorking && workingList.isNotEmpty()) {
+                    val workingIdSet = workingList.map { it.modelId.lowercase() }.toSet()
+                    val workingModels = targetModels.filter { it.modelId.lowercase() in workingIdSet }
+                    val bestWorking = AiResponseParser.pickBestChatModel(workingModels)
+                        ?: workingModels.minByOrNull { m ->
+                            workingList.firstOrNull { it.modelId.equals(m.modelId, ignoreCase = true) }?.latencyMs
+                                ?: Long.MAX_VALUE
+                        }
+                    if (bestWorking != null) {
+                        val nextCfg = curCfg.copy(
+                            modelId = bestWorking.modelId,
+                            providerMode = if (useApiKey) AiProviderMode.PERSONAL_API_KEY else curCfg.providerMode
+                        )
+                        keyPrefs.save(nextCfg)
+                        val bestLatency = workingList.firstOrNull { it.modelId.equals(bestWorking.modelId, ignoreCase = true) }?.latencyMs ?: 0L
+                        autoSwitchedText = " Đã tự chọn '${bestWorking.modelId}' (${bestLatency}ms)."
+                        _uiState.update { it.copy(keyConfig = nextCfg) }
+                    }
+                }
+
+                val summary = buildString {
+                    append("Hoàn tất kiểm tra $total mô hình: ")
+                    append("${workingList.size} hoạt động")
+                    if (quotaCount > 0) append(" · $quotaCount hết lượt (429)")
+                    if (failedCount > 0) append(" · $failedCount lỗi")
+                    append(".")
+                    append(autoSwitchedText)
+                }
+                _uiState.update { it.copy(modelProbeSummary = summary) }
+            } catch (e: CancellationException) {
+                val curResults = _uiState.value.modelProbeResults
+                    .filterValues { it.status != AiModelProbeStatus.TESTING }
+                val okCount = curResults.values.count { it.status == AiModelProbeStatus.WORKING }
+                _uiState.update {
+                    it.copy(
+                        modelProbeResults = curResults,
+                        modelProbeSummary = "Đã dừng kiểm tra (${curResults.size}/${it.probeProgressTotal} mô hình · Hoạt động: $okCount)."
+                    )
+                }
+            } catch (e: Throwable) {
+                Log.e(TAG, "Batch model probe failed", e)
+                _uiState.update {
+                    it.copy(modelProbeSummary = "Lỗi kiểm tra mô hình: ${e.localizedMessage ?: e.javaClass.simpleName}")
+                }
+            } finally {
+                _uiState.update { cur ->
+                    cur.copy(
+                        isProbingAllModels = false,
+                        modelProbeResults = cur.modelProbeResults.filterValues { it.status != AiModelProbeStatus.TESTING }
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelProbeAllModels() {
+        activeProbeAllJob?.cancel()
+        activeProbeAllJob = null
     }
 
     fun clearApiKey() {

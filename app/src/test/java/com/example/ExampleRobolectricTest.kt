@@ -1235,6 +1235,21 @@ class ExampleRobolectricTest {
         )
         val best = AiResponseParser.pickBestChatModel(mixedCatalog)
         assertEquals("gemini-3.5-flash", best?.modelId)
+
+        // 6. Probe-aware sorting floats WORKING models to the top sorted by fastest latency, then QUOTA_LIMIT, then FAILED
+        val probeMap = mapOf(
+            "gemini-4-tts-preview" to AiModelProbeResult("gemini-4-tts-preview", AiModelProbeStatus.FAILED, 120L, 400, "Không hỗ trợ text"),
+            "gemini-3.5-flash" to AiModelProbeResult("gemini-3.5-flash", AiModelProbeStatus.WORKING, 650L, 200),
+            "gemini-3.5-pro-preview" to AiModelProbeResult("gemini-3.5-pro-preview", AiModelProbeStatus.QUOTA_LIMIT, 300L, 429),
+            "gemma-3-27b-it" to AiModelProbeResult("gemma-3-27b-it", AiModelProbeStatus.WORKING, 280L, 200)
+        )
+        val probeSorted = AiResponseParser.sortModelsWithProbeResults(mixedCatalog, probeMap)
+        assertEquals("gemma-3-27b-it", probeSorted[0].modelId)
+        assertEquals("gemini-3.5-flash", probeSorted[1].modelId)
+        assertEquals("gemini-3.5-pro-preview", probeSorted[2].modelId)
+        assertEquals("OK · 280ms", probeMap["gemma-3-27b-it"]?.shortBadgeLabel)
+        assertEquals("429 · Hết lượt", probeMap["gemini-3.5-pro-preview"]?.shortBadgeLabel)
+        assertEquals("Lỗi 400", probeMap["gemini-4-tts-preview"]?.shortBadgeLabel)
     }
 }
 

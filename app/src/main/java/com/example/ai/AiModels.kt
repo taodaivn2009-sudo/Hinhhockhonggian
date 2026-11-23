@@ -64,6 +64,29 @@ data class AiModelSyncResult(
     val message: String
 )
 
+enum class AiModelProbeStatus {
+    TESTING,
+    WORKING,
+    QUOTA_LIMIT,
+    FAILED
+}
+
+data class AiModelProbeResult(
+    val modelId: String,
+    val status: AiModelProbeStatus,
+    val latencyMs: Long = 0L,
+    val httpCode: Int = 0,
+    val detail: String = ""
+) {
+    val shortBadgeLabel: String
+        get() = when (status) {
+            AiModelProbeStatus.TESTING -> "Đang test..."
+            AiModelProbeStatus.WORKING -> if (latencyMs > 0L) "OK · ${latencyMs}ms" else "Hoạt động"
+            AiModelProbeStatus.QUOTA_LIMIT -> if (httpCode == 429) "429 · Hết lượt" else "Hết quota"
+            AiModelProbeStatus.FAILED -> if (httpCode > 0) "Lỗi $httpCode" else "Không chạy"
+        }
+}
+
 enum class AiSubTab(val key: String, val label: String) {
     DOCS_QA("docs_qa", "Hỏi tài liệu"),
     PROBLEM_DRAW("problem_draw", "Chụp đề vẽ hình"),
@@ -502,6 +525,33 @@ object AiResponseParser {
             m.modelId.lowercase().startsWith("gemini") && isStandardChatModel(m)
         } ?: sorted.firstOrNull { isStandardChatModel(it) }
             ?: sorted.first()
+    }
+
+    /**
+     * Reorders models when live probe results exist:
+     * WORKING (fastest latency first) -> TESTING -> QUOTA_LIMIT -> untested -> FAILED.
+     */
+    fun sortModelsWithProbeResults(
+        models: List<AiSyncedModel>,
+        probeResults: Map<String, AiModelProbeResult>
+    ): List<AiSyncedModel> {
+        if (probeResults.isEmpty()) return models
+        fun statusRank(m: AiSyncedModel): Int {
+            return when (probeResults[m.modelId.lowercase()]?.status) {
+                AiModelProbeStatus.WORKING -> 0
+                AiModelProbeStatus.TESTING -> 1
+                AiModelProbeStatus.QUOTA_LIMIT -> 2
+                null -> 3
+                AiModelProbeStatus.FAILED -> 4
+            }
+        }
+        return models.sortedWith(
+            compareBy<AiSyncedModel> { statusRank(it) }
+                .thenBy { m ->
+                    val r = probeResults[m.modelId.lowercase()]
+                    if (r?.status == AiModelProbeStatus.WORKING && r.latencyMs > 0L) r.latencyMs else Long.MAX_VALUE
+                }
+        )
     }
 
     /**

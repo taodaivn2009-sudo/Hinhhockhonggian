@@ -86,6 +86,12 @@ fun AiKeySetupSection(
     modelSyncStatusMessage: String? = null,
     modelSyncSuccess: Boolean = false,
     onSyncModels: (overrideApiKey: String?) -> Unit = {},
+    isProbingAllModels: Boolean = false,
+    probeProgressDone: Int = 0,
+    probeProgressTotal: Int = 0,
+    modelProbeResults: Map<String, AiModelProbeResult> = emptyMap(),
+    modelProbeSummary: String? = null,
+    onProbeAllModels: (overrideApiKey: String?) -> Unit = {},
     onAddCustomModel: (String) -> Unit = {},
     onRemoveCustomModel: (String) -> Unit = {},
     isVerifying: Boolean,
@@ -195,7 +201,13 @@ fun AiKeySetupSection(
             onSyncModels = { onSyncModels(keyDraft.trim().ifEmpty { null }) },
             onSelectModel = onSelectModel,
             onAddCustomModel = onAddCustomModel,
-            onRemoveCustomModel = onRemoveCustomModel
+            onRemoveCustomModel = onRemoveCustomModel,
+            isProbingAllModels = isProbingAllModels,
+            probeProgressDone = probeProgressDone,
+            probeProgressTotal = probeProgressTotal,
+            modelProbeResults = modelProbeResults,
+            modelProbeSummary = modelProbeSummary,
+            onProbeAllModels = { onProbeAllModels(keyDraft.trim().ifEmpty { null }) }
         )
 
         // 3. OPTIONAL SECONDARY FALLBACK: Manual Gemini API Key

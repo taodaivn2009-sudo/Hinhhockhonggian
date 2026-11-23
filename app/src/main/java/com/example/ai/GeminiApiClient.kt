@@ -308,6 +308,97 @@ object GeminiApiClient {
         throw IllegalStateException(formatHttpError(lastCode, lastBody))
     }
 
+    /**
+     * Sends a real, minimal `:generateContent` request (`"1+1=?"`, `maxOutputTokens = 8`) to verify
+     * whether [modelId] actually responds with the user's API key (catching 429 quota=0, 404, 403,
+     * and non-text modality models that still appear in `listModels`).
+     */
+    suspend fun probeModelGenerateContent(
+        apiKey: String,
+        modelId: String
+    ): AiModelProbeResult = withContext(Dispatchers.IO) {
+        val cleanKey = AiResponseParser.sanitizeApiKey(apiKey)
+        val safeModel = modelId.trim()
+            .removePrefix("publishers/google/models/")
+            .removePrefix("models/")
+        if (cleanKey.isEmpty() || safeModel.isEmpty()) {
+            return@withContext AiModelProbeResult(
+                modelId = safeModel,
+                status = AiModelProbeStatus.FAILED,
+                detail = "Thiếu API Key hoặc mã mô hình"
+            )
+        }
+
+        val payload = JSONObject().apply {
+            put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().put(JSONObject().put("text", "1+1=?")))
+                    }
+                )
+            )
+            put(
+                "generationConfig",
+                JSONObject().apply {
+                    put("maxOutputTokens", 12)
+                    put("temperature", 0.0)
+                }
+            )
+        }
+
+        val startMs = System.currentTimeMillis()
+        try {
+            executeGenerateContent(
+                apiKey = cleanKey,
+                modelId = safeModel,
+                payload = payload,
+                connectTimeoutMs = 8_000,
+                readTimeoutMs = 14_000
+            )
+            val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+            AiModelProbeResult(
+                modelId = safeModel,
+                status = AiModelProbeStatus.WORKING,
+                latencyMs = elapsed,
+                httpCode = 200,
+                detail = "Phản hồi thành công (${elapsed}ms)"
+            )
+        } catch (e: HttpStatusException) {
+            val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+            val msg = e.message.orEmpty()
+            val isQuota = e.statusCode == 429 ||
+                msg.contains("quota", ignoreCase = true) ||
+                msg.contains("RESOURCE_EXHAUSTED", ignoreCase = true) ||
+                msg.contains("rate limit", ignoreCase = true)
+            val status = if (isQuota) AiModelProbeStatus.QUOTA_LIMIT else AiModelProbeStatus.FAILED
+            val conciseDetail = when {
+                isQuota -> "Hết hạn mức / chạm giới hạn Free Tier (HTTP 429)"
+                e.statusCode == 404 -> "Không tìm thấy mô hình trên máy chủ (HTTP 404)"
+                e.statusCode == 403 -> "Không có quyền dùng mô hình này (HTTP 403)"
+                e.statusCode == 401 -> "API Key bị từ chối (HTTP 401)"
+                e.statusCode == 400 -> "Mô hình không hỗ trợ chat văn bản chuẩn (HTTP 400)"
+                else -> msg.take(120)
+            }
+            AiModelProbeResult(
+                modelId = safeModel,
+                status = status,
+                latencyMs = elapsed,
+                httpCode = e.statusCode,
+                detail = conciseDetail
+            )
+        } catch (e: Throwable) {
+            val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+            AiModelProbeResult(
+                modelId = safeModel,
+                status = AiModelProbeStatus.FAILED,
+                latencyMs = elapsed,
+                detail = (e.localizedMessage ?: "Không phản hồi").take(110)
+            )
+        }
+    }
+
     suspend fun askDocumentAssistant(
         apiKey: String,
         modelId: String,
@@ -510,7 +601,13 @@ object GeminiApiClient {
         return copy
     }
 
-    private fun executeGenerateContent(apiKey: String, modelId: String, payload: JSONObject): String {
+    private fun executeGenerateContent(
+        apiKey: String,
+        modelId: String,
+        payload: JSONObject,
+        connectTimeoutMs: Int = CONNECT_TIMEOUT_MS,
+        readTimeoutMs: Int = READ_TIMEOUT_MS
+    ): String {
         val safeModel = modelId.trim()
             .removePrefix("publishers/google/models/")
             .removePrefix("models/")
@@ -532,11 +629,11 @@ object GeminiApiClient {
         // If this AQ. key was previously verified as Vertex AI Express, try Vertex first
         if (cachedBackend == ApiBackend.VERTEX_EXPRESS && canTryVertex) {
             return try {
-                postGenerateContentGroup(vertexEndpoints, apiKey, payloadBytes)
+                postGenerateContentGroup(vertexEndpoints, apiKey, payloadBytes, connectTimeoutMs, readTimeoutMs)
             } catch (vertexErr: HttpStatusException) {
                 if (vertexErr.statusCode == 401 || vertexErr.statusCode == 403) {
                     try {
-                        val text = postGenerateContentGroup(geminiDevEndpoints, apiKey, payloadBytes)
+                        val text = postGenerateContentGroup(geminiDevEndpoints, apiKey, payloadBytes, connectTimeoutMs, readTimeoutMs)
                         preferredBackendByKey[apiKey] = ApiBackend.GEMINI_DEV
                         text
                     } catch (devErr: HttpStatusException) {
@@ -555,7 +652,7 @@ object GeminiApiClient {
         // Default for ALL keys (both legacy `AIza...` and modern Google AI Studio `AQ.` keys):
         // Try Gemini Developer API (`generativelanguage.googleapis.com`) FIRST!
         return try {
-            val text = postGenerateContentGroup(geminiDevEndpoints, apiKey, payloadBytes)
+            val text = postGenerateContentGroup(geminiDevEndpoints, apiKey, payloadBytes, connectTimeoutMs, readTimeoutMs)
             preferredBackendByKey[apiKey] = ApiBackend.GEMINI_DEV
             text
         } catch (devErr: HttpStatusException) {
@@ -570,7 +667,7 @@ object GeminiApiClient {
             ) {
                 // Only fall back to Vertex AI Express if Gemini Developer API rejected auth/service on an `AQ.` key
                 try {
-                    val text = postGenerateContentGroup(vertexEndpoints, apiKey, payloadBytes)
+                    val text = postGenerateContentGroup(vertexEndpoints, apiKey, payloadBytes, connectTimeoutMs, readTimeoutMs)
                     preferredBackendByKey[apiKey] = ApiBackend.VERTEX_EXPRESS
                     text
                 } catch (vertexErr: HttpStatusException) {
@@ -590,15 +687,17 @@ object GeminiApiClient {
     private fun postGenerateContentGroup(
         endpoints: List<String>,
         apiKey: String,
-        payloadBytes: ByteArray
+        payloadBytes: ByteArray,
+        connectTimeoutMs: Int = CONNECT_TIMEOUT_MS,
+        readTimeoutMs: Int = READ_TIMEOUT_MS
     ): String {
         var lastError: HttpStatusException? = null
         for ((idx, endpoint) in endpoints.withIndex()) {
             val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true
-                connectTimeout = CONNECT_TIMEOUT_MS
-                readTimeout = READ_TIMEOUT_MS
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
                 setRequestProperty("Content-Type", "application/json; charset=UTF-8")
                 setRequestProperty("x-goog-api-key", apiKey)
             }

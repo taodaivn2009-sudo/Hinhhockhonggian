@@ -228,6 +228,7 @@ fun ToolToanRootScreen(
                 onSaveAiKeyOnly = { key, model -> aiViewModel.saveApiKey(key, model) },
                 onSelectAiModel = { aiViewModel.selectModel(it) },
                 onSyncAiModels = { overrideKey -> aiViewModel.syncAccountModels(overrideKey) },
+                onProbeAllAiModels = { overrideKey -> aiViewModel.probeAllModels(overrideKey) },
                 onAddCustomAiModel = { aiViewModel.addCustomModel(it) },
                 onRemoveCustomAiModel = { aiViewModel.removeCustomModel(it) },
                 onSelectAiProviderMode = { aiViewModel.selectProviderMode(it) },
