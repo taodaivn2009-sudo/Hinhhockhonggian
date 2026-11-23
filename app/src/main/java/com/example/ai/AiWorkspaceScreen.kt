@@ -162,7 +162,7 @@ fun AiWorkspaceScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "${uiState.activeProvider.shortTitle} · ${uiState.activeProfile.effectiveModelId}",
+                                    text = "${uiState.activeProviderShortLabel} · ${uiState.activeProfile.effectiveModelId}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = accentColor,
                                     fontSize = 11.sp,
@@ -285,6 +285,16 @@ fun AiWorkspaceScreen(
                                     activeProfile = uiState.activeProfile,
                                     configuredProviders = uiState.configuredProviders,
                                     onSelectProvider = { aiViewModel.selectProvider(it) },
+                                    customEndpoints = uiState.customEndpoints,
+                                    activeCustomEndpointId = uiState.activeCustomEndpointId,
+                                    onSelectCustomEndpoint = { aiViewModel.selectCustomEndpoint(it) },
+                                    onCreateCustomEndpoint = { name, baseUrl, key, verify ->
+                                        aiViewModel.createCustomEndpoint(name, baseUrl, key, verify)
+                                    },
+                                    onUpdateCustomEndpoint = { id, name, baseUrl, key, verify ->
+                                        aiViewModel.updateCustomEndpoint(id, name, baseUrl, key, verify)
+                                    },
+                                    onDeleteCustomEndpoint = { aiViewModel.deleteCustomEndpoint(it) },
                                     googleUser = uiState.googleUser,
                                     isSigningIn = uiState.isSigningIn,
                                     isTestingGoogleAi = uiState.isTestingGoogleAi,

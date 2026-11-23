@@ -1481,7 +1481,119 @@ class ExampleRobolectricTest {
         prefs.clearProviderKey(AiProvider.ANTHROPIC)
         prefs.clearProviderKey(AiProvider.CUSTOM_OPENAI)
     }
+
+    @Test
+    fun `multiple custom urls preserve old entries isolate models and tokens across restarts and delete cleanly`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = AiKeyPreferences(context)
+
+        // Start from a clean Custom URL registry
+        prefs.loadCustomEndpoints().forEach { prefs.deleteCustomEndpoint(it.id) }
+        assertTrue(prefs.loadCustomEndpoints().isEmpty())
+
+        // 1. Create first Custom URL (Together AI)
+        val ep1 = CustomEndpointProfile(
+            id = prefs.generateCustomEndpointId(),
+            name = "Together AI",
+            baseUrl = "https://api.together.xyz/v1/",
+            apiKey = "tok_together_11112222",
+            modelId = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+        )
+        val afterFirst = prefs.upsertCustomEndpoint(ep1)
+        assertEquals(1, afterFirst.size)
+        prefs.saveActiveCustomEndpointId(ep1.id)
+
+        // 2. Create second Custom URL (Ollama LAN) — first URL MUST NOT be lost!
+        val ep2 = CustomEndpointProfile(
+            id = prefs.generateCustomEndpointId(),
+            name = "Ollama Nhà",
+            baseUrl = "http://192.168.1.50:11434/v1/chat/completions",
+            apiKey = "",
+            modelId = "qwen2.5:14b"
+        )
+        val afterSecond = prefs.upsertCustomEndpoint(ep2)
+        assertEquals(2, afterSecond.size)
+        assertEquals("https://api.together.xyz/v1", afterSecond[0].effectiveBaseUrl)
+        assertEquals("http://192.168.1.50:11434/v1", afterSecond[1].effectiveBaseUrl)
+
+        // 3. Each Custom URL isolates its own synced models, daily token ledger, and persisted token snapshot
+        prefs.saveSyncedModels(
+            provider = AiProvider.CUSTOM_OPENAI,
+            models = listOf(AiSyncedModel("meta-llama/Llama-3.3-70B-Instruct-Turbo", "Llama 3.3 70B", inputTokenLimit = 131_072)),
+            customEndpointId = ep1.id
+        )
+        prefs.saveSyncedModels(
+            provider = AiProvider.CUSTOM_OPENAI,
+            models = listOf(AiSyncedModel("qwen2.5:14b", "Qwen 2.5 14B", inputTokenLimit = 32_768)),
+            customEndpointId = ep2.id
+        )
+
+        prefs.recordTokenUsage(
+            provider = AiProvider.CUSTOM_OPENAI,
+            modelId = "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            usage = AiTokenUsage(promptTokens = 800, outputTokens = 200, totalTokens = 1_000),
+            today = "2026-11-23",
+            customEndpointId = ep1.id
+        )
+        prefs.recordTokenUsage(
+            provider = AiProvider.CUSTOM_OPENAI,
+            modelId = "qwen2.5:14b",
+            usage = AiTokenUsage(promptTokens = 300, outputTokens = 150, totalTokens = 450),
+            today = "2026-11-23",
+            customEndpointId = ep2.id
+        )
+        prefs.saveTokenSnapshot(
+            provider = AiProvider.CUSTOM_OPENAI,
+            snapshot = AiPersistedTokenSnapshot(
+                modelId = "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                inputTokenLimit = 131_072,
+                currentContextTokens = 2_400,
+                isServerVerified = true,
+                verificationSource = "Together usage"
+            ),
+            customEndpointId = ep1.id
+        )
+        prefs.saveTokenSnapshot(
+            provider = AiProvider.CUSTOM_OPENAI,
+            snapshot = AiPersistedTokenSnapshot(
+                modelId = "qwen2.5:14b",
+                inputTokenLimit = 32_768,
+                currentContextTokens = 650,
+                isServerVerified = true,
+                verificationSource = "Ollama usage"
+            ),
+            customEndpointId = ep2.id
+        )
+
+        // 4. Simulate app restart with a fresh AiKeyPreferences instance
+        val reloaded = AiKeyPreferences(context)
+        val restoredList = reloaded.loadCustomEndpoints()
+        assertEquals(2, restoredList.size)
+        assertEquals("Together AI", restoredList.first { it.id == ep1.id }.displayName)
+        assertEquals("Ollama Nhà", restoredList.first { it.id == ep2.id }.displayName)
+        assertEquals(1, reloaded.loadSyncedModels(AiProvider.CUSTOM_OPENAI, ep1.id).size)
+        assertEquals("qwen2.5:14b", reloaded.loadSyncedModels(AiProvider.CUSTOM_OPENAI, ep2.id).first().modelId)
+
+        assertEquals(1_000L, reloaded.loadTokenLedgers(AiProvider.CUSTOM_OPENAI, "2026-11-23", ep1.id)["meta-llama/llama-3.3-70b-instruct-turbo"]?.usedTokensToday)
+        assertEquals(450L, reloaded.loadTokenLedgers(AiProvider.CUSTOM_OPENAI, "2026-11-23", ep2.id)["qwen2.5:14b"]?.usedTokensToday)
+        assertEquals(2_400, reloaded.loadTokenSnapshots(AiProvider.CUSTOM_OPENAI, ep1.id)["meta-llama/llama-3.3-70b-instruct-turbo"]?.currentContextTokens)
+        assertEquals(650, reloaded.loadTokenSnapshots(AiProvider.CUSTOM_OPENAI, ep2.id)["qwen2.5:14b"]?.currentContextTokens)
+
+        // 5. Deleting ep1 removes ONLY ep1 + its token data, keeping ep2 completely intact
+        val afterDelete = reloaded.deleteCustomEndpoint(ep1.id)
+        assertEquals(1, afterDelete.size)
+        assertEquals(ep2.id, afterDelete.first().id)
+        assertEquals(ep2.id, reloaded.loadActiveCustomEndpointId())
+        assertTrue(reloaded.loadTokenLedgers(AiProvider.CUSTOM_OPENAI, "2026-11-23", ep1.id).isEmpty())
+        assertEquals(450L, reloaded.loadTokenLedgers(AiProvider.CUSTOM_OPENAI, "2026-11-23", ep2.id)["qwen2.5:14b"]?.usedTokensToday)
+        assertEquals(650, reloaded.loadTokenSnapshots(AiProvider.CUSTOM_OPENAI, ep2.id)["qwen2.5:14b"]?.currentContextTokens)
+
+        // Clean up
+        reloaded.deleteCustomEndpoint(ep2.id)
+        assertTrue(reloaded.loadCustomEndpoints().isEmpty())
+    }
 }
+
 
 
 

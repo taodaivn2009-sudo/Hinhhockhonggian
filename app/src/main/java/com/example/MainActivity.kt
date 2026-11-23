@@ -220,6 +220,14 @@ fun ToolToanRootScreen(
                 onSkipUpdateVersion = { updateViewModel.skipCurrentAvailableVersion() },
                 aiUiState = aiUiState,
                 onSelectAiProvider = { aiViewModel.selectProvider(it) },
+                onSelectCustomAiEndpoint = { aiViewModel.selectCustomEndpoint(it) },
+                onCreateCustomAiEndpoint = { name, baseUrl, key, verify ->
+                    aiViewModel.createCustomEndpoint(name, baseUrl, key, verify)
+                },
+                onUpdateCustomAiEndpoint = { id, name, baseUrl, key, verify ->
+                    aiViewModel.updateCustomEndpoint(id, name, baseUrl, key, verify)
+                },
+                onDeleteCustomAiEndpoint = { aiViewModel.deleteCustomEndpoint(it) },
                 onSignInWithGoogle = {
                     context.findActivity()?.let { aiViewModel.signInWithGoogle(it) }
                 },

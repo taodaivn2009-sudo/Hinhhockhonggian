@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -90,6 +92,12 @@ fun AiKeySetupSection(
     activeProfile: AiProviderProfile,
     configuredProviders: Set<AiProvider>,
     onSelectProvider: (AiProvider) -> Unit,
+    customEndpoints: List<CustomEndpointProfile> = emptyList(),
+    activeCustomEndpointId: String? = null,
+    onSelectCustomEndpoint: (String) -> Unit = {},
+    onCreateCustomEndpoint: (name: String, baseUrl: String, apiKey: String, verifyAndSync: Boolean) -> Unit = { _, _, _, _ -> },
+    onUpdateCustomEndpoint: (endpointId: String, name: String, baseUrl: String, apiKey: String, verifyAndSync: Boolean) -> Unit = { _, _, _, _, _ -> },
+    onDeleteCustomEndpoint: (String) -> Unit = {},
     googleUser: GoogleUserProfile?,
     isSigningIn: Boolean,
     isTestingGoogleAi: Boolean = false,
@@ -124,9 +132,13 @@ fun AiKeySetupSection(
     onClearKey: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var keyDraft by remember(activeProvider, activeProfile.apiKey) { mutableStateOf(activeProfile.apiKey) }
-    var baseUrlDraft by remember(activeProvider, activeProfile.baseUrl) { mutableStateOf(activeProfile.baseUrl) }
-    var showKeyPlain by remember(activeProvider) { mutableStateOf(false) }
+    var keyDraft by remember(activeProvider, activeCustomEndpointId, activeProfile.apiKey) {
+        mutableStateOf(activeProfile.apiKey)
+    }
+    var baseUrlDraft by remember(activeProvider, activeCustomEndpointId, activeProfile.baseUrl) {
+        mutableStateOf(activeProfile.baseUrl)
+    }
+    var showKeyPlain by remember(activeProvider, activeCustomEndpointId) { mutableStateOf(false) }
     var pendingTransfer by remember { mutableStateOf<Pair<AiProvider, String>?>(null) }
 
     LaunchedEffect(activeProvider, pendingTransfer) {
@@ -145,53 +157,70 @@ fun AiKeySetupSection(
         ProviderSelectorStrip(
             activeProvider = activeProvider,
             configuredProviders = configuredProviders,
+            customEndpointCount = customEndpoints.size,
             onSelectProvider = onSelectProvider
         )
 
-        // 2. Provider-specific authentication / API Key + Base URL card
-        if (activeProvider == AiProvider.GOOGLE_ACCOUNT) {
-            GoogleGeminiAuthCard(
-                googleUser = googleUser,
-                isSigningIn = isSigningIn,
-                isTestingGoogleAi = isTestingGoogleAi,
-                authStatusMessage = authStatusMessage,
-                authStatusSuccess = authStatusSuccess,
-                onSignInWithGoogle = onSignInWithGoogle,
-                onSignOutGoogle = onSignOutGoogle,
-                onTestGoogleAi = onTestGoogleAi
-            )
-        } else {
-            ProviderApiKeyCard(
-                provider = activeProvider,
-                profile = activeProfile,
-                keyDraft = keyDraft,
-                onKeyDraftChange = { keyDraft = it },
-                baseUrlDraft = baseUrlDraft,
-                onBaseUrlDraftChange = { baseUrlDraft = it },
-                showKeyPlain = showKeyPlain,
-                onToggleShowKey = { showKeyPlain = !showKeyPlain },
-                isVerifying = isVerifying,
-                statusMessage = statusMessage,
-                statusSuccess = statusSuccess,
-                onSwitchToDetectedProvider = { detected ->
-                    pendingTransfer = detected to keyDraft
-                    onSelectProvider(detected)
-                },
-                onSaveAndVerify = {
-                    onSaveAndVerify(keyDraft, activeProfile.effectiveModelId, baseUrlDraft)
-                },
-                onSaveOnly = {
-                    onSaveOnly(keyDraft, activeProfile.effectiveModelId, baseUrlDraft)
-                },
-                onClearKey = {
-                    keyDraft = ""
-                    if (activeProvider.supportsCustomBaseUrl) baseUrlDraft = ""
-                    onClearKey()
-                }
-            )
+        // 2. Provider-specific authentication / API Key + Multi-Custom URL manager card
+        when (activeProvider) {
+            AiProvider.GOOGLE_ACCOUNT -> {
+                GoogleGeminiAuthCard(
+                    googleUser = googleUser,
+                    isSigningIn = isSigningIn,
+                    isTestingGoogleAi = isTestingGoogleAi,
+                    authStatusMessage = authStatusMessage,
+                    authStatusSuccess = authStatusSuccess,
+                    onSignInWithGoogle = onSignInWithGoogle,
+                    onSignOutGoogle = onSignOutGoogle,
+                    onTestGoogleAi = onTestGoogleAi
+                )
+            }
+            AiProvider.CUSTOM_OPENAI -> {
+                CustomUrlEndpointsCard(
+                    customEndpoints = customEndpoints,
+                    activeCustomEndpointId = activeCustomEndpointId,
+                    isVerifying = isVerifying || isSyncingModels,
+                    statusMessage = statusMessage,
+                    statusSuccess = statusSuccess,
+                    onSelectEndpoint = onSelectCustomEndpoint,
+                    onCreateEndpoint = onCreateCustomEndpoint,
+                    onUpdateEndpoint = onUpdateCustomEndpoint,
+                    onDeleteEndpoint = onDeleteCustomEndpoint
+                )
+            }
+            else -> {
+                ProviderApiKeyCard(
+                    provider = activeProvider,
+                    profile = activeProfile,
+                    keyDraft = keyDraft,
+                    onKeyDraftChange = { keyDraft = it },
+                    baseUrlDraft = baseUrlDraft,
+                    onBaseUrlDraftChange = { baseUrlDraft = it },
+                    showKeyPlain = showKeyPlain,
+                    onToggleShowKey = { showKeyPlain = !showKeyPlain },
+                    isVerifying = isVerifying,
+                    statusMessage = statusMessage,
+                    statusSuccess = statusSuccess,
+                    onSwitchToDetectedProvider = { detected ->
+                        pendingTransfer = detected to keyDraft
+                        onSelectProvider(detected)
+                    },
+                    onSaveAndVerify = {
+                        onSaveAndVerify(keyDraft, activeProfile.effectiveModelId, baseUrlDraft)
+                    },
+                    onSaveOnly = {
+                        onSaveOnly(keyDraft, activeProfile.effectiveModelId, baseUrlDraft)
+                    },
+                    onClearKey = {
+                        keyDraft = ""
+                        if (activeProvider.supportsCustomBaseUrl) baseUrlDraft = ""
+                        onClearKey()
+                    }
+                )
+            }
         }
 
-        // 3. Per-provider Model Catalog, Live Probe & Token Sync
+        // 3. Per-provider (or per-Custom URL) Model Catalog, Live Probe & Token Sync
         HorizontalDivider(color = SlateBorder.copy(alpha = 0.45f))
 
         AiModelPickerSection(
@@ -203,10 +232,17 @@ fun AiKeySetupSection(
             syncStatusMessage = modelSyncStatusMessage,
             syncSuccess = modelSyncSuccess,
             onSyncModels = {
-                onSyncModels(
-                    keyDraft.trim().ifEmpty { null },
-                    baseUrlDraft.trim().ifEmpty { null }
-                )
+                if (activeProvider == AiProvider.CUSTOM_OPENAI) {
+                    onSyncModels(
+                        activeProfile.trimmedKey.ifEmpty { null },
+                        activeProfile.effectiveBaseUrl.ifEmpty { null }
+                    )
+                } else {
+                    onSyncModels(
+                        keyDraft.trim().ifEmpty { null },
+                        baseUrlDraft.trim().ifEmpty { null }
+                    )
+                }
             },
             onSelectModel = onSelectModel,
             onAddCustomModel = onAddCustomModel,
@@ -217,11 +253,19 @@ fun AiKeySetupSection(
             modelProbeResults = modelProbeResults,
             modelProbeSummary = modelProbeSummary,
             onProbeAllModels = { subset ->
-                onProbeAllModels(
-                    keyDraft.trim().ifEmpty { null },
-                    baseUrlDraft.trim().ifEmpty { null },
-                    subset
-                )
+                if (activeProvider == AiProvider.CUSTOM_OPENAI) {
+                    onProbeAllModels(
+                        activeProfile.trimmedKey.ifEmpty { null },
+                        activeProfile.effectiveBaseUrl.ifEmpty { null },
+                        subset
+                    )
+                } else {
+                    onProbeAllModels(
+                        keyDraft.trim().ifEmpty { null },
+                        baseUrlDraft.trim().ifEmpty { null },
+                        subset
+                    )
+                }
             },
             tokenState = tokenState,
             tokenLedgers = tokenLedgers,
@@ -234,6 +278,7 @@ fun AiKeySetupSection(
 private fun ProviderSelectorStrip(
     activeProvider: AiProvider,
     configuredProviders: Set<AiProvider>,
+    customEndpointCount: Int = 0,
     onSelectProvider: (AiProvider) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -277,6 +322,11 @@ private fun ProviderSelectorStrip(
                 val selected = provider == activeProvider
                 val isConfigured = provider in configuredProviders
                 val accent = providerAccentColor(provider)
+                val chipLabel = if (provider == AiProvider.CUSTOM_OPENAI && customEndpointCount > 0) {
+                    "${provider.shortTitle} ($customEndpointCount)"
+                } else {
+                    provider.shortTitle
+                }
 
                 Row(
                     modifier = Modifier
@@ -310,7 +360,7 @@ private fun ProviderSelectorStrip(
                             )
                     )
                     Text(
-                        text = provider.shortTitle,
+                        text = chipLabel,
                         style = MaterialTheme.typography.labelMedium,
                         color = if (selected) accent else SlateTextPrimary,
                         fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
@@ -319,6 +369,558 @@ private fun ProviderSelectorStrip(
                 }
             }
         }
+    }
+}
+
+/**
+ * Multi-Custom URL manager shown inside the `Custom URL` provider section.
+ * Lets users create, switch between, edit, and delete multiple Custom OpenAI-compatible URLs
+ * without ever overwriting or losing previously saved URLs, keys, models, or token ledgers.
+ */
+@Composable
+private fun CustomUrlEndpointsCard(
+    customEndpoints: List<CustomEndpointProfile>,
+    activeCustomEndpointId: String?,
+    isVerifying: Boolean,
+    statusMessage: String?,
+    statusSuccess: Boolean,
+    onSelectEndpoint: (String) -> Unit,
+    onCreateEndpoint: (name: String, baseUrl: String, apiKey: String, verifyAndSync: Boolean) -> Unit,
+    onUpdateEndpoint: (endpointId: String, name: String, baseUrl: String, apiKey: String, verifyAndSync: Boolean) -> Unit,
+    onDeleteEndpoint: (String) -> Unit
+) {
+    val accent = providerAccentColor(AiProvider.CUSTOM_OPENAI)
+    val activeEndpoint = remember(customEndpoints, activeCustomEndpointId) {
+        customEndpoints.firstOrNull { it.id == activeCustomEndpointId } ?: customEndpoints.firstOrNull()
+    }
+    var isCreatingNew by remember { mutableStateOf(customEndpoints.isEmpty()) }
+    LaunchedEffect(customEndpoints.isEmpty()) {
+        if (customEndpoints.isEmpty()) {
+            isCreatingNew = true
+        }
+    }
+
+    var nameDraft by remember(isCreatingNew, activeEndpoint?.id, activeEndpoint?.name) {
+        mutableStateOf(if (isCreatingNew) "" else activeEndpoint?.displayName.orEmpty())
+    }
+    var baseUrlDraft by remember(isCreatingNew, activeEndpoint?.id, activeEndpoint?.baseUrl) {
+        mutableStateOf(if (isCreatingNew) "" else activeEndpoint?.baseUrl.orEmpty())
+    }
+    var keyDraft by remember(isCreatingNew, activeEndpoint?.id, activeEndpoint?.apiKey) {
+        mutableStateOf(if (isCreatingNew) "" else activeEndpoint?.apiKey.orEmpty())
+    }
+    var showKeyPlain by remember(isCreatingNew, activeEndpoint?.id) { mutableStateOf(false) }
+
+    val normalizedDraftUrl = remember(baseUrlDraft) { AiProvider.normalizeBaseUrl(baseUrlDraft) }
+    val urlChangedFromActive = !isCreatingNew &&
+        activeEndpoint != null &&
+        normalizedDraftUrl.isNotEmpty() &&
+        !normalizedDraftUrl.equals(activeEndpoint.effectiveBaseUrl, ignoreCase = true)
+    val canSubmit = !isVerifying && normalizedDraftUrl.isNotEmpty()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(
+                        accent.copy(alpha = 0.14f),
+                        SlateDeepest.copy(alpha = 0.72f)
+                    )
+                )
+            )
+            .border(
+                1.dp,
+                accent.copy(alpha = if (customEndpoints.isNotEmpty()) 0.6f else 0.35f),
+                RoundedCornerShape(16.dp)
+            )
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // Header + "+ Thêm mới" pill button
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(accent.copy(alpha = 0.2f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Dns,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(19.dp)
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Custom URL đã lưu (${customEndpoints.size})",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = SlateTextPrimary,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "Mỗi URL lưu riêng tên, Key, danh sách mô hình & token",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (customEndpoints.isNotEmpty()) EmeraldLight else SlateTextSecondary,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .defaultMinSize(minHeight = 48.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        if (isCreatingNew && customEndpoints.isNotEmpty()) accent.copy(alpha = 0.25f)
+                        else EmeraldAccent.copy(alpha = 0.18f)
+                    )
+                    .border(
+                        1.dp,
+                        if (isCreatingNew && customEndpoints.isNotEmpty()) accent
+                        else EmeraldAccent.copy(alpha = 0.65f),
+                        RoundedCornerShape(12.dp)
+                    )
+                    .clickable {
+                        isCreatingNew = true
+                        nameDraft = ""
+                        baseUrlDraft = ""
+                        keyDraft = ""
+                        showKeyPlain = false
+                    }
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                    .testTag("ai_add_custom_url_btn"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Thêm Custom URL mới",
+                    tint = if (isCreatingNew && customEndpoints.isNotEmpty()) accent else EmeraldLight,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = "Thêm mới",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isCreatingNew && customEndpoints.isNotEmpty()) accent else EmeraldLight,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 11.sp
+                )
+            }
+        }
+
+        // Saved Custom URLs list (each independently selectable & deletable)
+        if (customEndpoints.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("ai_custom_url_list"),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                customEndpoints.forEach { ep ->
+                    val isSelected = ep.id == activeEndpoint?.id
+                    val borderCol = when {
+                        isSelected && !isCreatingNew -> accent
+                        isSelected -> EmeraldAccent.copy(alpha = 0.55f)
+                        else -> SlateBorder.copy(alpha = 0.65f)
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 56.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (isSelected && !isCreatingNew) accent.copy(alpha = 0.16f)
+                                else SlateDeepest.copy(alpha = 0.62f)
+                            )
+                            .border(
+                                width = if (isSelected && !isCreatingNew) 1.5.dp else 1.dp,
+                                color = borderCol,
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .clickable {
+                                isCreatingNew = false
+                                onSelectEndpoint(ep.id)
+                            }
+                            .padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)
+                            .testTag("ai_custom_url_item_${ep.id}"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(9.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isSelected) EmeraldAccent else SlateTextSecondary.copy(alpha = 0.35f)
+                                )
+                        )
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = ep.displayName,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = SlateTextPrimary,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                if (isSelected) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(EmeraldAccent.copy(alpha = 0.2f))
+                                            .padding(horizontal = 6.dp, vertical = 1.dp)
+                                    ) {
+                                        Text(
+                                            text = "Đang dùng",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = EmeraldLight,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 9.sp
+                                        )
+                                    }
+                                }
+                            }
+                            Text(
+                                text = ep.shortHostLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = accent,
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            val modelSummary = buildString {
+                                append(ep.effectiveModelId)
+                                if (ep.syncedModels.isNotEmpty()) {
+                                    append(" · ${ep.syncedModels.size} mô hình")
+                                }
+                                append(" · ${ep.maskedKey}")
+                            }
+                            Text(
+                                text = modelSummary,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SlateTextSecondary,
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        IconButton(
+                            onClick = { onDeleteEndpoint(ep.id) },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("ai_delete_custom_url_${ep.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteOutline,
+                                contentDescription = "Xóa Custom URL ${ep.displayName}",
+                                tint = RoseAccent.copy(alpha = 0.9f),
+                                modifier = Modifier.size(19.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalDivider(color = SlateBorder.copy(alpha = 0.45f))
+
+        // Form mode header (Create New vs Edit Active)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = if (isCreatingNew) {
+                    if (customEndpoints.isNotEmpty()) "Tạo Custom URL mới (giữ nguyên URL cũ)"
+                    else "Thêm Custom URL đầu tiên"
+                } else {
+                    "Chỉnh sửa: ${activeEndpoint?.displayName.orEmpty()}"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = if (isCreatingNew) EmeraldLight else accent,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            if (isCreatingNew && customEndpoints.isNotEmpty()) {
+                TextButton(
+                    onClick = { isCreatingNew = false },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.testTag("ai_cancel_new_custom_url_btn")
+                ) {
+                    Text("Hủy", color = SlateTextSecondary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+        }
+
+        // Friendly Name input
+        OutlinedTextField(
+            value = nameDraft,
+            onValueChange = { nameDraft = it },
+            label = { Text("Tên gợi nhớ (tùy chọn)") },
+            placeholder = { Text("vd: Together AI, Ollama Nhà, Proxy riêng", fontSize = 12.sp) },
+            leadingIcon = {
+                Icon(Icons.Default.Label, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+            },
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = accent,
+                unfocusedBorderColor = SlateBorder,
+                focusedTextColor = SlateTextPrimary,
+                unfocusedTextColor = SlateTextPrimary,
+                cursorColor = accent
+            ),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("ai_custom_url_name_input")
+        )
+
+        // Base URL input
+        OutlinedTextField(
+            value = baseUrlDraft,
+            onValueChange = { baseUrlDraft = it },
+            label = { Text("Base URL (chuẩn OpenAI /v1)") },
+            placeholder = { Text("https://api.together.xyz/v1") },
+            leadingIcon = {
+                Icon(Icons.Default.Dns, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+            },
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = accent,
+                unfocusedBorderColor = SlateBorder,
+                focusedTextColor = SlateTextPrimary,
+                unfocusedTextColor = SlateTextPrimary,
+                cursorColor = accent
+            ),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("ai_custom_base_url_input")
+        )
+
+        // Quick preset endpoint chips
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            AiProvider.customEndpointSuggestions.forEach { (label, url) ->
+                val activeChip = baseUrlDraft.trim().equals(url, ignoreCase = true)
+                Box(
+                    modifier = Modifier
+                        .defaultMinSize(minHeight = 36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (activeChip) accent.copy(alpha = 0.2f) else SlateDeepest.copy(alpha = 0.65f))
+                        .border(
+                            1.dp,
+                            if (activeChip) accent else SlateBorder.copy(alpha = 0.7f),
+                            RoundedCornerShape(10.dp)
+                        )
+                        .clickable {
+                            baseUrlDraft = url
+                            val isSuggestionOrBlank = nameDraft.isBlank() ||
+                                AiProvider.customEndpointSuggestions.any { it.first.equals(nameDraft.trim(), ignoreCase = true) }
+                            if (isSuggestionOrBlank) {
+                                nameDraft = label
+                            }
+                        }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (activeChip) accent else SlateTextLight,
+                        fontWeight = if (activeChip) FontWeight.Bold else FontWeight.Medium,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+
+        // API Key input
+        OutlinedTextField(
+            value = keyDraft,
+            onValueChange = { keyDraft = it },
+            label = { Text("API Key (tùy chọn với Ollama/LAN)") },
+            placeholder = { Text(AiProvider.CUSTOM_OPENAI.keyPlaceholder, fontSize = 12.sp) },
+            leadingIcon = {
+                Icon(Icons.Default.Key, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+            },
+            trailingIcon = {
+                IconButton(
+                    onClick = { showKeyPlain = !showKeyPlain },
+                    modifier = Modifier.testTag("ai_key_toggle_visibility")
+                ) {
+                    Icon(
+                        imageVector = if (showKeyPlain) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        contentDescription = if (showKeyPlain) "Ẩn API Key" else "Hiện API Key",
+                        tint = SlateTextSecondary
+                    )
+                }
+            },
+            singleLine = true,
+            visualTransformation = if (showKeyPlain) VisualTransformation.None else PasswordVisualTransformation(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = accent,
+                unfocusedBorderColor = SlateBorder,
+                focusedTextColor = SlateTextPrimary,
+                unfocusedTextColor = SlateTextPrimary,
+                cursorColor = accent
+            ),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("ai_api_key_input")
+        )
+
+        // Safeguard banner if user typed a brand-new URL while editing an existing endpoint
+        AnimatedVisibility(visible = urlChangedFromActive) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(EmeraldAccent.copy(alpha = 0.14f))
+                    .border(1.dp, EmeraldAccent.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Bạn vừa nhập URL khác. Muốn giữ nguyên '${activeEndpoint?.displayName.orEmpty()}'?",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SlateTextPrimary,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(
+                    onClick = {
+                        val effectiveName = if (nameDraft.trim().equals(activeEndpoint?.displayName, ignoreCase = true)) {
+                            AiProvider.deriveCustomEndpointName(baseUrlDraft)
+                        } else {
+                            nameDraft
+                        }
+                        onCreateEndpoint(effectiveName, baseUrlDraft, keyDraft, true)
+                        isCreatingNew = false
+                    },
+                    enabled = canSubmit,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.testTag("ai_save_as_new_custom_url_btn")
+                ) {
+                    Text(
+                        text = "+ Lưu thành URL mới",
+                        color = EmeraldLight,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+
+        // Action Buttons
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = {
+                    if (isCreatingNew || activeEndpoint == null) {
+                        onCreateEndpoint(nameDraft, baseUrlDraft, keyDraft, true)
+                        isCreatingNew = false
+                    } else {
+                        onUpdateEndpoint(activeEndpoint.id, nameDraft, baseUrlDraft, keyDraft, true)
+                    }
+                },
+                enabled = canSubmit,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isCreatingNew) EmeraldAccent else accent,
+                    contentColor = Color.Black
+                ),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .defaultMinSize(minHeight = 48.dp)
+                    .testTag("ai_save_verify_key_btn")
+            ) {
+                if (isVerifying) {
+                    CircularProgressIndicator(
+                        color = Color.Black,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Đang đồng bộ...", fontWeight = FontWeight.Bold)
+                } else {
+                    Text(
+                        text = if (isCreatingNew || activeEndpoint == null) "Tạo & Đồng bộ" else "Cập nhật & Đồng bộ",
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+            }
+
+            OutlinedButton(
+                onClick = {
+                    if (isCreatingNew || activeEndpoint == null) {
+                        onCreateEndpoint(nameDraft, baseUrlDraft, keyDraft, false)
+                        isCreatingNew = false
+                    } else {
+                        onUpdateEndpoint(activeEndpoint.id, nameDraft, baseUrlDraft, keyDraft, false)
+                    }
+                },
+                enabled = canSubmit,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .defaultMinSize(minHeight = 48.dp)
+                    .testTag("ai_save_key_only_btn")
+            ) {
+                Text(
+                    text = if (isCreatingNew || activeEndpoint == null) "Lưu mới" else "Lưu",
+                    color = SlateTextPrimary,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+
+        if (!statusMessage.isNullOrBlank()) {
+            Text(
+                text = statusMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (statusSuccess) EmeraldLight else RoseAccent,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.testTag("ai_key_status_message")
+            )
+        }
+
+        Text(
+            text = AiProvider.CUSTOM_OPENAI.keyHelpSubtitle,
+            style = MaterialTheme.typography.labelSmall,
+            color = SlateTextSecondary,
+            fontSize = 11.sp
+        )
     }
 }
 

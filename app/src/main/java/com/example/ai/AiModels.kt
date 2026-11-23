@@ -220,6 +220,7 @@ class AiKeyPreferences(context: Context) {
 
     init {
         migrateLegacyIfNeeded()
+        migrateLegacyCustomEndpointIfNeeded()
     }
 
     private fun migrateLegacyIfNeeded() {
@@ -259,8 +260,176 @@ class AiKeyPreferences(context: Context) {
         editor.apply()
     }
 
+    /**
+     * Migrates any previously saved single Custom URL under `provider_custom_openai_*` into the
+     * multi-endpoint Custom URL registry without losing its URL, key, synced models, or token history.
+     */
+    private fun migrateLegacyCustomEndpointIfNeeded() {
+        if (prefs.getBoolean(KEY_CUSTOM_ENDPOINTS_MIGRATED, false)) return
+        val existingList = loadCustomEndpoints()
+        if (existingList.isNotEmpty()) {
+            prefs.edit().putBoolean(KEY_CUSTOM_ENDPOINTS_MIGRATED, true).apply()
+            return
+        }
+        val legacyUrl = prefs.getString(providerKey(AiProvider.CUSTOM_OPENAI, "base_url"), "").orEmpty().trim()
+        val legacyKey = prefs.getString(providerKey(AiProvider.CUSTOM_OPENAI, "api_key"), "").orEmpty().trim()
+        val editor = prefs.edit().putBoolean(KEY_CUSTOM_ENDPOINTS_MIGRATED, true)
+        if (legacyUrl.isNotEmpty() || legacyKey.isNotEmpty()) {
+            val normalizedUrl = AiProvider.normalizeBaseUrl(legacyUrl)
+            val legacyModel = prefs.getString(providerKey(AiProvider.CUSTOM_OPENAI, "model_id"), "")
+                .orEmpty().ifBlank { AiProvider.CUSTOM_OPENAI.defaultModelId }
+            val legacyModels = parseSyncedModelsJson(
+                prefs.getString(providerKey(AiProvider.CUSTOM_OPENAI, "synced_models"), null).orEmpty()
+            )
+            val legacyModelsAt = prefs.getLong(providerKey(AiProvider.CUSTOM_OPENAI, "synced_at"), 0L)
+            val migratedId = "custom_default"
+            val migrated = CustomEndpointProfile(
+                id = migratedId,
+                name = AiProvider.deriveCustomEndpointName(normalizedUrl),
+                baseUrl = normalizedUrl,
+                apiKey = legacyKey,
+                modelId = legacyModel,
+                syncedModels = legacyModels,
+                syncedModelsUpdatedAt = legacyModelsAt
+            )
+            editor.putString(KEY_CUSTOM_ENDPOINTS_JSON, serializeCustomEndpoints(listOf(migrated)))
+            editor.putString(KEY_ACTIVE_CUSTOM_ENDPOINT_ID, migratedId)
+
+            val legacyLedgers = prefs.getString(providerKey(AiProvider.CUSTOM_OPENAI, "token_ledgers"), null)
+            if (!legacyLedgers.isNullOrBlank()) {
+                editor.putString(scopedKey(AiProvider.CUSTOM_OPENAI, "token_ledgers", migratedId), legacyLedgers)
+            }
+            val legacySnapshots = prefs.getString(providerKey(AiProvider.CUSTOM_OPENAI, "token_snapshots_v1"), null)
+            if (!legacySnapshots.isNullOrBlank()) {
+                editor.putString(scopedKey(AiProvider.CUSTOM_OPENAI, "token_snapshots_v1", migratedId), legacySnapshots)
+            }
+        }
+        editor.apply()
+    }
+
     private fun providerKey(provider: AiProvider, field: String): String =
         "provider_${provider.key}_$field"
+
+    private fun scopedKey(provider: AiProvider, field: String, customEndpointId: String? = null): String {
+        val cleanEp = customEndpointId?.trim().orEmpty()
+        return if (provider == AiProvider.CUSTOM_OPENAI && cleanEp.isNotEmpty()) {
+            "custom_ep_${cleanEp}_$field"
+        } else {
+            providerKey(provider, field)
+        }
+    }
+
+    fun generateCustomEndpointId(): String =
+        "custom_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}"
+
+    fun loadCustomEndpoints(): List<CustomEndpointProfile> {
+        val raw = prefs.getString(KEY_CUSTOM_ENDPOINTS_JSON, null).orEmpty()
+        if (raw.isBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optString("id").trim()
+                    val url = AiProvider.normalizeBaseUrl(o.optString("baseUrl", ""))
+                    if (id.isEmpty() || url.isEmpty()) continue
+                    val modelsRaw = o.optJSONArray("syncedModels")?.toString().orEmpty()
+                    add(
+                        CustomEndpointProfile(
+                            id = id,
+                            name = o.optString("name", "").trim().ifEmpty { AiProvider.deriveCustomEndpointName(url) },
+                            baseUrl = url,
+                            apiKey = o.optString("apiKey", ""),
+                            modelId = o.optString("modelId", "").trim()
+                                .ifEmpty { AiProvider.CUSTOM_OPENAI.defaultModelId },
+                            syncedModels = parseSyncedModelsJson(modelsRaw),
+                            syncedModelsUpdatedAt = o.optLong("syncedModelsUpdatedAt", 0L)
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun saveCustomEndpoints(endpoints: List<CustomEndpointProfile>) {
+        prefs.edit().putString(KEY_CUSTOM_ENDPOINTS_JSON, serializeCustomEndpoints(endpoints)).apply()
+    }
+
+    fun loadActiveCustomEndpointId(): String? {
+        val saved = prefs.getString(KEY_ACTIVE_CUSTOM_ENDPOINT_ID, null)?.trim().orEmpty()
+        val list = loadCustomEndpoints()
+        if (list.isEmpty()) return null
+        return if (saved.isNotEmpty() && list.any { it.id == saved }) saved else list.first().id
+    }
+
+    fun saveActiveCustomEndpointId(endpointId: String?) {
+        val clean = endpointId?.trim().orEmpty()
+        val editor = prefs.edit()
+        if (clean.isEmpty()) {
+            editor.remove(KEY_ACTIVE_CUSTOM_ENDPOINT_ID)
+        } else {
+            editor.putString(KEY_ACTIVE_CUSTOM_ENDPOINT_ID, clean)
+        }
+        editor.apply()
+    }
+
+    fun upsertCustomEndpoint(endpoint: CustomEndpointProfile): List<CustomEndpointProfile> {
+        val cleanUrl = AiProvider.normalizeBaseUrl(endpoint.baseUrl)
+        if (cleanUrl.isEmpty()) return loadCustomEndpoints()
+        val normalized = endpoint.copy(
+            id = endpoint.id.trim().ifEmpty { generateCustomEndpointId() },
+            name = endpoint.name.trim().ifEmpty { AiProvider.deriveCustomEndpointName(cleanUrl) },
+            baseUrl = cleanUrl,
+            apiKey = AiResponseParser.sanitizeApiKey(endpoint.apiKey),
+            modelId = endpoint.effectiveModelId
+        )
+        val current = loadCustomEndpoints().toMutableList()
+        val idx = current.indexOfFirst { it.id == normalized.id }
+        if (idx >= 0) {
+            current[idx] = normalized
+        } else {
+            current.add(normalized)
+        }
+        saveCustomEndpoints(current)
+        return current
+    }
+
+    fun deleteCustomEndpoint(endpointId: String): List<CustomEndpointProfile> {
+        val cleanId = endpointId.trim()
+        val current = loadCustomEndpoints()
+        val updated = current.filterNot { it.id == cleanId }
+        val activeId = prefs.getString(KEY_ACTIVE_CUSTOM_ENDPOINT_ID, null)?.trim()
+        val nextActiveId = if (activeId == cleanId) updated.firstOrNull()?.id else activeId
+        val editor = prefs.edit()
+            .putString(KEY_CUSTOM_ENDPOINTS_JSON, serializeCustomEndpoints(updated))
+            .remove(scopedKey(AiProvider.CUSTOM_OPENAI, "token_ledgers", cleanId))
+            .remove(scopedKey(AiProvider.CUSTOM_OPENAI, "token_snapshots_v1", cleanId))
+        if (nextActiveId.isNullOrBlank()) {
+            editor.remove(KEY_ACTIVE_CUSTOM_ENDPOINT_ID)
+        } else {
+            editor.putString(KEY_ACTIVE_CUSTOM_ENDPOINT_ID, nextActiveId)
+        }
+        editor.apply()
+        return updated
+    }
+
+    private fun serializeCustomEndpoints(endpoints: List<CustomEndpointProfile>): String {
+        val arr = JSONArray()
+        endpoints.forEach { ep ->
+            arr.put(
+                JSONObject().apply {
+                    put("id", ep.id)
+                    put("name", ep.displayName)
+                    put("baseUrl", ep.effectiveBaseUrl)
+                    put("apiKey", ep.trimmedKey)
+                    put("modelId", ep.effectiveModelId)
+                    put("syncedModels", JSONArray(serializeSyncedModels(ep.syncedModels)))
+                    put("syncedModelsUpdatedAt", ep.syncedModelsUpdatedAt)
+                }
+            )
+        }
+        return arr.toString()
+    }
 
     fun loadActiveProvider(): AiProvider =
         AiProvider.fromKey(prefs.getString(KEY_ACTIVE_PROVIDER, AiProvider.GOOGLE_ACCOUNT.key))
@@ -325,19 +494,39 @@ class AiKeyPreferences(context: Context) {
         )
     }
 
-    fun loadSyncedModels(provider: AiProvider): List<AiSyncedModel> {
+    fun loadSyncedModels(provider: AiProvider, customEndpointId: String? = null): List<AiSyncedModel> {
+        if (provider == AiProvider.CUSTOM_OPENAI && !customEndpointId.isNullOrBlank()) {
+            return loadCustomEndpoints().firstOrNull { it.id == customEndpointId }?.syncedModels.orEmpty()
+        }
         val raw = prefs.getString(providerKey(provider, "synced_models"), null).orEmpty()
         return parseSyncedModelsJson(raw)
     }
 
-    fun loadSyncedModelsUpdatedAt(provider: AiProvider): Long =
-        prefs.getLong(providerKey(provider, "synced_at"), 0L)
+    fun loadSyncedModelsUpdatedAt(provider: AiProvider, customEndpointId: String? = null): Long {
+        if (provider == AiProvider.CUSTOM_OPENAI && !customEndpointId.isNullOrBlank()) {
+            return loadCustomEndpoints().firstOrNull { it.id == customEndpointId }?.syncedModelsUpdatedAt ?: 0L
+        }
+        return prefs.getLong(providerKey(provider, "synced_at"), 0L)
+    }
 
     fun saveSyncedModels(
         provider: AiProvider,
         models: List<AiSyncedModel>,
-        updatedAtMillis: Long = System.currentTimeMillis()
+        updatedAtMillis: Long = System.currentTimeMillis(),
+        customEndpointId: String? = null
     ) {
+        if (provider == AiProvider.CUSTOM_OPENAI && !customEndpointId.isNullOrBlank()) {
+            val existing = loadCustomEndpoints().firstOrNull { it.id == customEndpointId }
+            if (existing != null) {
+                upsertCustomEndpoint(
+                    existing.copy(
+                        syncedModels = models,
+                        syncedModelsUpdatedAt = updatedAtMillis
+                    )
+                )
+            }
+            return
+        }
         val serialized = serializeSyncedModels(models)
         val editor = prefs.edit()
             .putString(providerKey(provider, "synced_models"), serialized)
@@ -349,13 +538,17 @@ class AiKeyPreferences(context: Context) {
         editor.apply()
     }
 
-    fun addCustomModel(provider: AiProvider, rawModelId: String): List<AiSyncedModel> {
+    fun addCustomModel(
+        provider: AiProvider,
+        rawModelId: String,
+        customEndpointId: String? = null
+    ): List<AiSyncedModel> {
         val cleanId = rawModelId.trim()
             .removePrefix("publishers/google/models/")
             .removePrefix("models/")
             .trim()
-        if (cleanId.isEmpty()) return loadSyncedModels(provider)
-        val existing = loadSyncedModels(provider).ifEmpty { provider.defaultPresetModels() }
+        if (cleanId.isEmpty()) return loadSyncedModels(provider, customEndpointId)
+        val existing = loadSyncedModels(provider, customEndpointId).ifEmpty { provider.defaultPresetModels() }
         val withoutDup = existing.filterNot { it.modelId.equals(cleanId, ignoreCase = true) }
         val presetTitle = if (provider == AiProvider.GOOGLE_ACCOUNT || provider == AiProvider.GOOGLE_API_KEY) {
             AiModelPreset.fromId(cleanId)?.title
@@ -370,23 +563,28 @@ class AiKeyPreferences(context: Context) {
             source = "custom"
         )
         val updated = listOf(customEntry) + withoutDup
-        saveSyncedModels(provider, updated)
+        saveSyncedModels(provider, updated, customEndpointId = customEndpointId)
         return updated
     }
 
-    fun removeCustomModel(provider: AiProvider, modelId: String): List<AiSyncedModel> {
-        val updated = loadSyncedModels(provider).filterNot {
+    fun removeCustomModel(
+        provider: AiProvider,
+        modelId: String,
+        customEndpointId: String? = null
+    ): List<AiSyncedModel> {
+        val updated = loadSyncedModels(provider, customEndpointId).filterNot {
             it.source == "custom" && it.modelId.equals(modelId.trim(), ignoreCase = true)
         }
-        saveSyncedModels(provider, updated)
+        saveSyncedModels(provider, updated, customEndpointId = customEndpointId)
         return updated
     }
 
     fun loadTokenLedgers(
         provider: AiProvider,
-        today: String = currentDayKey()
+        today: String = currentDayKey(),
+        customEndpointId: String? = null
     ): Map<String, AiModelTokenLedger> {
-        val raw = prefs.getString(providerKey(provider, "token_ledgers"), null).orEmpty()
+        val raw = prefs.getString(scopedKey(provider, "token_ledgers", customEndpointId), null).orEmpty()
         return parseTokenLedgersJson(raw, today)
     }
 
@@ -395,11 +593,12 @@ class AiKeyPreferences(context: Context) {
         modelId: String,
         usage: AiTokenUsage,
         today: String = currentDayKey(),
-        nowMillis: Long = System.currentTimeMillis()
+        nowMillis: Long = System.currentTimeMillis(),
+        customEndpointId: String? = null
     ): Map<String, AiModelTokenLedger> {
         val cleanId = modelId.trim().removePrefix("publishers/google/models/").removePrefix("models/")
-        if (cleanId.isEmpty() || !usage.hasData) return loadTokenLedgers(provider, today)
-        val currentMap = loadTokenLedgers(provider, today).toMutableMap()
+        if (cleanId.isEmpty() || !usage.hasData) return loadTokenLedgers(provider, today, customEndpointId)
+        val currentMap = loadTokenLedgers(provider, today, customEndpointId).toMutableMap()
         val key = cleanId.lowercase()
         val prev = currentMap[key]
         val turnTotal = usage.totalTokens.takeIf { it > 0 } ?: (usage.promptTokens + usage.outputTokens + usage.thoughtsTokens)
@@ -416,12 +615,15 @@ class AiKeyPreferences(context: Context) {
             lastUpdatedAtMillis = nowMillis
         )
         currentMap[key] = updated
-        saveTokenLedgers(provider, currentMap)
+        saveTokenLedgers(provider, currentMap, customEndpointId)
         return currentMap
     }
 
-    fun loadTokenSnapshots(provider: AiProvider): Map<String, AiPersistedTokenSnapshot> {
-        val raw = prefs.getString(providerKey(provider, "token_snapshots_v1"), null).orEmpty()
+    fun loadTokenSnapshots(
+        provider: AiProvider,
+        customEndpointId: String? = null
+    ): Map<String, AiPersistedTokenSnapshot> {
+        val raw = prefs.getString(scopedKey(provider, "token_snapshots_v1", customEndpointId), null).orEmpty()
         if (raw.isBlank()) return emptyMap()
         return runCatching {
             val arr = JSONArray(raw)
@@ -457,12 +659,16 @@ class AiKeyPreferences(context: Context) {
         }.getOrDefault(emptyMap())
     }
 
-    fun saveTokenSnapshot(provider: AiProvider, snapshot: AiPersistedTokenSnapshot) {
+    fun saveTokenSnapshot(
+        provider: AiProvider,
+        snapshot: AiPersistedTokenSnapshot,
+        customEndpointId: String? = null
+    ) {
         val cleanId = snapshot.modelId.trim()
             .removePrefix("publishers/google/models/")
             .removePrefix("models/")
         if (cleanId.isEmpty()) return
-        val currentMap = loadTokenSnapshots(provider).toMutableMap()
+        val currentMap = loadTokenSnapshots(provider, customEndpointId).toMutableMap()
         currentMap[cleanId.lowercase()] = snapshot.copy(modelId = cleanId)
         val arr = JSONArray()
         currentMap.values.forEach { s ->
@@ -483,7 +689,7 @@ class AiKeyPreferences(context: Context) {
                 }
             )
         }
-        prefs.edit().putString(providerKey(provider, "token_snapshots_v1"), arr.toString()).apply()
+        prefs.edit().putString(scopedKey(provider, "token_snapshots_v1", customEndpointId), arr.toString()).apply()
     }
 
     fun loadChatMessages(): List<AiChatMessage> {
@@ -687,7 +893,11 @@ class AiKeyPreferences(context: Context) {
         }.getOrDefault(emptyMap())
     }
 
-    private fun saveTokenLedgers(provider: AiProvider, map: Map<String, AiModelTokenLedger>) {
+    private fun saveTokenLedgers(
+        provider: AiProvider,
+        map: Map<String, AiModelTokenLedger>,
+        customEndpointId: String? = null
+    ) {
         val arr = JSONArray()
         map.values.forEach { entry ->
             arr.put(
@@ -706,7 +916,7 @@ class AiKeyPreferences(context: Context) {
             )
         }
         val serialized = arr.toString()
-        val editor = prefs.edit().putString(providerKey(provider, "token_ledgers"), serialized)
+        val editor = prefs.edit().putString(scopedKey(provider, "token_ledgers", customEndpointId), serialized)
         if (provider == AiProvider.GOOGLE_API_KEY || provider == AiProvider.GOOGLE_ACCOUNT) {
             editor.putString(KEY_TOKEN_LEDGERS, serialized)
         }
@@ -722,6 +932,9 @@ class AiKeyPreferences(context: Context) {
         private const val KEY_TOKEN_LEDGERS = "gemini_token_ledgers_v1"
         private const val KEY_ACTIVE_PROVIDER = "ai_active_provider_v2"
         private const val KEY_MULTI_PROVIDER_MIGRATED = "ai_multi_provider_migrated_v2"
+        private const val KEY_CUSTOM_ENDPOINTS_JSON = "ai_custom_endpoints_v1"
+        private const val KEY_ACTIVE_CUSTOM_ENDPOINT_ID = "ai_active_custom_endpoint_id_v1"
+        private const val KEY_CUSTOM_ENDPOINTS_MIGRATED = "ai_custom_endpoints_migrated_v1"
         private const val KEY_DOCS_CHAT_HISTORY = "ai_docs_chat_history_v1"
 
         fun currentDayKey(nowMillis: Long = System.currentTimeMillis()): String =

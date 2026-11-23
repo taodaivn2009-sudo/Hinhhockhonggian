@@ -232,6 +232,26 @@ enum class AiProvider(
             "SiliconFlow" to "https://api.siliconflow.cn/v1",
             "Ollama LAN" to "http://192.168.1.100:11434/v1"
         )
+
+        /**
+         * Derives a concise, human-friendly display name from a Custom Base URL when the user leaves
+         * the custom name field empty.
+         */
+        fun deriveCustomEndpointName(rawUrl: String): String {
+            val normalized = normalizeBaseUrl(rawUrl)
+            if (normalized.isEmpty()) return "Custom URL"
+            customEndpointSuggestions.firstOrNull { (_, url) ->
+                normalized.equals(url, ignoreCase = true)
+            }?.let { return it.first }
+
+            val withoutScheme = normalized
+                .removePrefix("https://")
+                .removePrefix("http://")
+            val hostPort = withoutScheme.substringBefore('/').trim()
+            if (hostPort.isEmpty()) return "Custom URL"
+            val cleanHost = hostPort.removePrefix("api.").removePrefix("www.")
+            return cleanHost.take(28).ifEmpty { "Custom URL" }
+        }
     }
 }
 
@@ -281,4 +301,56 @@ data class AiProviderProfile(
         AiProvider.CUSTOM_OPENAI -> effectiveBaseUrl.isNotEmpty()
         else -> hasKey
     }
+}
+
+/**
+ * Fully isolated Custom OpenAI-compatible endpoint profile.
+ * Each saved Custom URL maintains its own unique [id], friendly [name], [baseUrl], [apiKey],
+ * selected [modelId], cached [syncedModels], and separate token ledger/snapshot storage scope.
+ */
+data class CustomEndpointProfile(
+    val id: String,
+    val name: String,
+    val baseUrl: String,
+    val apiKey: String = "",
+    val modelId: String = AiProvider.CUSTOM_OPENAI.defaultModelId,
+    val syncedModels: List<AiSyncedModel> = emptyList(),
+    val syncedModelsUpdatedAt: Long = 0L
+) {
+    val trimmedKey: String get() = AiResponseParser.sanitizeApiKey(apiKey)
+    val hasKey: Boolean get() = trimmedKey.isNotEmpty()
+    val effectiveBaseUrl: String get() = AiProvider.normalizeBaseUrl(baseUrl)
+
+    val displayName: String
+        get() = name.trim().ifEmpty { AiProvider.deriveCustomEndpointName(effectiveBaseUrl) }
+
+    val shortHostLabel: String
+        get() = effectiveBaseUrl
+            .removePrefix("https://")
+            .removePrefix("http://")
+            .trimEnd('/')
+
+    val effectiveModelId: String
+        get() = modelId.trim().ifEmpty {
+            syncedModels.firstOrNull()?.modelId ?: AiProvider.CUSTOM_OPENAI.defaultModelId
+        }
+
+    val maskedKey: String
+        get() {
+            val k = trimmedKey
+            return when {
+                k.isEmpty() -> "Không dùng Key"
+                k.length <= 8 -> "•".repeat(k.length)
+                else -> "${k.take(4)}${"•".repeat(6)}${k.takeLast(4)}"
+            }
+        }
+
+    fun toProviderProfile(): AiProviderProfile = AiProviderProfile(
+        provider = AiProvider.CUSTOM_OPENAI,
+        apiKey = trimmedKey,
+        baseUrl = effectiveBaseUrl,
+        modelId = effectiveModelId,
+        syncedModels = syncedModels,
+        syncedModelsUpdatedAt = syncedModelsUpdatedAt
+    )
 }
