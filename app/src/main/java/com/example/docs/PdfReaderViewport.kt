@@ -433,11 +433,12 @@ private fun PdfPagesLazyColumn(
             with(density) { (maxWidth.coerceAtMost(840.dp).toPx() * 1.25f).roundToInt().coerceIn(720, 1280) }
         }
 
-        // Prefetch immediate neighbor pages once scrolling settles so next/prev pages appear instantly
+        // Prefetch immediate neighbor pages once scrolling settles so visible page always renders first
         LaunchedEffect(listState.isScrollInProgress, targetWidthPx) {
             if (!listState.isScrollInProgress) {
+                delay(180)
                 val center = listState.firstVisibleItemIndex
-                renderer.prefetchPages(listOf(center + 1, center - 1, center + 2), targetWidthPx)
+                renderer.prefetchPages(listOf(center + 1, center - 1), targetWidthPx)
             }
         }
 

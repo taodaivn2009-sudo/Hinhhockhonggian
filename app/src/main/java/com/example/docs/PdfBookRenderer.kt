@@ -27,10 +27,9 @@ data class CachedPdfPage(
 
 /**
  * Thread-safe, memory-bounded native Android [PdfRenderer] engine for the bundled 388-page PDF.
- * - Uses [Bitmap.Config.RGB_565] for opaque white PDF pages -> 50% less RAM, 2x faster GPU upload,
- *   and 2x more cached pages inside the ~36 MB [LruCache].
+ * - Renders pages into Android-required [Bitmap.Config.ARGB_8888] bitmaps serialized via [Mutex].
  * - Pre-wraps [ImageBitmap] once per decoded page to avoid repeated conversions during recomposition.
- * - Supports background neighbor prefetching for zero-spinner smooth scrolling.
+ * - Caches decoded pages inside a ~48 MB [LruCache] with background neighbor prefetching.
  */
 class PdfBookRenderer(
     private val appContext: Context,
@@ -44,8 +43,8 @@ class PdfBookRenderer(
     private var defaultAspectRatio: Float = 210f / 297f
     private var isClosed: Boolean = false
 
-    // Cap decoded PDF page cache at ~36 MB (~25-35 pages in RGB_565) for instant 60fps scrolling without OOM.
-    private val pageCache = object : LruCache<String, CachedPdfPage>(36 * 1024) {
+    // Cap decoded PDF page cache at ~48 MB for instant 60fps scrolling without OOM.
+    private val pageCache = object : LruCache<String, CachedPdfPage>(48 * 1024) {
         override fun sizeOf(key: String, value: CachedPdfPage): Int =
             (value.bitmap.allocationByteCount / 1024).coerceAtLeast(1)
     }
@@ -114,8 +113,8 @@ class PdfBookRenderer(
                         val ratio = if (page.width > 0) page.height.toFloat() / page.width.toFloat() else (297f / 210f)
                         val width = bucketWidth.coerceIn(480, 1440)
                         val height = (width * ratio).roundToInt().coerceIn(480, 2400)
-                        // RGB_565 uses half the memory & GPU upload bandwidth for opaque white PDF pages!
-                        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
+                        // Android PdfRenderer.Page.render strictly requires Bitmap.Config.ARGB_8888
+                        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                         val canvas = Canvas(bitmap)
                         canvas.drawColor(Color.WHITE)
                         page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
