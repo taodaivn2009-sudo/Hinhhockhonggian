@@ -99,8 +99,8 @@ fun AiWorkspaceScreen(
                     // AI Sub-Tab Switcher Pill
                     AiSubTabBar(
                         activeTab = uiState.activeSubTab,
-                        isSignedInWithGoogle = uiState.isSignedInWithGoogle,
-                        hasKey = uiState.keyConfig.hasKey,
+                        activeProvider = uiState.activeProvider,
+                        isAiReady = uiState.isAiReady,
                         onSelectTab = { aiViewModel.selectSubTab(it) },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -111,7 +111,7 @@ fun AiWorkspaceScreen(
                     // Compact active AI provider & model strip on Docs Q&A / Problem Draw tabs
                     val signedInUser = uiState.googleUser
                     if (uiState.isAiReady && uiState.activeSubTab != AiSubTab.API_KEY) {
-                        val accentColor = if (uiState.useGoogleGeminiActive) EmeraldAccent else CyanAccent
+                        val accentColor = providerAccentColor(uiState.activeProvider)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -126,7 +126,7 @@ fun AiWorkspaceScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            if (signedInUser != null && uiState.useGoogleGeminiActive) {
+                            if (signedInUser != null && uiState.activeProvider == AiProvider.GOOGLE_ACCOUNT) {
                                 GoogleAccountAvatar(
                                     user = signedInUser,
                                     size = 30.dp,
@@ -137,38 +137,40 @@ fun AiWorkspaceScreen(
                                     modifier = Modifier
                                         .size(30.dp)
                                         .clip(CircleShape)
-                                        .background(CyanAccent.copy(alpha = 0.22f)),
+                                        .background(accentColor.copy(alpha = 0.22f)),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Key,
                                         contentDescription = null,
-                                        tint = CyanAccent,
+                                        tint = accentColor,
                                         modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = if (uiState.useGoogleGeminiActive && signedInUser != null) {
+                                    text = if (uiState.activeProvider == AiProvider.GOOGLE_ACCOUNT && signedInUser != null) {
                                         signedInUser.displayName
                                     } else {
-                                        "API Key riêng (${uiState.keyConfig.maskedKey})"
+                                        uiState.activeProviderLabel
                                     },
                                     style = MaterialTheme.typography.labelMedium,
                                     color = SlateTextPrimary,
                                     fontWeight = FontWeight.Bold,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "${uiState.activeProviderShortLabel} · ${uiState.keyConfig.effectiveModelId}",
+                                    text = "${uiState.activeProvider.shortTitle} · ${uiState.activeProfile.effectiveModelId}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = if (uiState.useGoogleGeminiActive) EmeraldLight else CyanAccent,
+                                    color = accentColor,
                                     fontSize = 11.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 val tok = uiState.tokenState
+                                val balancePrefix = tok.accountBalanceLabel?.takeIf { it.isNotBlank() }?.let { "$it · " }.orEmpty()
                                 val tokenLine = when {
                                     tok.hasContextLimit -> {
                                         val rem = AiResponseParser.formatExactTokens(tok.remainingContextTokens.toLong())
@@ -176,12 +178,13 @@ fun AiWorkspaceScreen(
                                         val todayStr = if (tok.usedTokensToday > 0L) {
                                             " · Hôm nay: ${AiResponseParser.formatExactTokens(tok.usedTokensToday)}"
                                         } else ""
-                                        "Còn $rem / $maxTok ctx$todayStr"
+                                        "${balancePrefix}Còn $rem / $maxTok ctx$todayStr"
                                     }
                                     tok.currentContextTokens > 0 || tok.usedTokensToday > 0L -> {
-                                        "Phiên: ${AiResponseParser.formatExactTokens(tok.currentContextTokens.toLong())} · Hôm nay: ${AiResponseParser.formatExactTokens(tok.usedTokensToday)}"
+                                        "${balancePrefix}Phiên: ${AiResponseParser.formatExactTokens(tok.currentContextTokens.toLong())} · Hôm nay: ${AiResponseParser.formatExactTokens(tok.usedTokensToday)}"
                                     }
                                     tok.isSyncingTokens -> "Đang đồng bộ số token..."
+                                    balancePrefix.isNotEmpty() -> balancePrefix.removeSuffix(" · ")
                                     else -> ""
                                 }
                                 if (tokenLine.isNotEmpty()) {
@@ -198,9 +201,9 @@ fun AiWorkspaceScreen(
                                 }
                             }
                             Text(
-                                text = "Đổi mô hình",
+                                text = "Đổi nguồn",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = CyanAccent,
+                                color = accentColor,
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
@@ -264,13 +267,13 @@ fun AiWorkspaceScreen(
                                     Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(22.dp))
                                     Column {
                                         Text(
-                                            text = "Kết nối Google Gemini & Key AI",
+                                            text = "Kết nối AI Đa Nhà Cung Cấp",
                                             style = MaterialTheme.typography.titleMedium,
                                             color = SlateTextPrimary,
                                             fontWeight = FontWeight.ExtraBold
                                         )
                                         Text(
-                                            text = "Đăng nhập Google để dùng ngay không cần API Key, hoặc nhập khóa riêng",
+                                            text = "Google Gemini, OpenAI, OpenRouter, Groq, DeepSeek, Claude & Custom URL — lưu riêng từng khóa",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = SlateTextSecondary
                                         )
@@ -278,6 +281,10 @@ fun AiWorkspaceScreen(
                                 }
 
                                 AiKeySetupSection(
+                                    activeProvider = uiState.activeProvider,
+                                    activeProfile = uiState.activeProfile,
+                                    configuredProviders = uiState.configuredProviders,
+                                    onSelectProvider = { aiViewModel.selectProvider(it) },
                                     googleUser = uiState.googleUser,
                                     isSigningIn = uiState.isSigningIn,
                                     isTestingGoogleAi = uiState.isTestingGoogleAi,
@@ -286,19 +293,22 @@ fun AiWorkspaceScreen(
                                     onSignInWithGoogle = triggerGoogleSignIn,
                                     onSignOutGoogle = { aiViewModel.signOutGoogle(context) },
                                     onTestGoogleAi = { aiViewModel.testGoogleGeminiConnection() },
-                                    keyConfig = uiState.keyConfig,
                                     displayModels = uiState.displayModels,
                                     isSyncedFromAccount = uiState.syncedModels.isNotEmpty(),
                                     isSyncingModels = uiState.isSyncingModels,
                                     modelSyncStatusMessage = uiState.modelSyncStatusMessage,
                                     modelSyncSuccess = uiState.modelSyncSuccess,
-                                    onSyncModels = { overrideKey -> aiViewModel.syncAccountModels(overrideKey) },
+                                    onSyncModels = { overrideKey, overrideUrl ->
+                                        aiViewModel.syncAccountModels(overrideKey, overrideUrl)
+                                    },
                                     isProbingAllModels = uiState.isProbingAllModels,
                                     probeProgressDone = uiState.probeProgressDone,
                                     probeProgressTotal = uiState.probeProgressTotal,
                                     modelProbeResults = uiState.modelProbeResults,
                                     modelProbeSummary = uiState.modelProbeSummary,
-                                    onProbeAllModels = { overrideKey -> aiViewModel.probeAllModels(overrideKey) },
+                                    onProbeAllModels = { overrideKey, overrideUrl, subset ->
+                                        aiViewModel.probeAllModels(overrideKey, overrideUrl, subset)
+                                    },
                                     tokenState = uiState.tokenState,
                                     tokenLedgers = uiState.tokenLedgers,
                                     onRefreshTokens = { aiViewModel.refreshTokenSync() },
@@ -307,10 +317,13 @@ fun AiWorkspaceScreen(
                                     isVerifying = uiState.isVerifyingKey,
                                     statusMessage = uiState.keyStatusMessage,
                                     statusSuccess = uiState.keyStatusSuccess,
-                                    onSaveAndVerify = { key, model -> aiViewModel.saveAndVerifyApiKey(key, model) },
-                                    onSaveOnly = { key, model -> aiViewModel.saveApiKey(key, model) },
+                                    onSaveAndVerify = { key, model, baseUrl ->
+                                        aiViewModel.saveAndVerifyApiKey(key, model, baseUrl)
+                                    },
+                                    onSaveOnly = { key, model, baseUrl ->
+                                        aiViewModel.saveApiKey(key, model, baseUrl)
+                                    },
                                     onSelectModel = { aiViewModel.selectModel(it) },
-                                    onSelectProviderMode = { aiViewModel.selectProviderMode(it) },
                                     onClearKey = { aiViewModel.clearApiKey() }
                                 )
                             }
@@ -346,8 +359,8 @@ fun AiWorkspaceScreen(
 @Composable
 private fun AiSubTabBar(
     activeTab: AiSubTab,
-    isSignedInWithGoogle: Boolean,
-    hasKey: Boolean,
+    activeProvider: AiProvider,
+    isAiReady: Boolean,
     onSelectTab: (AiSubTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -366,18 +379,13 @@ private fun AiSubTabBar(
     ) {
         AiSubTab.entries.forEach { tab ->
             val selected = tab == activeTab
-            val connected = isSignedInWithGoogle || hasKey
             val accent = when (tab) {
                 AiSubTab.DOCS_QA -> CyanAccent
                 AiSubTab.PROBLEM_DRAW -> PurpleAccent
-                AiSubTab.API_KEY -> if (connected) EmeraldAccent else AmberAccent
+                AiSubTab.API_KEY -> if (isAiReady) EmeraldAccent else AmberAccent
             }
             val label = if (tab == AiSubTab.API_KEY) {
-                when {
-                    isSignedInWithGoogle -> "Google ✓"
-                    hasKey -> "Key ✓"
-                    else -> "Đăng nhập"
-                }
+                if (isAiReady) "${activeProvider.shortTitle} ✓" else "Kết nối AI"
             } else tab.label
 
             Box(

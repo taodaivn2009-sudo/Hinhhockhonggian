@@ -46,6 +46,7 @@ import com.example.ui.theme.*
 fun AiModelPickerSection(
     models: List<AiSyncedModel>,
     selectedModelId: String,
+    activeProvider: AiProvider = AiProvider.GOOGLE_ACCOUNT,
     isSyncedFromAccount: Boolean,
     isSyncingModels: Boolean,
     syncStatusMessage: String?,
@@ -59,18 +60,25 @@ fun AiModelPickerSection(
     probeProgressTotal: Int = 0,
     modelProbeResults: Map<String, AiModelProbeResult> = emptyMap(),
     modelProbeSummary: String? = null,
-    onProbeAllModels: () -> Unit = {},
+    onProbeAllModels: (subsetModelIds: List<String>?) -> Unit = {},
     tokenState: AiContextTokenState = AiContextTokenState(),
     tokenLedgers: Map<String, AiModelTokenLedger> = emptyMap(),
     onRefreshTokens: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var searchQuery by remember { mutableStateOf("") }
-    var showAllModels by remember { mutableStateOf(false) }
-    var onlyWorkingFilter by remember { mutableStateOf(false) }
-    var showAddCustomRow by remember { mutableStateOf(false) }
-    var customModelDraft by remember { mutableStateOf("") }
+    var searchQuery by remember(activeProvider) { mutableStateOf("") }
+    var showAllModels by remember(activeProvider) { mutableStateOf(false) }
+    var onlyWorkingFilter by remember(activeProvider) { mutableStateOf(false) }
+    var onlyFreeFilter by remember(activeProvider) { mutableStateOf(false) }
+    var showAddCustomRow by remember(activeProvider) { mutableStateOf(false) }
+    var customModelDraft by remember(activeProvider) { mutableStateOf("") }
 
+    val hasFreeModels = remember(models) {
+        models.any { it.source == "free" || it.modelId.endsWith(":free", ignoreCase = true) }
+    }
+    val freeCount = remember(models) {
+        models.count { it.source == "free" || it.modelId.endsWith(":free", ignoreCase = true) }
+    }
     val workingCount = remember(modelProbeResults) {
         modelProbeResults.values.count { it.status == AiModelProbeStatus.WORKING }
     }
@@ -81,16 +89,18 @@ fun AiModelPickerSection(
         modelProbeResults.values.count { it.status == AiModelProbeStatus.FAILED }
     }
 
-    // Reset working-only filter if probe results were cleared or none worked
     LaunchedEffect(workingCount) {
         if (workingCount == 0 && onlyWorkingFilter) onlyWorkingFilter = false
+    }
+    LaunchedEffect(hasFreeModels) {
+        if (!hasFreeModels && onlyFreeFilter) onlyFreeFilter = false
     }
 
     val orderedModels = remember(models, modelProbeResults) {
         AiResponseParser.sortModelsWithProbeResults(models, modelProbeResults)
     }
 
-    val filteredModels = remember(orderedModels, searchQuery, onlyWorkingFilter, modelProbeResults) {
+    val filteredModels = remember(orderedModels, searchQuery, onlyWorkingFilter, onlyFreeFilter, modelProbeResults) {
         val q = searchQuery.trim()
         orderedModels.filter { model ->
             val matchesQuery = q.isEmpty() ||
@@ -99,13 +109,14 @@ fun AiModelPickerSection(
                 model.description.contains(q, ignoreCase = true)
             val matchesWorking = !onlyWorkingFilter ||
                 modelProbeResults[model.modelId.lowercase()]?.status == AiModelProbeStatus.WORKING
-            matchesQuery && matchesWorking
+            val matchesFree = !onlyFreeFilter ||
+                model.source == "free" || model.modelId.endsWith(":free", ignoreCase = true)
+            matchesQuery && matchesWorking && matchesFree
         }
     }
 
-    // Keep parent settings scroll smooth by showing top 6 unless expanded, searching, or filtering working models
-    val visibleModels = remember(filteredModels, selectedModelId, showAllModels, searchQuery, onlyWorkingFilter) {
-        if (showAllModels || searchQuery.isNotBlank() || onlyWorkingFilter || filteredModels.size <= 6) {
+    val visibleModels = remember(filteredModels, selectedModelId, showAllModels, searchQuery, onlyWorkingFilter, onlyFreeFilter) {
+        if (showAllModels || searchQuery.isNotBlank() || onlyWorkingFilter || onlyFreeFilter || filteredModels.size <= 6) {
             filteredModels
         } else {
             val top = filteredModels.take(6).toMutableList()
@@ -116,6 +127,9 @@ fun AiModelPickerSection(
             top
         }
     }
+
+    val isFilterNarrowed = searchQuery.isNotBlank() || onlyFreeFilter
+    val probeTargetCount = if (isFilterNarrowed) filteredModels.size.coerceAtMost(24) else models.size.coerceAtMost(24)
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -128,7 +142,7 @@ fun AiModelPickerSection(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    text = "Chọn mô hình Gemini",
+                    text = "Chọn mô hình ${activeProvider.shortTitle}",
                     style = MaterialTheme.typography.labelMedium,
                     color = SlateTextPrimary,
                     fontWeight = FontWeight.Bold
@@ -148,7 +162,7 @@ fun AiModelPickerSection(
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = if (isSyncedFromAccount) "${models.size} mô hình" else "${models.size} mặc định",
+                        text = if (isSyncedFromAccount) "${models.size} mô hình" else "${models.size} gợi ý",
                         style = MaterialTheme.typography.labelSmall,
                         color = if (isSyncedFromAccount) EmeraldLight else SlateTextSecondary,
                         fontSize = 10.sp,
@@ -170,7 +184,8 @@ fun AiModelPickerSection(
         // Exact Server-Synced Token Telemetry Card
         AiTokenStatusCard(
             tokenState = tokenState,
-            onRefreshTokens = onRefreshTokens
+            onRefreshTokens = onRefreshTokens,
+            activeProvider = activeProvider
         )
 
         // Dual Action Bar: "Đồng bộ mô hình" + "Test tất cả mô hình"
@@ -240,7 +255,10 @@ fun AiModelPickerSection(
                         else EmeraldAccent.copy(alpha = 0.55f),
                         RoundedCornerShape(11.dp)
                     )
-                    .clickable(enabled = !isSyncingModels) { onProbeAllModels() }
+                    .clickable(enabled = !isSyncingModels) {
+                        val subset = if (isFilterNarrowed) filteredModels.map { it.modelId } else null
+                        onProbeAllModels(subset)
+                    }
                     .padding(horizontal = 10.dp, vertical = 9.dp)
                     .testTag("ai_probe_all_models_btn"),
                 verticalAlignment = Alignment.CenterVertically,
@@ -265,13 +283,13 @@ fun AiModelPickerSection(
                 } else {
                     Icon(
                         imageVector = Icons.Default.Speed,
-                        contentDescription = "Gửi request kiểm tra tất cả mô hình",
+                        contentDescription = "Gửi request kiểm tra mô hình",
                         tint = EmeraldLight,
                         modifier = Modifier.size(15.dp)
                     )
                     Spacer(Modifier.width(5.dp))
                     Text(
-                        text = "Test tất cả (${models.size})",
+                        text = if (isFilterNarrowed) "Test lọc ($probeTargetCount)" else "Test tất cả ($probeTargetCount)",
                         style = MaterialTheme.typography.labelSmall,
                         color = EmeraldLight,
                         fontWeight = FontWeight.ExtraBold,
@@ -424,14 +442,55 @@ fun AiModelPickerSection(
             }
         }
 
-        // Instant Search Box when account synced > 5 models
+        // Optional :free filter chip (for OpenRouter free models) + Instant Search Box
+        if (hasFreeModels) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(
+                            if (onlyFreeFilter) EmeraldAccent.copy(alpha = 0.24f)
+                            else SlateDeepest.copy(alpha = 0.65f)
+                        )
+                        .border(
+                            1.dp,
+                            if (onlyFreeFilter) EmeraldAccent else SlateBorder,
+                            RoundedCornerShape(9.dp)
+                        )
+                        .clickable { onlyFreeFilter = !onlyFreeFilter }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .testTag("ai_filter_free_models_btn"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.FilterList,
+                        contentDescription = "Lọc mô hình miễn phí",
+                        tint = if (onlyFreeFilter) EmeraldLight else SlateTextSecondary,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Text(
+                        text = if (onlyFreeFilter) "Chỉ hiện Miễn phí ($freeCount)" else "Lọc Miễn phí :free ($freeCount)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (onlyFreeFilter) EmeraldLight else SlateTextSecondary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+
         if (models.size > 5) {
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 placeholder = {
                     Text(
-                        text = "Tìm nhanh trong ${models.size} mô hình (vd: flash, pro, lite...)",
+                        text = "Tìm nhanh trong ${models.size} mô hình ${activeProvider.shortTitle}...",
                         fontSize = 12.sp,
                         color = SlateTextSecondary
                     )
@@ -505,7 +564,7 @@ fun AiModelPickerSection(
         }
 
         // Expand/Collapse toggle if synced catalog has > 6 models
-        if (searchQuery.isBlank() && !onlyWorkingFilter && filteredModels.size > 6) {
+        if (searchQuery.isBlank() && !onlyWorkingFilter && !onlyFreeFilter && filteredModels.size > 6) {
             val remaining = filteredModels.size - visibleModels.size
             Row(
                 modifier = Modifier
@@ -703,23 +762,37 @@ private fun ModelOptionCard(
                 )
                 val badgeText = when {
                     model.source == "custom" -> "Tùy chỉnh"
+                    model.source == "free" || model.modelId.endsWith(":free", ignoreCase = true) -> "Miễn phí"
                     model.formattedContextWindow.isNotEmpty() -> "Ctx ${model.formattedContextWindow.removeSuffix(" token")}"
                     model.source == "api" -> "AI Studio"
                     model.source == "vertex" -> "Vertex"
+                    model.source == AiProvider.OPENAI.key -> "OpenAI"
+                    model.source == AiProvider.OPENROUTER.key -> "OpenRouter"
+                    model.source == AiProvider.GROQ.key -> "Groq"
+                    model.source == AiProvider.DEEPSEEK.key -> "DeepSeek"
+                    model.source == AiProvider.ANTHROPIC.key -> "Claude"
+                    model.source == AiProvider.CUSTOM_OPENAI.key -> "Custom"
                     else -> ""
                 }
                 if (badgeText.isNotEmpty()) {
+                    val isFreeBadge = badgeText == "Miễn phí"
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(5.dp))
                             .background(
-                                if (model.source == "custom") IndigoPrimary.copy(alpha = 0.22f)
-                                else SlateDark.copy(alpha = 0.85f)
+                                when {
+                                    isFreeBadge -> EmeraldAccent.copy(alpha = 0.2f)
+                                    model.source == "custom" -> IndigoPrimary.copy(alpha = 0.22f)
+                                    else -> SlateDark.copy(alpha = 0.85f)
+                                }
                             )
                             .border(
                                 1.dp,
-                                if (model.source == "custom") IndigoBright.copy(alpha = 0.45f)
-                                else SlateBorder.copy(alpha = 0.7f),
+                                when {
+                                    isFreeBadge -> EmeraldAccent.copy(alpha = 0.55f)
+                                    model.source == "custom" -> IndigoBright.copy(alpha = 0.45f)
+                                    else -> SlateBorder.copy(alpha = 0.7f)
+                                },
                                 RoundedCornerShape(5.dp)
                             )
                             .padding(horizontal = 5.dp, vertical = 1.dp)
@@ -727,7 +800,11 @@ private fun ModelOptionCard(
                         Text(
                             text = badgeText,
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (model.source == "custom") IndigoBright else SlateTextSecondary,
+                            color = when {
+                                isFreeBadge -> EmeraldLight
+                                model.source == "custom" -> IndigoBright
+                                else -> SlateTextSecondary
+                            },
                             fontSize = 9.sp,
                             fontWeight = FontWeight.SemiBold
                         )

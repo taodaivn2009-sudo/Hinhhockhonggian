@@ -78,7 +78,9 @@ data class AiTokenUsage(
     val promptTokens: Int = 0,
     val outputTokens: Int = 0,
     val thoughtsTokens: Int = 0,
-    val totalTokens: Int = 0
+    val totalTokens: Int = 0,
+    val rateLimitRemainingTokens: Long? = null,
+    val rateLimitTotalTokens: Long? = null
 ) {
     val hasData: Boolean get() = totalTokens > 0 || promptTokens > 0 || outputTokens > 0
 }
@@ -101,7 +103,12 @@ data class AiExactContextTokenSync(
     val inputTokenLimit: Int,
     val outputTokenLimit: Int,
     val currentContextTokens: Int,
-    val syncedAtMillis: Long = System.currentTimeMillis()
+    val syncedAtMillis: Long = System.currentTimeMillis(),
+    val isServerVerified: Boolean = true,
+    val verificationSource: String = "Google countTokens",
+    val rateLimitRemainingTokens: Long? = null,
+    val rateLimitTotalTokens: Long? = null,
+    val accountBalanceLabel: String? = null
 )
 
 data class AiContextTokenState(
@@ -114,6 +121,10 @@ data class AiContextTokenState(
     val requestsToday: Int = 0,
     val isSyncingTokens: Boolean = false,
     val isServerVerified: Boolean = false,
+    val verificationSource: String = "",
+    val rateLimitRemainingTokens: Long? = null,
+    val rateLimitTotalTokens: Long? = null,
+    val accountBalanceLabel: String? = null,
     val lastSyncedAtMillis: Long = 0L,
     val syncError: String? = null
 ) {
@@ -138,7 +149,11 @@ data class AiModelProbeResult(
         get() = when (status) {
             AiModelProbeStatus.TESTING -> "Đang test..."
             AiModelProbeStatus.WORKING -> if (latencyMs > 0L) "OK · ${latencyMs}ms" else "Hoạt động"
-            AiModelProbeStatus.QUOTA_LIMIT -> if (httpCode == 429) "429 · Hết lượt" else "Hết quota"
+            AiModelProbeStatus.QUOTA_LIMIT -> when (httpCode) {
+                402 -> "402 · Hết credit"
+                429 -> "429 · Hết lượt"
+                else -> "Hết quota"
+            }
             AiModelProbeStatus.FAILED -> if (httpCode > 0) "Lỗi $httpCode" else "Không chạy"
         }
 }
@@ -182,30 +197,261 @@ data class AiKeyConfig(
 class AiKeyPreferences(context: Context) {
     private val prefs = context.getSharedPreferences("tool_toan_ai_config_v1", Context.MODE_PRIVATE)
 
-    fun load(): AiKeyConfig = AiKeyConfig(
-        apiKey = prefs.getString(KEY_API_KEY, "") ?: "",
-        modelId = prefs.getString(KEY_MODEL_ID, AiModelPreset.GEMINI_3_8_FLASH.modelId)
-            ?: AiModelPreset.GEMINI_3_8_FLASH.modelId,
-        providerMode = AiProviderMode.fromKey(prefs.getString(KEY_PROVIDER_MODE, AiProviderMode.GOOGLE_GEMINI.key))
-    )
+    init {
+        migrateLegacyIfNeeded()
+    }
+
+    private fun migrateLegacyIfNeeded() {
+        if (prefs.getBoolean(KEY_MULTI_PROVIDER_MIGRATED, false)) return
+        val legacyKey = prefs.getString(KEY_API_KEY, "").orEmpty()
+        val legacyModel = prefs.getString(KEY_MODEL_ID, AiModelPreset.GEMINI_3_8_FLASH.modelId)
+            ?: AiModelPreset.GEMINI_3_8_FLASH.modelId
+        val legacyMode = AiProviderMode.fromKey(prefs.getString(KEY_PROVIDER_MODE, AiProviderMode.GOOGLE_GEMINI.key))
+        val legacyModelsRaw = prefs.getString(KEY_SYNCED_MODELS, null)
+        val legacyModelsAt = prefs.getLong(KEY_SYNCED_MODELS_AT, 0L)
+        val legacyLedgersRaw = prefs.getString(KEY_TOKEN_LEDGERS, null)
+
+        val initialProvider = if (legacyKey.isNotBlank() && legacyMode == AiProviderMode.PERSONAL_API_KEY) {
+            AiProvider.GOOGLE_API_KEY
+        } else {
+            AiProvider.GOOGLE_ACCOUNT
+        }
+
+        val editor = prefs.edit()
+            .putBoolean(KEY_MULTI_PROVIDER_MIGRATED, true)
+            .putString(KEY_ACTIVE_PROVIDER, initialProvider.key)
+            .putString(providerKey(AiProvider.GOOGLE_ACCOUNT, "model_id"), legacyModel)
+            .putString(providerKey(AiProvider.GOOGLE_API_KEY, "api_key"), legacyKey)
+            .putString(providerKey(AiProvider.GOOGLE_API_KEY, "model_id"), legacyModel)
+
+        if (!legacyModelsRaw.isNullOrBlank()) {
+            editor.putString(providerKey(AiProvider.GOOGLE_API_KEY, "synced_models"), legacyModelsRaw)
+            editor.putLong(providerKey(AiProvider.GOOGLE_API_KEY, "synced_at"), legacyModelsAt)
+            if (legacyKey.isBlank()) {
+                editor.putString(providerKey(AiProvider.GOOGLE_ACCOUNT, "synced_models"), legacyModelsRaw)
+                editor.putLong(providerKey(AiProvider.GOOGLE_ACCOUNT, "synced_at"), legacyModelsAt)
+            }
+        }
+        if (!legacyLedgersRaw.isNullOrBlank()) {
+            editor.putString(providerKey(initialProvider, "token_ledgers"), legacyLedgersRaw)
+        }
+        editor.apply()
+    }
+
+    private fun providerKey(provider: AiProvider, field: String): String =
+        "provider_${provider.key}_$field"
+
+    fun loadActiveProvider(): AiProvider =
+        AiProvider.fromKey(prefs.getString(KEY_ACTIVE_PROVIDER, AiProvider.GOOGLE_ACCOUNT.key))
+
+    fun saveActiveProvider(provider: AiProvider) {
+        prefs.edit().putString(KEY_ACTIVE_PROVIDER, provider.key).apply()
+    }
+
+    fun loadProfile(provider: AiProvider): AiProviderProfile {
+        val rawModels = prefs.getString(providerKey(provider, "synced_models"), null).orEmpty()
+        val models = parseSyncedModelsJson(rawModels)
+        val storedModel = prefs.getString(providerKey(provider, "model_id"), "")
+            .orEmpty()
+            .ifBlank { provider.defaultModelId }
+        return AiProviderProfile(
+            provider = provider,
+            apiKey = prefs.getString(providerKey(provider, "api_key"), "").orEmpty(),
+            baseUrl = prefs.getString(providerKey(provider, "base_url"), "").orEmpty(),
+            modelId = storedModel,
+            syncedModels = models,
+            syncedModelsUpdatedAt = prefs.getLong(providerKey(provider, "synced_at"), 0L)
+        )
+    }
+
+    fun loadAllProfiles(): Map<AiProvider, AiProviderProfile> =
+        AiProvider.entries.associateWith { loadProfile(it) }
+
+    fun saveProfile(profile: AiProviderProfile) {
+        val p = profile.provider
+        val editor = prefs.edit()
+            .putString(providerKey(p, "api_key"), profile.trimmedKey)
+            .putString(providerKey(p, "base_url"), profile.effectiveBaseUrl)
+            .putString(providerKey(p, "model_id"), profile.effectiveModelId)
+        if (profile.syncedModels.isNotEmpty() || profile.syncedModelsUpdatedAt > 0L) {
+            editor.putString(providerKey(p, "synced_models"), serializeSyncedModels(profile.syncedModels))
+            editor.putLong(providerKey(p, "synced_at"), profile.syncedModelsUpdatedAt)
+        }
+        // Keep legacy Google fields in sync for backward compatibility
+        if (p == AiProvider.GOOGLE_API_KEY) {
+            editor.putString(KEY_API_KEY, profile.trimmedKey)
+            editor.putString(KEY_MODEL_ID, profile.effectiveModelId)
+        } else if (p == AiProvider.GOOGLE_ACCOUNT) {
+            editor.putString(KEY_MODEL_ID, profile.effectiveModelId)
+        }
+        editor.apply()
+    }
+
+    fun clearProviderKey(provider: AiProvider): AiProviderProfile {
+        val current = loadProfile(provider)
+        val editor = prefs.edit().remove(providerKey(provider, "api_key"))
+        if (provider == AiProvider.CUSTOM_OPENAI) {
+            editor.remove(providerKey(provider, "base_url"))
+        }
+        if (provider == AiProvider.GOOGLE_API_KEY) {
+            editor.remove(KEY_API_KEY)
+            editor.putString(KEY_PROVIDER_MODE, AiProviderMode.GOOGLE_GEMINI.key)
+        }
+        editor.apply()
+        return current.copy(
+            apiKey = "",
+            baseUrl = if (provider == AiProvider.CUSTOM_OPENAI) "" else current.baseUrl
+        )
+    }
+
+    fun loadSyncedModels(provider: AiProvider): List<AiSyncedModel> {
+        val raw = prefs.getString(providerKey(provider, "synced_models"), null).orEmpty()
+        return parseSyncedModelsJson(raw)
+    }
+
+    fun loadSyncedModelsUpdatedAt(provider: AiProvider): Long =
+        prefs.getLong(providerKey(provider, "synced_at"), 0L)
+
+    fun saveSyncedModels(
+        provider: AiProvider,
+        models: List<AiSyncedModel>,
+        updatedAtMillis: Long = System.currentTimeMillis()
+    ) {
+        val serialized = serializeSyncedModels(models)
+        val editor = prefs.edit()
+            .putString(providerKey(provider, "synced_models"), serialized)
+            .putLong(providerKey(provider, "synced_at"), updatedAtMillis)
+        if (provider == AiProvider.GOOGLE_API_KEY || provider == AiProvider.GOOGLE_ACCOUNT) {
+            editor.putString(KEY_SYNCED_MODELS, serialized)
+            editor.putLong(KEY_SYNCED_MODELS_AT, updatedAtMillis)
+        }
+        editor.apply()
+    }
+
+    fun addCustomModel(provider: AiProvider, rawModelId: String): List<AiSyncedModel> {
+        val cleanId = rawModelId.trim()
+            .removePrefix("publishers/google/models/")
+            .removePrefix("models/")
+            .trim()
+        if (cleanId.isEmpty()) return loadSyncedModels(provider)
+        val existing = loadSyncedModels(provider).ifEmpty { provider.defaultPresetModels() }
+        val withoutDup = existing.filterNot { it.modelId.equals(cleanId, ignoreCase = true) }
+        val presetTitle = if (provider == AiProvider.GOOGLE_ACCOUNT || provider == AiProvider.GOOGLE_API_KEY) {
+            AiModelPreset.fromId(cleanId)?.title
+        } else null
+        val presetSubtitle = if (provider == AiProvider.GOOGLE_ACCOUNT || provider == AiProvider.GOOGLE_API_KEY) {
+            AiModelPreset.fromId(cleanId)?.subtitle
+        } else null
+        val customEntry = AiSyncedModel(
+            modelId = cleanId,
+            displayName = presetTitle ?: AiResponseParser.formatModelDisplayName(cleanId),
+            description = presetSubtitle ?: "Mô hình tùy chỉnh do bạn thêm (${provider.shortTitle})",
+            source = "custom"
+        )
+        val updated = listOf(customEntry) + withoutDup
+        saveSyncedModels(provider, updated)
+        return updated
+    }
+
+    fun removeCustomModel(provider: AiProvider, modelId: String): List<AiSyncedModel> {
+        val updated = loadSyncedModels(provider).filterNot {
+            it.source == "custom" && it.modelId.equals(modelId.trim(), ignoreCase = true)
+        }
+        saveSyncedModels(provider, updated)
+        return updated
+    }
+
+    fun loadTokenLedgers(
+        provider: AiProvider,
+        today: String = currentDayKey()
+    ): Map<String, AiModelTokenLedger> {
+        val raw = prefs.getString(providerKey(provider, "token_ledgers"), null).orEmpty()
+        return parseTokenLedgersJson(raw, today)
+    }
+
+    fun recordTokenUsage(
+        provider: AiProvider,
+        modelId: String,
+        usage: AiTokenUsage,
+        today: String = currentDayKey(),
+        nowMillis: Long = System.currentTimeMillis()
+    ): Map<String, AiModelTokenLedger> {
+        val cleanId = modelId.trim().removePrefix("publishers/google/models/").removePrefix("models/")
+        if (cleanId.isEmpty() || !usage.hasData) return loadTokenLedgers(provider, today)
+        val currentMap = loadTokenLedgers(provider, today).toMutableMap()
+        val key = cleanId.lowercase()
+        val prev = currentMap[key]
+        val turnTotal = usage.totalTokens.takeIf { it > 0 } ?: (usage.promptTokens + usage.outputTokens + usage.thoughtsTokens)
+        val updated = AiModelTokenLedger(
+            modelId = cleanId,
+            dayKey = today,
+            usedTokensToday = (prev?.usedTokensToday ?: 0L) + turnTotal.toLong(),
+            promptTokensToday = (prev?.promptTokensToday ?: 0L) + usage.promptTokens.toLong(),
+            outputTokensToday = (prev?.outputTokensToday ?: 0L) + usage.outputTokens.toLong(),
+            requestsToday = (prev?.requestsToday ?: 0) + 1,
+            lastPromptTokens = usage.promptTokens,
+            lastOutputTokens = usage.outputTokens,
+            lastTotalTokens = turnTotal,
+            lastUpdatedAtMillis = nowMillis
+        )
+        currentMap[key] = updated
+        saveTokenLedgers(provider, currentMap)
+        return currentMap
+    }
+
+    // Legacy single-provider convenience wrappers (preserve backward compatibility for callers & unit tests)
+    fun load(): AiKeyConfig {
+        val active = loadActiveProvider()
+        val profile = loadProfile(active)
+        val googleKeyProfile = loadProfile(AiProvider.GOOGLE_API_KEY)
+        return AiKeyConfig(
+            apiKey = if (active == AiProvider.GOOGLE_ACCOUNT) googleKeyProfile.apiKey else profile.apiKey,
+            modelId = profile.effectiveModelId,
+            providerMode = if (active == AiProvider.GOOGLE_ACCOUNT) AiProviderMode.GOOGLE_GEMINI else AiProviderMode.PERSONAL_API_KEY
+        )
+    }
 
     fun save(config: AiKeyConfig) {
-        prefs.edit()
-            .putString(KEY_API_KEY, config.trimmedKey)
-            .putString(KEY_MODEL_ID, config.effectiveModelId)
-            .putString(KEY_PROVIDER_MODE, config.providerMode.key)
-            .apply()
+        val targetProvider = if (config.providerMode == AiProviderMode.PERSONAL_API_KEY) {
+            AiProvider.GOOGLE_API_KEY
+        } else {
+            AiProvider.GOOGLE_ACCOUNT
+        }
+        saveActiveProvider(targetProvider)
+        val current = loadProfile(targetProvider)
+        saveProfile(current.copy(apiKey = config.trimmedKey, modelId = config.effectiveModelId))
     }
 
     fun clearKey() {
-        prefs.edit()
-            .remove(KEY_API_KEY)
-            .putString(KEY_PROVIDER_MODE, AiProviderMode.GOOGLE_GEMINI.key)
-            .apply()
+        clearProviderKey(AiProvider.GOOGLE_API_KEY)
+        saveActiveProvider(AiProvider.GOOGLE_ACCOUNT)
     }
 
-    fun loadSyncedModels(): List<AiSyncedModel> {
-        val raw = prefs.getString(KEY_SYNCED_MODELS, null).orEmpty()
+    fun loadSyncedModels(): List<AiSyncedModel> = loadSyncedModels(loadActiveProvider())
+
+    fun loadSyncedModelsUpdatedAt(): Long = loadSyncedModelsUpdatedAt(loadActiveProvider())
+
+    fun saveSyncedModels(models: List<AiSyncedModel>, updatedAtMillis: Long = System.currentTimeMillis()) =
+        saveSyncedModels(loadActiveProvider(), models, updatedAtMillis)
+
+    fun addCustomModel(rawModelId: String): List<AiSyncedModel> =
+        addCustomModel(loadActiveProvider(), rawModelId)
+
+    fun removeCustomModel(modelId: String): List<AiSyncedModel> =
+        removeCustomModel(loadActiveProvider(), modelId)
+
+    fun loadTokenLedgers(today: String = currentDayKey()): Map<String, AiModelTokenLedger> =
+        loadTokenLedgers(loadActiveProvider(), today)
+
+    fun recordTokenUsage(
+        modelId: String,
+        usage: AiTokenUsage,
+        today: String = currentDayKey(),
+        nowMillis: Long = System.currentTimeMillis()
+    ): Map<String, AiModelTokenLedger> =
+        recordTokenUsage(loadActiveProvider(), modelId, usage, today, nowMillis)
+
+    private fun parseSyncedModelsJson(raw: String): List<AiSyncedModel> {
         if (raw.isBlank()) return emptyList()
         return runCatching {
             val arr = JSONArray(raw)
@@ -231,9 +477,7 @@ class AiKeyPreferences(context: Context) {
         }.getOrDefault(emptyList())
     }
 
-    fun loadSyncedModelsUpdatedAt(): Long = prefs.getLong(KEY_SYNCED_MODELS_AT, 0L)
-
-    fun saveSyncedModels(models: List<AiSyncedModel>, updatedAtMillis: Long = System.currentTimeMillis()) {
+    private fun serializeSyncedModels(models: List<AiSyncedModel>): String {
         val arr = JSONArray()
         models.forEach { m ->
             arr.put(
@@ -247,41 +491,10 @@ class AiKeyPreferences(context: Context) {
                 }
             )
         }
-        prefs.edit()
-            .putString(KEY_SYNCED_MODELS, arr.toString())
-            .putLong(KEY_SYNCED_MODELS_AT, updatedAtMillis)
-            .apply()
+        return arr.toString()
     }
 
-    fun addCustomModel(rawModelId: String): List<AiSyncedModel> {
-        val cleanId = rawModelId.trim()
-            .removePrefix("publishers/google/models/")
-            .removePrefix("models/")
-            .trim()
-        if (cleanId.isEmpty()) return loadSyncedModels()
-        val existing = loadSyncedModels().ifEmpty { AiModelPreset.entries.map { it.toSyncedModel() } }
-        val withoutDup = existing.filterNot { it.modelId.equals(cleanId, ignoreCase = true) }
-        val customEntry = AiSyncedModel(
-            modelId = cleanId,
-            displayName = AiModelPreset.fromId(cleanId)?.title ?: AiResponseParser.formatModelDisplayName(cleanId),
-            description = AiModelPreset.fromId(cleanId)?.subtitle ?: "Mô hình tùy chỉnh do bạn thêm",
-            source = "custom"
-        )
-        val updated = listOf(customEntry) + withoutDup
-        saveSyncedModels(updated)
-        return updated
-    }
-
-    fun removeCustomModel(modelId: String): List<AiSyncedModel> {
-        val updated = loadSyncedModels().filterNot {
-            it.source == "custom" && it.modelId.equals(modelId.trim(), ignoreCase = true)
-        }
-        saveSyncedModels(updated)
-        return updated
-    }
-
-    fun loadTokenLedgers(today: String = currentDayKey()): Map<String, AiModelTokenLedger> {
-        val raw = prefs.getString(KEY_TOKEN_LEDGERS, null).orEmpty()
+    private fun parseTokenLedgersJson(raw: String, today: String): Map<String, AiModelTokenLedger> {
         if (raw.isBlank()) return emptyMap()
         return runCatching {
             val arr = JSONArray(raw)
@@ -308,36 +521,7 @@ class AiKeyPreferences(context: Context) {
         }.getOrDefault(emptyMap())
     }
 
-    fun recordTokenUsage(
-        modelId: String,
-        usage: AiTokenUsage,
-        today: String = currentDayKey(),
-        nowMillis: Long = System.currentTimeMillis()
-    ): Map<String, AiModelTokenLedger> {
-        val cleanId = modelId.trim().removePrefix("publishers/google/models/").removePrefix("models/")
-        if (cleanId.isEmpty() || !usage.hasData) return loadTokenLedgers(today)
-        val currentMap = loadTokenLedgers(today).toMutableMap()
-        val key = cleanId.lowercase()
-        val prev = currentMap[key]
-        val turnTotal = usage.totalTokens.takeIf { it > 0 } ?: (usage.promptTokens + usage.outputTokens + usage.thoughtsTokens)
-        val updated = AiModelTokenLedger(
-            modelId = cleanId,
-            dayKey = today,
-            usedTokensToday = (prev?.usedTokensToday ?: 0L) + turnTotal.toLong(),
-            promptTokensToday = (prev?.promptTokensToday ?: 0L) + usage.promptTokens.toLong(),
-            outputTokensToday = (prev?.outputTokensToday ?: 0L) + usage.outputTokens.toLong(),
-            requestsToday = (prev?.requestsToday ?: 0) + 1,
-            lastPromptTokens = usage.promptTokens,
-            lastOutputTokens = usage.outputTokens,
-            lastTotalTokens = turnTotal,
-            lastUpdatedAtMillis = nowMillis
-        )
-        currentMap[key] = updated
-        saveTokenLedgers(currentMap)
-        return currentMap
-    }
-
-    private fun saveTokenLedgers(map: Map<String, AiModelTokenLedger>) {
+    private fun saveTokenLedgers(provider: AiProvider, map: Map<String, AiModelTokenLedger>) {
         val arr = JSONArray()
         map.values.forEach { entry ->
             arr.put(
@@ -355,7 +539,12 @@ class AiKeyPreferences(context: Context) {
                 }
             )
         }
-        prefs.edit().putString(KEY_TOKEN_LEDGERS, arr.toString()).apply()
+        val serialized = arr.toString()
+        val editor = prefs.edit().putString(providerKey(provider, "token_ledgers"), serialized)
+        if (provider == AiProvider.GOOGLE_API_KEY || provider == AiProvider.GOOGLE_ACCOUNT) {
+            editor.putString(KEY_TOKEN_LEDGERS, serialized)
+        }
+        editor.apply()
     }
 
     companion object {
@@ -365,6 +554,8 @@ class AiKeyPreferences(context: Context) {
         private const val KEY_SYNCED_MODELS = "gemini_synced_models_v1"
         private const val KEY_SYNCED_MODELS_AT = "gemini_synced_models_updated_at"
         private const val KEY_TOKEN_LEDGERS = "gemini_token_ledgers_v1"
+        private const val KEY_ACTIVE_PROVIDER = "ai_active_provider_v2"
+        private const val KEY_MULTI_PROVIDER_MIGRATED = "ai_multi_provider_migrated_v2"
 
         fun currentDayKey(nowMillis: Long = System.currentTimeMillis()): String =
             SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(nowMillis))
@@ -519,6 +710,52 @@ object AiResponseParser {
         } else null
     }
 
+    fun parseOpenAiUsage(
+        root: JSONObject?,
+        rateLimitRemaining: Long? = null,
+        rateLimitTotal: Long? = null
+    ): AiTokenUsage? {
+        val u = root?.optJSONObject("usage") ?: return null
+        val prompt = u.optInt("prompt_tokens", u.optInt("input_tokens", 0)).coerceAtLeast(0)
+        val output = u.optInt("completion_tokens", u.optInt("output_tokens", 0)).coerceAtLeast(0)
+        val reasoning = u.optJSONObject("completion_tokens_details")
+            ?.optInt("reasoning_tokens", 0)?.coerceAtLeast(0) ?: 0
+        val total = u.optInt("total_tokens", prompt + output).coerceAtLeast(0)
+        return if (total > 0 || prompt > 0 || output > 0) {
+            AiTokenUsage(
+                promptTokens = prompt,
+                outputTokens = output,
+                thoughtsTokens = reasoning,
+                totalTokens = if (total > 0) total else (prompt + output),
+                rateLimitRemainingTokens = rateLimitRemaining,
+                rateLimitTotalTokens = rateLimitTotal
+            )
+        } else null
+    }
+
+    fun parseAnthropicUsage(
+        usageObj: JSONObject?,
+        rateLimitRemaining: Long? = null,
+        rateLimitTotal: Long? = null
+    ): AiTokenUsage? {
+        if (usageObj == null) return null
+        val input = usageObj.optInt("input_tokens", 0).coerceAtLeast(0)
+        val cacheCreate = usageObj.optInt("cache_creation_input_tokens", 0).coerceAtLeast(0)
+        val cacheRead = usageObj.optInt("cache_read_input_tokens", 0).coerceAtLeast(0)
+        val prompt = input + cacheCreate + cacheRead
+        val output = usageObj.optInt("output_tokens", 0).coerceAtLeast(0)
+        val total = prompt + output
+        return if (total > 0) {
+            AiTokenUsage(
+                promptTokens = prompt,
+                outputTokens = output,
+                totalTokens = total,
+                rateLimitRemainingTokens = rateLimitRemaining,
+                rateLimitTotalTokens = rateLimitTotal
+            )
+        } else null
+    }
+
     fun formatExactTokens(value: Long): String {
         val negative = value < 0L
         val digits = kotlin.math.abs(value).toString()
@@ -629,10 +866,138 @@ object AiResponseParser {
     }
 
     /**
-     * Deduplicates and sorts synced models so the newest, most capable Gemini models appear first,
-     * followed by Flash/Pro/Lite variants and other families (e.g. Gemma).
+     * Parses OpenAI-compatible `GET /models` JSON (`data[]` or `models[]`), supporting OpenAI, OpenRouter,
+     * Groq, DeepSeek, Together, Mistral, Ollama, and custom servers.
      */
-    fun sortSyncedModels(models: List<AiSyncedModel>): List<AiSyncedModel> {
+    fun parseOpenAiModelsJson(
+        jsonBody: String,
+        provider: AiProvider
+    ): List<AiSyncedModel> {
+        val root = runCatching { JSONObject(jsonBody) }.getOrNull() ?: return emptyList()
+        val arr = root.optJSONArray("data") ?: root.optJSONArray("models") ?: return emptyList()
+        val nonChatTokens = listOf(
+            "embedding", "embed", "whisper", "tts", "dall-e", "moderation",
+            "rerank", "transcribe", "transcription", "babbage", "davinci",
+            "text-search", "code-search", "realtime", "audio-preview", "sora",
+            "flux", "stable-diffusion", "midjourney", "playai-tts", "distil-whisper",
+            "guard"
+        )
+
+        return buildList {
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val id = item.optString("id", "").trim()
+                    .ifEmpty { item.optString("name", "").trim() }
+                if (id.isEmpty()) continue
+                val lower = id.lowercase()
+                if (nonChatTokens.any { lower.contains(it) }) continue
+                if (item.has("active") && !item.optBoolean("active", true)) continue
+
+                val contextLen = item.optInt("context_length", 0)
+                    .takeIf { it > 0 }
+                    ?: item.optInt("context_window", 0).takeIf { it > 0 }
+                    ?: item.optInt("max_model_len", 0).takeIf { it > 0 }
+                    ?: item.optInt("input_token_limit", 0).takeIf { it > 0 }
+                    ?: inferKnownContextWindow(id, provider)
+
+                val topProvider = item.optJSONObject("top_provider")
+                val outputLen = topProvider?.optInt("max_completion_tokens", 0)?.takeIf { it > 0 }
+                    ?: item.optInt("max_completion_tokens", 0).takeIf { it > 0 }
+                    ?: item.optInt("max_output_tokens", 0).takeIf { it > 0 }
+                    ?: 0
+
+                val pricing = item.optJSONObject("pricing")
+                val isFreeOpenRouter = provider == AiProvider.OPENROUTER && (
+                    lower.endsWith(":free") ||
+                        (pricing != null && pricing.optString("prompt", "") == "0" && pricing.optString("completion", "") == "0")
+                    )
+
+                val rawName = item.optString("name", "").trim()
+                val displayName = if (rawName.isNotEmpty() && !rawName.equals(id, ignoreCase = true)) {
+                    rawName
+                } else {
+                    formatModelDisplayName(id.substringAfterLast('/'))
+                }
+                val rawDesc = item.optString("description", "").trim()
+                val owner = item.optString("owned_by", "").trim()
+                val description = when {
+                    rawDesc.isNotEmpty() -> rawDesc.take(140)
+                    isFreeOpenRouter -> "Miễn phí trên OpenRouter"
+                    owner.isNotEmpty() -> "Nhà phát hành: $owner"
+                    else -> ""
+                }
+
+                add(
+                    AiSyncedModel(
+                        modelId = id,
+                        displayName = displayName,
+                        description = description,
+                        inputTokenLimit = contextLen,
+                        outputTokenLimit = outputLen,
+                        source = if (isFreeOpenRouter) "free" else provider.key
+                    )
+                )
+            }
+        }
+    }
+
+    /**
+     * Parses Anthropic `GET /v1/models` JSON (`data[]`).
+     */
+    fun parseAnthropicModelsJson(jsonBody: String): Pair<List<AiSyncedModel>, String?> {
+        val root = runCatching { JSONObject(jsonBody) }.getOrNull() ?: return emptyList<AiSyncedModel>() to null
+        val arr = root.optJSONArray("data") ?: return emptyList<AiSyncedModel>() to null
+        val hasMore = root.optBoolean("has_more", false)
+        val lastId = if (hasMore) root.optString("last_id", "").trim().ifEmpty { null } else null
+
+        val parsed = buildList {
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val id = item.optString("id", "").trim()
+                if (id.isEmpty()) continue
+                val displayName = item.optString("display_name", "").trim()
+                    .ifEmpty { formatModelDisplayName(id) }
+                val inputLimit = item.optInt("max_input_tokens", 0)
+                    .takeIf { it > 0 } ?: 200_000
+                val outputLimit = item.optInt("max_tokens", 0)
+                    .takeIf { it > 0 } ?: 8_192
+                val createdAt = item.optString("created_at", "").trim().take(10)
+                add(
+                    AiSyncedModel(
+                        modelId = id,
+                        displayName = displayName,
+                        description = if (createdAt.isNotEmpty()) "Anthropic Claude · Phát hành $createdAt" else "Anthropic Claude",
+                        inputTokenLimit = inputLimit,
+                        outputTokenLimit = outputLimit,
+                        source = AiProvider.ANTHROPIC.key
+                    )
+                )
+            }
+        }
+        return parsed to lastId
+    }
+
+    internal fun inferKnownContextWindow(modelId: String, provider: AiProvider): Int {
+        val id = modelId.lowercase()
+        return when {
+            id.contains("gpt-4.1") -> 1_047_576
+            id.contains("gpt-4o") || id.contains("gpt-4-turbo") -> 128_000
+            id.startsWith("o1") || id.startsWith("o3") || id.startsWith("o4") -> 200_000
+            id.contains("claude") -> 200_000
+            id.contains("deepseek") -> 65_536
+            id.contains("llama-4") || id.contains("llama-3.3") || id.contains("llama-3.1") -> 131_072
+            provider == AiProvider.ANTHROPIC -> 200_000
+            else -> 0
+        }
+    }
+
+    /**
+     * Deduplicates and sorts synced models per provider so the most capable, current chat models appear first.
+     */
+    fun sortSyncedModels(
+        models: List<AiSyncedModel>,
+        provider: AiProvider = AiProvider.GOOGLE_API_KEY
+    ): List<AiSyncedModel> {
         val dedup = LinkedHashMap<String, AiSyncedModel>()
         for (m in models) {
             val key = m.modelId.trim().lowercase()
@@ -643,38 +1008,88 @@ object AiResponseParser {
             }
         }
         val versionRegex = Regex("""(\d+)(?:\.(\d+))?""")
+        if (provider == AiProvider.GOOGLE_ACCOUNT || provider == AiProvider.GOOGLE_API_KEY) {
+            return dedup.values.sortedWith(
+                compareByDescending<AiSyncedModel> { it.source == "custom" }
+                    .thenByDescending { it.modelId.lowercase().startsWith("gemini") }
+                    .thenByDescending { m ->
+                        val match = versionRegex.find(m.modelId)
+                        val major = match?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                        val minor = match?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 0
+                        major * 100 + minor
+                    }
+                    .thenByDescending { m ->
+                        val low = m.modelId.lowercase()
+                        when {
+                            low.contains("latest") -> 1
+                            low.contains("exp") || low.contains("preview") -> 2
+                            low.contains("lite") -> 3
+                            low.contains("flash") -> 5
+                            low.contains("pro") || low.contains("argon") -> 4
+                            else -> 2
+                        }
+                    }
+                    .thenBy { it.modelId.lowercase() }
+            )
+        }
+
         return dedup.values.sortedWith(
             compareByDescending<AiSyncedModel> { it.source == "custom" }
-                .thenByDescending { it.modelId.lowercase().startsWith("gemini") }
                 .thenByDescending { m ->
-                    val match = versionRegex.find(m.modelId)
-                    val major = match?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
-                    val minor = match?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 0
-                    major * 100 + minor
-                }
-                .thenByDescending { m ->
-                    val low = m.modelId.lowercase()
-                    when {
-                        low.contains("latest") -> 1
-                        low.contains("exp") || low.contains("preview") -> 2
-                        low.contains("lite") -> 3
-                        low.contains("flash") -> 5
-                        low.contains("pro") || low.contains("argon") -> 4
-                        else -> 2
+                    val id = m.modelId.lowercase()
+                    when (provider) {
+                        AiProvider.OPENAI -> when {
+                            id == "gpt-4o-mini" || id == "gpt-4.1-mini" -> 10
+                            id == "gpt-4o" || id == "gpt-4.1" -> 9
+                            id.startsWith("gpt-5") -> 11
+                            id.startsWith("o4") || id.startsWith("o3") -> 8
+                            id.startsWith("gpt-4") -> 7
+                            else -> 2
+                        }
+                        AiProvider.OPENROUTER -> when {
+                            m.source == "free" || id.endsWith(":free") -> 8
+                            id.startsWith("openai/gpt-4o") || id.startsWith("anthropic/claude") -> 7
+                            id.startsWith("deepseek/") -> 6
+                            else -> 3
+                        }
+                        AiProvider.GROQ -> when {
+                            id.contains("llama-4") -> 10
+                            id.contains("llama-3.3-70b") -> 9
+                            id.contains("qwen") -> 8
+                            id.contains("llama-3.1") -> 7
+                            else -> 3
+                        }
+                        AiProvider.DEEPSEEK -> when {
+                            id == "deepseek-chat" -> 10
+                            id == "deepseek-reasoner" -> 9
+                            else -> 5
+                        }
+                        AiProvider.ANTHROPIC -> when {
+                            id.contains("sonnet") -> 10
+                            id.contains("opus") -> 9
+                            id.contains("haiku") -> 8
+                            else -> 4
+                        }
+                        else -> if (m.inputTokenLimit > 0) 5 else 2
                     }
                 }
+                .thenByDescending { it.inputTokenLimit }
                 .thenBy { it.modelId.lowercase() }
         )
     }
 
     /**
-     * Cleans user-pasted API keys by stripping accidental env prefixes (`GEMINI_API_KEY=`),
-     * surrounding quotes, and any embedded whitespace or newlines that would break HTTP headers.
+     * Cleans user-pasted API keys by stripping accidental env prefixes (`OPENAI_API_KEY=`, `GEMINI_API_KEY=`,
+     * `ANTHROPIC_API_KEY=`, `Bearer `), surrounding quotes, and embedded whitespace/newlines.
      */
     fun sanitizeApiKey(raw: String): String {
         var cleaned = raw.trim()
-        val prefixRegex = Regex("""^(?:export\s+)?(?:GEMINI_API_KEY|GOOGLE_API_KEY|API_KEY)\s*=\s*""", RegexOption.IGNORE_CASE)
+        val prefixRegex = Regex(
+            """^(?:export\s+)?(?:GEMINI_API_KEY|GOOGLE_API_KEY|OPENAI_API_KEY|OPENROUTER_API_KEY|GROQ_API_KEY|DEEPSEEK_API_KEY|ANTHROPIC_API_KEY|CLAUDE_API_KEY|API_KEY)\s*=\s*""",
+            RegexOption.IGNORE_CASE
+        )
         cleaned = cleaned.replaceFirst(prefixRegex, "").trim()
+        cleaned = cleaned.replaceFirst(Regex("""^Bearer\s+""", RegexOption.IGNORE_CASE), "").trim()
         cleaned = cleaned.trim('"', '\'', '`', ' ')
         return cleaned.replace(Regex("""\s+"""), "")
     }
@@ -683,24 +1098,33 @@ object AiResponseParser {
      * Selects the best default text+vision chat model from a synced model list, avoiding
      * specialized audio/TTS/image/video/robotics/embedding variants.
      */
-    fun pickBestChatModel(models: List<AiSyncedModel>): AiSyncedModel? {
+    fun pickBestChatModel(
+        models: List<AiSyncedModel>,
+        provider: AiProvider = AiProvider.GOOGLE_API_KEY
+    ): AiSyncedModel? {
         if (models.isEmpty()) return null
-        val sorted = sortSyncedModels(models)
-        val excludedTokens = listOf("tts", "audio", "image", "imagen", "veo", "lyria", "embedding", "robotics", "computer-use", "live", "aqa")
+        val sorted = sortSyncedModels(models, provider)
+        val excludedTokens = listOf(
+            "tts", "audio", "image", "imagen", "veo", "lyria", "embedding",
+            "robotics", "computer-use", "live", "aqa", "whisper", "dall-e", "moderation", "sora"
+        )
         fun isStandardChatModel(m: AiSyncedModel): Boolean {
             val id = m.modelId.lowercase()
             return excludedTokens.none { id.contains(it) }
         }
-        return sorted.firstOrNull { m ->
-            val id = m.modelId.lowercase()
-            id.startsWith("gemini") && id.contains("flash") && !id.contains("lite") && isStandardChatModel(m)
-        } ?: sorted.firstOrNull { m ->
-            val id = m.modelId.lowercase()
-            id.startsWith("gemini") && id.contains("flash") && isStandardChatModel(m)
-        } ?: sorted.firstOrNull { m ->
-            m.modelId.lowercase().startsWith("gemini") && isStandardChatModel(m)
-        } ?: sorted.firstOrNull { isStandardChatModel(it) }
-            ?: sorted.first()
+        if (provider == AiProvider.GOOGLE_ACCOUNT || provider == AiProvider.GOOGLE_API_KEY) {
+            return sorted.firstOrNull { m ->
+                val id = m.modelId.lowercase()
+                id.startsWith("gemini") && id.contains("flash") && !id.contains("lite") && isStandardChatModel(m)
+            } ?: sorted.firstOrNull { m ->
+                val id = m.modelId.lowercase()
+                id.startsWith("gemini") && id.contains("flash") && isStandardChatModel(m)
+            } ?: sorted.firstOrNull { m ->
+                m.modelId.lowercase().startsWith("gemini") && isStandardChatModel(m)
+            } ?: sorted.firstOrNull { isStandardChatModel(it) }
+                ?: sorted.first()
+        }
+        return sorted.firstOrNull { isStandardChatModel(it) } ?: sorted.first()
     }
 
     /**

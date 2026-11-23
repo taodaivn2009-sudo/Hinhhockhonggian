@@ -27,8 +27,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ai.AiAssistantUiState
 import com.example.ai.AiKeySetupSection
-import com.example.ai.AiProviderMode
+import com.example.ai.AiProvider
 import com.example.ai.GoogleAccountAvatar
+import com.example.ai.providerAccentColor
 import com.example.engine.SensitivityConfig
 import com.example.geo2d.Geo2DSensitivity
 import com.example.geo2d.Geo2DSensitivityControlsSection
@@ -81,18 +82,18 @@ fun AppSettingsScreen(
     onSaveUpdateRepoAndCheck: (String) -> Unit,
     onSkipUpdateVersion: () -> Unit,
     aiUiState: AiAssistantUiState,
+    onSelectAiProvider: (AiProvider) -> Unit,
     onSignInWithGoogle: () -> Unit,
     onSignOutGoogle: () -> Unit,
     onTestGoogleAi: () -> Unit = {},
-    onSaveAndVerifyAiKey: (String, String) -> Unit,
-    onSaveAiKeyOnly: (String, String) -> Unit,
+    onSaveAndVerifyAiKey: (String, String, String) -> Unit,
+    onSaveAiKeyOnly: (String, String, String) -> Unit,
     onSelectAiModel: (String) -> Unit,
-    onSyncAiModels: (String?) -> Unit = {},
-    onProbeAllAiModels: (String?) -> Unit = {},
+    onSyncAiModels: (String?, String?) -> Unit = { _, _ -> },
+    onProbeAllAiModels: (String?, String?, List<String>?) -> Unit = { _, _, _ -> },
     onRefreshAiTokens: () -> Unit = {},
     onAddCustomAiModel: (String) -> Unit = {},
     onRemoveCustomAiModel: (String) -> Unit = {},
-    onSelectAiProviderMode: (AiProviderMode) -> Unit = {},
     onClearAiKey: () -> Unit,
     onSwitchWorkspace: (MathWorkspace) -> Unit
 ) {
@@ -179,27 +180,34 @@ fun AppSettingsScreen(
                         }
                     }
 
-                    // 0. Dedicated Google Sign-In & AI Section
+                    // 0. Dedicated Multi-Provider AI Connection Section
+                    val activeProviderAccent = providerAccentColor(aiUiState.activeProvider)
                     SettingsGroupCard(
-                        icon = if (aiUiState.isSignedInWithGoogle) Icons.Default.AutoAwesome else Icons.Default.Key,
-                        iconTint = if (aiUiState.isAiReady) EmeraldAccent else CyanAccent,
-                        title = "Tài khoản Google & AI (Gemini)",
-                        subtitle = when {
-                            aiUiState.googleUser != null -> "Google: ${aiUiState.googleUser.email.ifBlank { aiUiState.googleUser.displayName }} • ${aiUiState.keyConfig.effectiveModelId}"
-                            aiUiState.keyConfig.hasKey -> "API Key (${aiUiState.keyConfig.maskedKey}) • ${aiUiState.keyConfig.effectiveModelId}"
-                            else -> "Đăng nhập Google để dùng Gemini không cần API Key"
+                        icon = if (aiUiState.activeProvider == AiProvider.GOOGLE_ACCOUNT) Icons.Default.AutoAwesome else Icons.Default.Key,
+                        iconTint = if (aiUiState.isAiReady) activeProviderAccent else CyanAccent,
+                        title = "Kết nối AI Đa Nhà Cung Cấp",
+                        subtitle = if (aiUiState.isAiReady) {
+                            "${aiUiState.activeProviderLabel} • ${aiUiState.activeProfile.effectiveModelId}"
+                        } else {
+                            "Google, OpenAI, OpenRouter, Groq, DeepSeek, Claude & Custom URL"
                         },
-                        leadingContent = aiUiState.googleUser?.let { user ->
-                            {
-                                GoogleAccountAvatar(
-                                    user = user,
-                                    size = 40.dp,
-                                    showVerifiedBadge = true
-                                )
+                        leadingContent = if (aiUiState.activeProvider == AiProvider.GOOGLE_ACCOUNT) {
+                            aiUiState.googleUser?.let { user ->
+                                {
+                                    GoogleAccountAvatar(
+                                        user = user,
+                                        size = 40.dp,
+                                        showVerifiedBadge = true
+                                    )
+                                }
                             }
-                        }
+                        } else null
                     ) {
                         AiKeySetupSection(
+                            activeProvider = aiUiState.activeProvider,
+                            activeProfile = aiUiState.activeProfile,
+                            configuredProviders = aiUiState.configuredProviders,
+                            onSelectProvider = onSelectAiProvider,
                             googleUser = aiUiState.googleUser,
                             isSigningIn = aiUiState.isSigningIn,
                             isTestingGoogleAi = aiUiState.isTestingGoogleAi,
@@ -208,7 +216,6 @@ fun AppSettingsScreen(
                             onSignInWithGoogle = onSignInWithGoogle,
                             onSignOutGoogle = onSignOutGoogle,
                             onTestGoogleAi = onTestGoogleAi,
-                            keyConfig = aiUiState.keyConfig,
                             displayModels = aiUiState.displayModels,
                             isSyncedFromAccount = aiUiState.syncedModels.isNotEmpty(),
                             isSyncingModels = aiUiState.isSyncingModels,
@@ -232,7 +239,6 @@ fun AppSettingsScreen(
                             onSaveAndVerify = onSaveAndVerifyAiKey,
                             onSaveOnly = onSaveAiKeyOnly,
                             onSelectModel = onSelectAiModel,
-                            onSelectProviderMode = onSelectAiProviderMode,
                             onClearKey = onClearAiKey
                         )
                     }

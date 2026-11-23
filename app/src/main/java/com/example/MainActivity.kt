@@ -219,20 +219,28 @@ fun ToolToanRootScreen(
                 onSaveUpdateRepoAndCheck = { updateViewModel.saveRepoAndCheck(it) },
                 onSkipUpdateVersion = { updateViewModel.skipCurrentAvailableVersion() },
                 aiUiState = aiUiState,
+                onSelectAiProvider = { aiViewModel.selectProvider(it) },
                 onSignInWithGoogle = {
                     context.findActivity()?.let { aiViewModel.signInWithGoogle(it) }
                 },
                 onSignOutGoogle = { aiViewModel.signOutGoogle(context) },
                 onTestGoogleAi = { aiViewModel.testGoogleGeminiConnection() },
-                onSaveAndVerifyAiKey = { key, model -> aiViewModel.saveAndVerifyApiKey(key, model) },
-                onSaveAiKeyOnly = { key, model -> aiViewModel.saveApiKey(key, model) },
+                onSaveAndVerifyAiKey = { key, model, baseUrl ->
+                    aiViewModel.saveAndVerifyApiKey(key, model, baseUrl)
+                },
+                onSaveAiKeyOnly = { key, model, baseUrl ->
+                    aiViewModel.saveApiKey(key, model, baseUrl)
+                },
                 onSelectAiModel = { aiViewModel.selectModel(it) },
-                onSyncAiModels = { overrideKey -> aiViewModel.syncAccountModels(overrideKey) },
-                onProbeAllAiModels = { overrideKey -> aiViewModel.probeAllModels(overrideKey) },
+                onSyncAiModels = { overrideKey, overrideUrl ->
+                    aiViewModel.syncAccountModels(overrideKey, overrideUrl)
+                },
+                onProbeAllAiModels = { overrideKey, overrideUrl, subset ->
+                    aiViewModel.probeAllModels(overrideKey, overrideUrl, subset)
+                },
                 onRefreshAiTokens = { aiViewModel.refreshTokenSync() },
                 onAddCustomAiModel = { aiViewModel.addCustomModel(it) },
                 onRemoveCustomAiModel = { aiViewModel.removeCustomModel(it) },
-                onSelectAiProviderMode = { aiViewModel.selectProviderMode(it) },
                 onClearAiKey = { aiViewModel.clearApiKey() },
                 onSwitchWorkspace = onSelectWorkspace
             )

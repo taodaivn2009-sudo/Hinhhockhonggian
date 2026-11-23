@@ -628,13 +628,13 @@ fun AiMissingKeyBanner(
             Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(20.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Đăng nhập Google để dùng Gemini ngay",
+                    text = "Chưa kết nối nguồn AI đang chọn",
                     style = MaterialTheme.typography.labelLarge,
                     color = SlateTextPrimary,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Không cần nhập API Key — hoặc chạm \"Mục Key\" nếu muốn dùng khóa riêng.",
+                    text = "Đăng nhập Google 1 chạm hoặc mở \"Kết nối AI\" để nhập API Key (Google, OpenAI, OpenRouter, Groq, DeepSeek, Claude, Custom URL).",
                     style = MaterialTheme.typography.labelSmall,
                     color = SlateTextSecondary
                 )

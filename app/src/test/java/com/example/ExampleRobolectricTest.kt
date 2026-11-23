@@ -817,7 +817,7 @@ class ExampleRobolectricTest {
         val disconnected = AiAssistantUiState()
         assertFalse(disconnected.isSignedInWithGoogle)
         assertFalse(disconnected.isAiReady)
-        assertTrue(disconnected.activeProviderLabel.contains("Chưa đăng nhập"))
+        assertTrue(disconnected.activeProviderLabel.contains("Chưa kết nối"))
 
         // 2. Signed in with Google and NO API key -> ready immediately with keyless Google Gemini + avatar URL & toast
         val profile = GoogleUserProfile(
@@ -837,6 +837,7 @@ class ExampleRobolectricTest {
             isSuccess = true
         )
         val googleReady = AiAssistantUiState(
+            activeProvider = AiProvider.GOOGLE_ACCOUNT,
             googleUser = profile,
             keyConfig = AiKeyConfig(apiKey = ""),
             authToast = toast
@@ -865,14 +866,20 @@ class ExampleRobolectricTest {
             BuildConfig.FIREBASE_EXPECTED_SHA1S.contains("4A:92:E1:EE:C7:2B:90:D5:05:C8:10:C9:11:F0:3F:B7:94:94:FD:AC")
         )
 
-        // 3. Fallback API key without Google Sign-In -> still ready
+        // 3. Fallback Google API key without Google Sign-In -> still ready
+        val keyOnlyProfile = AiProviderProfile(
+            provider = AiProvider.GOOGLE_API_KEY,
+            apiKey = "AIzaSyManualFallbackKey9999"
+        )
         val keyOnlyReady = AiAssistantUiState(
+            activeProvider = AiProvider.GOOGLE_API_KEY,
+            providerProfiles = mapOf(AiProvider.GOOGLE_API_KEY to keyOnlyProfile),
             googleUser = null,
-            keyConfig = AiKeyConfig(apiKey = "AIzaSyManualFallbackKey9999")
+            keyConfig = AiKeyConfig(apiKey = keyOnlyProfile.apiKey, providerMode = AiProviderMode.PERSONAL_API_KEY)
         )
         assertFalse(keyOnlyReady.isSignedInWithGoogle)
         assertTrue(keyOnlyReady.isAiReady)
-        assertTrue(keyOnlyReady.activeProviderLabel.contains("API Key riêng"))
+        assertTrue(keyOnlyReady.activeProviderLabel.contains("Google Key"))
     }
 
     @Test
@@ -1117,18 +1124,27 @@ class ExampleRobolectricTest {
         prefs.save(keyOnlyMode)
         val reloaded = prefs.load()
         assertEquals(AiProviderMode.PERSONAL_API_KEY, reloaded.providerMode)
+        val allProfiles = prefs.loadAllProfiles()
 
-        val stateUsingKey = AiAssistantUiState(googleUser = profile, keyConfig = reloaded)
-        assertTrue(stateUsingKey.canSwitchProvider)
+        val stateUsingKey = AiAssistantUiState(
+            activeProvider = AiProvider.GOOGLE_API_KEY,
+            providerProfiles = allProfiles,
+            googleUser = profile,
+            keyConfig = reloaded
+        )
+        assertTrue(AiProvider.GOOGLE_ACCOUNT in stateUsingKey.configuredProviders)
+        assertTrue(AiProvider.GOOGLE_API_KEY in stateUsingKey.configuredProviders)
         assertFalse(stateUsingKey.useGoogleGeminiActive)
-        assertEquals("API Key riêng", stateUsingKey.activeProviderShortLabel)
+        assertEquals("Google Key", stateUsingKey.activeProviderShortLabel)
 
         val stateUsingGoogle = AiAssistantUiState(
+            activeProvider = AiProvider.GOOGLE_ACCOUNT,
+            providerProfiles = allProfiles,
             googleUser = profile,
             keyConfig = reloaded.copy(providerMode = AiProviderMode.GOOGLE_GEMINI)
         )
         assertTrue(stateUsingGoogle.useGoogleGeminiActive)
-        assertEquals("Google Gemini", stateUsingGoogle.activeProviderShortLabel)
+        assertEquals("Google", stateUsingGoogle.activeProviderShortLabel)
         prefs.clearKey()
     }
 
@@ -1287,6 +1303,138 @@ class ExampleRobolectricTest {
         // Daily reset on next calendar day
         val ledgerNextDay = prefs.loadTokenLedgers(today = "2026-11-23")
         assertTrue(ledgerNextDay.isEmpty())
+    }
+
+    @Test
+    fun `multi provider key detection url normalization parsers and isolated storage work cleanly`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+
+        // 1. Key prefix auto-detection & multi-provider sanitization
+        assertEquals(AiProvider.OPENROUTER, AiProvider.detectProviderHintFromKey("sk-or-v1-abc1234567890"))
+        assertEquals(AiProvider.ANTHROPIC, AiProvider.detectProviderHintFromKey("sk-ant-api03-abc1234567890"))
+        assertEquals(AiProvider.GROQ, AiProvider.detectProviderHintFromKey("gsk_abcdef1234567890"))
+        assertEquals(AiProvider.GOOGLE_API_KEY, AiProvider.detectProviderHintFromKey("AIzaSyDemo1234567890"))
+        assertEquals(AiProvider.GOOGLE_API_KEY, AiProvider.detectProviderHintFromKey("AQ.Ab8RN6SampleKey"))
+        assertEquals(AiProvider.OPENAI, AiProvider.detectProviderHintFromKey("sk-proj-demo1234567890"))
+
+        assertEquals(
+            "sk-proj-CleanOpenAi99",
+            AiResponseParser.sanitizeApiKey("OPENAI_API_KEY=\"Bearer sk-proj-CleanOpenAi99\"")
+        )
+        assertEquals(
+            "sk-ant-CleanClaude88",
+            AiResponseParser.sanitizeApiKey("ANTHROPIC_API_KEY='sk-ant-CleanClaude88'")
+        )
+        assertEquals(
+            "sk-or-v1-CleanRouter77",
+            AiResponseParser.sanitizeApiKey("OPENROUTER_API_KEY=sk-or-v1-CleanRouter77")
+        )
+
+        // 2. Custom Base URL normalization strips trailing /chat/completions, /models, slashes and adds https://
+        assertEquals(
+            "https://api.together.xyz/v1",
+            AiProvider.normalizeBaseUrl("https://api.together.xyz/v1/chat/completions/")
+        )
+        assertEquals(
+            "https://api.mistral.ai/v1",
+            AiProvider.normalizeBaseUrl("api.mistral.ai/v1/models")
+        )
+        assertEquals(
+            "http://192.168.1.10:11434/v1",
+            AiProvider.normalizeBaseUrl("http://192.168.1.10:11434/v1/")
+        )
+
+        // 3. OpenAI / OpenRouter /models parser filters out embeddings/audio, preserves context_length and :free
+        val openRouterJson = """
+            {
+              "data": [
+                {"id": "openai/text-embedding-3-large", "name": "Embedding 3"},
+                {"id": "openai/whisper-1", "name": "Whisper"},
+                {"id": "deepseek/deepseek-r1:free", "name": "DeepSeek R1 (free)", "context_length": 163840},
+                {"id": "openai/gpt-4o-mini", "name": "GPT-4o Mini", "context_length": 128000, "top_provider": {"max_completion_tokens": 16384}}
+              ]
+            }
+        """.trimIndent()
+        val orModels = AiResponseParser.parseOpenAiModelsJson(openRouterJson, AiProvider.OPENROUTER)
+        assertEquals(2, orModels.size)
+        assertTrue(orModels.none { it.modelId.contains("embedding") || it.modelId.contains("whisper") })
+        val freeModel = orModels.first { it.modelId == "deepseek/deepseek-r1:free" }
+        assertEquals(163840, freeModel.inputTokenLimit)
+        val gpt4oMini = orModels.first { it.modelId == "openai/gpt-4o-mini" }
+        assertEquals(128000, gpt4oMini.inputTokenLimit)
+        assertEquals(16384, gpt4oMini.outputTokenLimit)
+
+        // 4. Anthropic /v1/models & usage parsers
+        val anthropicModelsJson = """
+            {
+              "data": [
+                {"id": "claude-sonnet-4-5-20250929", "display_name": "Claude Sonnet 4.5"},
+                {"id": "claude-3-5-haiku-20241022", "display_name": "Claude 3.5 Haiku"}
+              ],
+              "has_more": false
+            }
+        """.trimIndent()
+        val (claudeModels, nextCursor) = AiResponseParser.parseAnthropicModelsJson(anthropicModelsJson)
+        assertEquals(null, nextCursor)
+        assertEquals(2, claudeModels.size)
+        assertEquals("claude-sonnet-4-5-20250929", claudeModels[0].modelId)
+        assertEquals(200_000, claudeModels[0].inputTokenLimit)
+
+        val openAiUsage = AiResponseParser.parseOpenAiUsage(
+            org.json.JSONObject("""{"usage":{"prompt_tokens":950,"completion_tokens":250,"total_tokens":1200,"completion_tokens_details":{"reasoning_tokens":80}}}"""),
+            rateLimitRemaining = 48_000L,
+            rateLimitTotal = 60_000L
+        )
+        assertEquals(950, openAiUsage?.promptTokens)
+        assertEquals(250, openAiUsage?.outputTokens)
+        assertEquals(80, openAiUsage?.thoughtsTokens)
+        assertEquals(1200, openAiUsage?.totalTokens)
+        assertEquals(48_000L, openAiUsage?.rateLimitRemainingTokens)
+
+        val claudeUsage = AiResponseParser.parseAnthropicUsage(
+            org.json.JSONObject("""{"usage":{"input_tokens":1100,"cache_read_input_tokens":150,"output_tokens":350}}""")
+        )
+        assertEquals(1250, claudeUsage?.promptTokens)
+        assertEquals(350, claudeUsage?.outputTokens)
+        assertEquals(1600, claudeUsage?.totalTokens)
+
+        // 5. Strict per-provider persistence isolation (keys, models, base URL, and token ledgers never collide)
+        val prefs = AiKeyPreferences(context)
+        prefs.saveProfile(AiProviderProfile(AiProvider.OPENAI, apiKey = "sk-proj-OpenAiSecret1111", modelId = "gpt-4o"))
+        prefs.saveProfile(AiProviderProfile(AiProvider.ANTHROPIC, apiKey = "sk-ant-ClaudeSecret2222", modelId = "claude-sonnet-4-5"))
+        prefs.saveProfile(
+            AiProviderProfile(
+                provider = AiProvider.CUSTOM_OPENAI,
+                apiKey = "",
+                baseUrl = "http://192.168.1.5:11434/v1",
+                modelId = "qwen2.5:14b"
+            )
+        )
+        prefs.recordTokenUsage(AiProvider.OPENAI, "gpt-4o", AiTokenUsage(500, 200, 0, 700), today = "2026-11-22")
+        prefs.recordTokenUsage(AiProvider.ANTHROPIC, "claude-sonnet-4-5", AiTokenUsage(1000, 400, 0, 1400), today = "2026-11-22")
+
+        val loadedOpenAi = prefs.loadProfile(AiProvider.OPENAI)
+        val loadedClaude = prefs.loadProfile(AiProvider.ANTHROPIC)
+        val loadedCustom = prefs.loadProfile(AiProvider.CUSTOM_OPENAI)
+        assertEquals("sk-proj-OpenAiSecret1111", loadedOpenAi.apiKey)
+        assertEquals("gpt-4o", loadedOpenAi.effectiveModelId)
+        assertEquals("sk-ant-ClaudeSecret2222", loadedClaude.apiKey)
+        assertEquals("claude-sonnet-4-5", loadedClaude.effectiveModelId)
+        assertTrue("Local Ollama Custom URL without API key must still be ready", loadedCustom.isReady(isSignedInWithGoogle = false))
+        assertEquals("http://192.168.1.5:11434/v1", loadedCustom.effectiveBaseUrl)
+
+        assertEquals(700L, prefs.loadTokenLedgers(AiProvider.OPENAI, today = "2026-11-22")["gpt-4o"]?.usedTokensToday)
+        assertEquals(1400L, prefs.loadTokenLedgers(AiProvider.ANTHROPIC, today = "2026-11-22")["claude-sonnet-4-5"]?.usedTokensToday)
+
+        // Clearing OpenAI key must NOT affect Claude or Custom URL
+        prefs.clearProviderKey(AiProvider.OPENAI)
+        assertFalse(prefs.loadProfile(AiProvider.OPENAI).hasKey)
+        assertTrue(prefs.loadProfile(AiProvider.ANTHROPIC).hasKey)
+        assertTrue(prefs.loadProfile(AiProvider.CUSTOM_OPENAI).isReady(false))
+
+        // Clean up test prefs
+        prefs.clearProviderKey(AiProvider.ANTHROPIC)
+        prefs.clearProviderKey(AiProvider.CUSTOM_OPENAI)
     }
 }
 

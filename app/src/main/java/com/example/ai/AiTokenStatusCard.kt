@@ -41,6 +41,7 @@ private const val AI_STUDIO_USAGE_URL = "https://aistudio.google.com/usage"
 fun AiTokenStatusCard(
     tokenState: AiContextTokenState,
     onRefreshTokens: () -> Unit,
+    activeProvider: AiProvider = AiProvider.GOOGLE_ACCOUNT,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -95,16 +96,18 @@ fun AiTokenStatusCard(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Verified,
-                        contentDescription = "Đã đồng bộ trực tiếp từ máy chủ Google",
+                        contentDescription = "Đã đồng bộ từ máy chủ ${activeProvider.shortTitle}",
                         tint = EmeraldLight,
                         modifier = Modifier.size(10.dp)
                     )
                     Text(
-                        text = "Đã đồng bộ",
+                        text = tokenState.verificationSource.ifBlank { "Đã đồng bộ" },
                         style = MaterialTheme.typography.labelSmall,
                         color = EmeraldLight,
                         fontSize = 9.5.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -189,7 +192,7 @@ fun AiTokenStatusCard(
         } else {
             Text(
                 text = if (tokenState.isSyncingTokens) {
-                    "Đang đồng bộ giới hạn & số token chính xác từ máy chủ Google..."
+                    "Đang đồng bộ giới hạn & số token chính xác từ ${activeProvider.shortTitle}..."
                 } else {
                     "Bấm nút làm mới hoặc Đồng bộ mô hình để lấy giới hạn token chính xác."
                 },
@@ -197,6 +200,58 @@ fun AiTokenStatusCard(
                 color = SlateTextSecondary,
                 fontSize = 11.sp
             )
+        }
+
+        // Optional live rate-limit or credit balance telemetry returned by provider headers / balance endpoints
+        if (tokenState.rateLimitRemainingTokens != null || !tokenState.accountBalanceLabel.isNullOrBlank()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                tokenState.accountBalanceLabel?.takeIf { it.isNotBlank() }?.let { bal ->
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(EmeraldAccent.copy(alpha = 0.14f))
+                            .border(1.dp, EmeraldAccent.copy(alpha = 0.42f), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = "${activeProvider.shortTitle}: $bal",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = EmeraldLight,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                tokenState.rateLimitRemainingTokens?.let { rlRem ->
+                    val rlLimit = tokenState.rateLimitTotalTokens
+                    val rlText = if (rlLimit != null && rlLimit > 0L) {
+                        "TPM còn ${AiResponseParser.formatCompactTokens(rlRem)}/${AiResponseParser.formatCompactTokens(rlLimit)}"
+                    } else {
+                        "TPM còn ${AiResponseParser.formatCompactTokens(rlRem)}"
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(CyanAccent.copy(alpha = 0.14f))
+                            .border(1.dp, CyanAccent.copy(alpha = 0.42f), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = rlText,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = CyanAccent,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
         }
 
         // 3-pill exact telemetry row: Current session | Used today | Last turn
@@ -235,48 +290,71 @@ fun AiTokenStatusCard(
             )
         }
 
-        // Honest footer + 1-tap AI Studio account quota shortcut
+        // Honest footer + 1-tap provider quota shortcut
+        val footerText = when (activeProvider) {
+            AiProvider.GOOGLE_ACCOUNT, AiProvider.GOOGLE_API_KEY ->
+                "Đếm trực tiếp qua countTokens & usageMetadata. Hạn mức ngày (RPD/TPM) xem trên AI Studio."
+            AiProvider.ANTHROPIC ->
+                "Đếm ngữ cảnh trực tiếp qua Claude count_tokens & usage thực của từng lượt."
+            AiProvider.OPENROUTER ->
+                "Đọc context_length, số dư credit & usage thực trả về từ máy chủ OpenRouter."
+            AiProvider.GROQ ->
+                "Đọc context_window, header rate-limit & usage thực từ máy chủ Groq."
+            AiProvider.DEEPSEEK ->
+                "Đọc số dư tài khoản & usage thực từ máy chủ DeepSeek."
+            AiProvider.OPENAI ->
+                "Đọc giới hạn ngữ cảnh, rate-limit header & usage thực từ OpenAI."
+            AiProvider.CUSTOM_OPENAI ->
+                "Ghi nhận token thực từ trường usage do máy chủ Custom URL trả về."
+        }
+        val portalUrl = activeProvider.quotaPortalUrl.ifBlank { AI_STUDIO_USAGE_URL }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = "Đếm trực tiếp qua countTokens & usageMetadata. Hạn mức ngày (RPD/TPM) xem trên AI Studio.",
+                text = footerText,
                 style = MaterialTheme.typography.labelSmall,
                 color = SlateTextSecondary.copy(alpha = 0.85f),
                 fontSize = 9.5.sp,
                 lineHeight = 13.sp,
                 modifier = Modifier.weight(1f)
             )
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(SlateDark.copy(alpha = 0.85f))
-                    .border(1.dp, SlateBorder, RoundedCornerShape(7.dp))
-                    .clickable {
-                        runCatching {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(AI_STUDIO_USAGE_URL)))
+            if (activeProvider.quotaPortalUrl.isNotBlank()) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(SlateDark.copy(alpha = 0.85f))
+                        .border(1.dp, SlateBorder, RoundedCornerShape(7.dp))
+                        .clickable {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(portalUrl))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
                         }
-                    }
-                    .padding(horizontal = 7.dp, vertical = 4.dp)
-                    .testTag("ai_open_quota_usage_btn"),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                Text(
-                    text = "Quota",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = CyanAccent,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                    contentDescription = "Mở trang Quota Google AI Studio",
-                    tint = CyanAccent,
-                    modifier = Modifier.size(11.dp)
-                )
+                        .padding(horizontal = 7.dp, vertical = 4.dp)
+                        .testTag("ai_open_quota_usage_btn"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Text(
+                        text = "Quota",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = CyanAccent,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                        contentDescription = "Mở trang Quota ${activeProvider.quotaPortalLabel}",
+                        tint = CyanAccent,
+                        modifier = Modifier.size(11.dp)
+                    )
+                }
             }
         }
     }

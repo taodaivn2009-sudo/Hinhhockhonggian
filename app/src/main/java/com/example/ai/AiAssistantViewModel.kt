@@ -43,6 +43,10 @@ data class AuthToastEvent(
 )
 
 data class AiAssistantUiState(
+    // Multi-provider state (each provider stores its own key, baseUrl, model, synced catalog & token ledger)
+    val activeProvider: AiProvider = AiProvider.GOOGLE_ACCOUNT,
+    val providerProfiles: Map<AiProvider, AiProviderProfile> = emptyMap(),
+
     // Google Sign-In + keyless Firebase AI Logic (Google Gemini)
     val googleUser: GoogleUserProfile? = null,
     val isSigningIn: Boolean = false,
@@ -51,7 +55,7 @@ data class AiAssistantUiState(
     val authStatusSuccess: Boolean = false,
     val authToast: AuthToastEvent? = null,
 
-    // Optional manual API Key fallback (BYOK) + synced account models
+    // Active provider configuration projection + synced account models
     val keyConfig: AiKeyConfig = AiKeyConfig(),
     val activeSubTab: AiSubTab = AiSubTab.DOCS_QA,
     val isVerifyingKey: Boolean = false,
@@ -63,7 +67,7 @@ data class AiAssistantUiState(
     val modelSyncSuccess: Boolean = false,
     val syncedModelsUpdatedAt: Long = 0L,
 
-    // Live batch request testing across all models
+    // Live batch request testing across models
     val isProbingAllModels: Boolean = false,
     val probeProgressDone: Int = 0,
     val probeProgressTotal: Int = 0,
@@ -92,49 +96,54 @@ data class AiAssistantUiState(
     val problemError: String? = null,
     val latestDrawingPlan: AiDrawingPlan? = null
 ) {
-    val isSignedInWithGoogle: Boolean get() = googleUser != null
-    val isAiReady: Boolean get() = isSignedInWithGoogle || keyConfig.hasKey
-    val canSwitchProvider: Boolean get() = isSignedInWithGoogle && keyConfig.hasKey
+    val activeProfile: AiProviderProfile
+        get() = providerProfiles[activeProvider] ?: AiProviderProfile(provider = activeProvider)
 
-    /**
-     * Resolves which backend handles AI requests:
-     * - If both Google Sign-In and a personal API key are available, respects user's providerMode choice.
-     * - Otherwise automatically uses whichever is configured.
-     */
+    val isSignedInWithGoogle: Boolean get() = googleUser != null
+
+    val isAiReady: Boolean
+        get() = activeProfile.isReady(isSignedInWithGoogle)
+
+    val hasAnyConfiguredProvider: Boolean
+        get() = isSignedInWithGoogle || providerProfiles.values.any { it.isReady(isSignedInWithGoogle) }
+
+    val configuredProviders: Set<AiProvider>
+        get() = AiProvider.entries.filter { p ->
+            (providerProfiles[p] ?: AiProviderProfile(p)).isReady(isSignedInWithGoogle)
+        }.toSet()
+
     val useGoogleGeminiActive: Boolean
-        get() = when {
-            isSignedInWithGoogle && keyConfig.hasKey ->
-                keyConfig.providerMode != AiProviderMode.PERSONAL_API_KEY
-            isSignedInWithGoogle -> true
-            else -> false
-        }
+        get() = activeProvider == AiProvider.GOOGLE_ACCOUNT
 
     val activeProviderShortLabel: String
-        get() = when {
-            useGoogleGeminiActive -> "Google Gemini"
-            keyConfig.hasKey -> "API Key riêng"
-            else -> "Chưa kết nối"
-        }
+        get() = if (isAiReady) activeProvider.shortTitle else "Chưa kết nối"
 
     val activeProviderLabel: String
         get() = when {
-            useGoogleGeminiActive -> "Google Gemini · Không cần API Key"
-            keyConfig.hasKey -> "API Key riêng (${keyConfig.maskedKey})"
-            else -> "Chưa đăng nhập Google hoặc nhập Key"
+            activeProvider == AiProvider.GOOGLE_ACCOUNT && isSignedInWithGoogle ->
+                "Google Gemini · Không cần API Key"
+            activeProvider == AiProvider.CUSTOM_OPENAI && activeProfile.effectiveBaseUrl.isNotEmpty() ->
+                "Custom URL (${activeProfile.effectiveBaseUrl.removePrefix("https://").removePrefix("http://").take(26)})"
+            activeProfile.hasKey ->
+                "${activeProvider.shortTitle} (${activeProfile.maskedKey})"
+            else -> "Chưa kết nối ${activeProvider.shortTitle}"
         }
 
     val displayModels: List<AiSyncedModel>
         get() {
-            val base = syncedModels.ifEmpty { AiModelPreset.entries.map { it.toSyncedModel() } }
-            val currentId = keyConfig.effectiveModelId
+            val base = syncedModels.ifEmpty { activeProvider.defaultPresetModels() }
+            val currentId = activeProfile.effectiveModelId
             return if (base.any { it.modelId.equals(currentId, ignoreCase = true) }) {
                 base
             } else {
                 listOf(
                     AiSyncedModel(
                         modelId = currentId,
-                        displayName = AiModelPreset.fromId(currentId)?.title
-                            ?: AiResponseParser.formatModelDisplayName(currentId),
+                        displayName = if (activeProvider == AiProvider.GOOGLE_ACCOUNT || activeProvider == AiProvider.GOOGLE_API_KEY) {
+                            AiModelPreset.fromId(currentId)?.title ?: AiResponseParser.formatModelDisplayName(currentId)
+                        } else {
+                            AiResponseParser.formatModelDisplayName(currentId.substringAfterLast('/'))
+                        },
                         description = "Mô hình đang chọn",
                         source = "custom"
                     )
@@ -158,23 +167,37 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     private var activeProbeAllJob: Job? = null
     private var activeTokenSyncJob: Job? = null
     private var attemptedSilentAuth = false
+    private val probeResultsByProvider = LinkedHashMap<AiProvider, Map<String, AiModelProbeResult>>()
+    private val probeSummaryByProvider = LinkedHashMap<AiProvider, String?>()
 
     private val _uiState = MutableStateFlow(createInitialState())
     val uiState: StateFlow<AiAssistantUiState> = _uiState.asStateFlow()
 
+    private fun projectKeyConfig(profile: AiProviderProfile): AiKeyConfig = AiKeyConfig(
+        apiKey = profile.apiKey,
+        modelId = profile.effectiveModelId,
+        providerMode = if (profile.provider == AiProvider.GOOGLE_ACCOUNT) {
+            AiProviderMode.GOOGLE_GEMINI
+        } else {
+            AiProviderMode.PERSONAL_API_KEY
+        }
+    )
+
     private fun createInitialState(): AiAssistantUiState {
-        val loadedKey = keyPrefs.load()
-        val cachedSyncedModels = keyPrefs.loadSyncedModels()
-        val cachedUpdatedAt = keyPrefs.loadSyncedModelsUpdatedAt()
-        val ledgers = keyPrefs.loadTokenLedgers()
+        val allProfiles = keyPrefs.loadAllProfiles()
         val existingGoogleUser = GoogleAuthManager.currentUserProfile(appContext)
-        val ready = existingGoogleUser != null || loadedKey.hasKey
-        val activeModelId = loadedKey.effectiveModelId
-        val matchedModel = cachedSyncedModels.firstOrNull { it.modelId.equals(activeModelId, ignoreCase = true) }
+        var activeProvider = keyPrefs.loadActiveProvider()
+        // If active provider is Google Account (not signed in) while another provider is configured, keep activeProvider
+        val activeProfile = allProfiles[activeProvider] ?: AiProviderProfile(activeProvider)
+        val ledgers = keyPrefs.loadTokenLedgers(activeProvider)
+        val ready = activeProfile.isReady(existingGoogleUser != null)
+        val activeModelId = activeProfile.effectiveModelId
+        val matchedModel = activeProfile.syncedModels.firstOrNull { it.modelId.equals(activeModelId, ignoreCase = true) }
         val activeLedger = ledgers[activeModelId.lowercase()]
         val initialTokenState = AiContextTokenState(
             modelId = activeModelId,
-            inputTokenLimit = matchedModel?.inputTokenLimit ?: 0,
+            inputTokenLimit = matchedModel?.inputTokenLimit?.takeIf { it > 0 }
+                ?: AiResponseParser.inferKnownContextWindow(activeModelId, activeProvider),
             outputTokenLimit = matchedModel?.outputTokenLimit ?: 0,
             usedTokensToday = activeLedger?.usedTokensToday ?: 0L,
             requestsToday = activeLedger?.requestsToday ?: 0,
@@ -187,10 +210,12 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             }
         )
         return AiAssistantUiState(
+            activeProvider = activeProvider,
+            providerProfiles = allProfiles,
             googleUser = existingGoogleUser,
-            keyConfig = loadedKey,
-            syncedModels = cachedSyncedModels,
-            syncedModelsUpdatedAt = cachedUpdatedAt,
+            keyConfig = projectKeyConfig(activeProfile),
+            syncedModels = activeProfile.syncedModels,
+            syncedModelsUpdatedAt = activeProfile.syncedModelsUpdatedAt,
             tokenState = initialTokenState,
             tokenLedgers = ledgers,
             activeSubTab = if (ready) AiSubTab.DOCS_QA else AiSubTab.API_KEY
@@ -262,11 +287,64 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
 
     // ================= GOOGLE SIGN-IN & PROVIDER SELECTION =================
 
+    fun selectProvider(provider: AiProvider) {
+        val prevProvider = _uiState.value.activeProvider
+        if (prevProvider == provider) return
+
+        // Cancel in-flight probe/sync/token jobs belonging to previous provider
+        activeProbeAllJob?.cancel()
+        activeSyncJob?.cancel()
+        activeTokenSyncJob?.cancel()
+
+        // Cache current provider's probe results in memory
+        probeResultsByProvider[prevProvider] = _uiState.value.modelProbeResults
+            .filterValues { it.status != AiModelProbeStatus.TESTING }
+        probeSummaryByProvider[prevProvider] = _uiState.value.modelProbeSummary
+
+        keyPrefs.saveActiveProvider(provider)
+        val profile = _uiState.value.providerProfiles[provider] ?: keyPrefs.loadProfile(provider)
+        val ledgers = keyPrefs.loadTokenLedgers(provider)
+        val cachedProbes = probeResultsByProvider[provider].orEmpty()
+        val cachedProbeSummary = probeSummaryByProvider[provider]
+
+        _uiState.update { cur ->
+            cur.copy(
+                activeProvider = provider,
+                providerProfiles = cur.providerProfiles + (provider to profile),
+                keyConfig = projectKeyConfig(profile),
+                syncedModels = profile.syncedModels,
+                syncedModelsUpdatedAt = profile.syncedModelsUpdatedAt,
+                isSyncingModels = false,
+                isVerifyingKey = false,
+                isProbingAllModels = false,
+                probeProgressDone = 0,
+                probeProgressTotal = 0,
+                keyStatusMessage = null,
+                modelSyncStatusMessage = null,
+                modelProbeResults = cachedProbes,
+                modelProbeSummary = cachedProbeSummary,
+                tokenLedgers = ledgers,
+                tokenState = buildBaselineTokenState(
+                    provider = provider,
+                    modelId = profile.effectiveModelId,
+                    models = profile.syncedModels,
+                    ledgers = ledgers
+                )
+            )
+        }
+        if (profile.isReady(_uiState.value.isSignedInWithGoogle)) {
+            syncContextTokens()
+        }
+    }
+
     fun selectProviderMode(mode: AiProviderMode) {
-        val current = _uiState.value.keyConfig
-        val next = current.copy(providerMode = mode)
-        keyPrefs.save(next)
-        _uiState.update { it.copy(keyConfig = next) }
+        val target = if (mode == AiProviderMode.GOOGLE_GEMINI) {
+            AiProvider.GOOGLE_ACCOUNT
+        } else {
+            val cur = _uiState.value.activeProvider
+            if (cur == AiProvider.GOOGLE_ACCOUNT) AiProvider.GOOGLE_API_KEY else cur
+        }
+        selectProvider(target)
     }
 
     fun testGoogleGeminiConnection() {
@@ -428,44 +506,82 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // ================= MANUAL API KEY FALLBACK =================
+    // ================= PER-PROVIDER API KEY, MODEL SYNC, PROBE & TOKENS =================
 
-    fun saveApiKey(rawKey: String, modelId: String = _uiState.value.keyConfig.effectiveModelId) {
+    private fun updateProfileInState(profile: AiProviderProfile, persist: Boolean = true) {
+        if (persist) {
+            keyPrefs.saveProfile(profile)
+        }
+        _uiState.update { cur ->
+            val updatedMap = cur.providerProfiles + (profile.provider to profile)
+            if (cur.activeProvider == profile.provider) {
+                cur.copy(
+                    providerProfiles = updatedMap,
+                    keyConfig = projectKeyConfig(profile),
+                    syncedModels = profile.syncedModels,
+                    syncedModelsUpdatedAt = profile.syncedModelsUpdatedAt
+                )
+            } else {
+                cur.copy(providerProfiles = updatedMap)
+            }
+        }
+    }
+
+    fun saveApiKey(
+        rawKey: String,
+        modelId: String = _uiState.value.activeProfile.effectiveModelId,
+        customBaseUrl: String = _uiState.value.activeProfile.baseUrl
+    ) {
+        val provider = _uiState.value.activeProvider.let {
+            if (it == AiProvider.GOOGLE_ACCOUNT) AiProvider.GOOGLE_API_KEY else it
+        }
+        if (provider != _uiState.value.activeProvider) {
+            selectProvider(provider)
+        }
         val cleanKey = AiResponseParser.sanitizeApiKey(rawKey)
-        val current = _uiState.value.keyConfig
-        val next = current.copy(
+        val cleanBaseUrl = if (provider.supportsCustomBaseUrl) AiProvider.normalizeBaseUrl(customBaseUrl) else provider.defaultBaseUrl
+        val current = _uiState.value.providerProfiles[provider] ?: keyPrefs.loadProfile(provider)
+        val nextProfile = current.copy(
             apiKey = cleanKey,
-            modelId = modelId.trim(),
-            providerMode = if (cleanKey.isNotEmpty()) AiProviderMode.PERSONAL_API_KEY else AiProviderMode.GOOGLE_GEMINI
+            baseUrl = cleanBaseUrl,
+            modelId = modelId.trim().ifEmpty { current.effectiveModelId }
         )
-        keyPrefs.save(next)
+        keyPrefs.saveActiveProvider(provider)
+        updateProfileInState(nextProfile, persist = true)
+
+        val ready = nextProfile.isReady(_uiState.value.isSignedInWithGoogle)
         _uiState.update {
             it.copy(
-                keyConfig = next,
-                keyStatusMessage = if (next.hasKey) "Đã lưu và bật API Key riêng (${next.maskedKey}). Đang đồng bộ mô hình..." else "Đã xóa API Key.",
-                keyStatusSuccess = next.hasKey
+                keyStatusMessage = when {
+                    provider == AiProvider.CUSTOM_OPENAI && cleanBaseUrl.isEmpty() ->
+                        "Vui lòng nhập Base URL hợp lệ (vd: https://api.together.xyz/v1)."
+                    ready -> "Đã lưu cấu hình ${provider.shortTitle} (${nextProfile.maskedKey}). Đang đồng bộ mô hình..."
+                    else -> "Đã xóa API Key ${provider.shortTitle}."
+                },
+                keyStatusSuccess = ready
             )
         }
-        if (cleanKey.isNotEmpty()) {
-            syncAccountModels(cleanKey)
+        if (ready) {
+            syncAccountModels(overrideApiKey = cleanKey, overrideBaseUrl = cleanBaseUrl)
         }
     }
 
     fun selectModel(modelId: String) {
-        val current = _uiState.value.keyConfig
-        val nextId = modelId.trim().ifEmpty { AiModelPreset.GEMINI_3_8_FLASH.modelId }
-        val next = current.copy(modelId = nextId)
-        keyPrefs.save(next)
+        val provider = _uiState.value.activeProvider
+        val current = _uiState.value.activeProfile
+        val nextId = modelId.trim().ifEmpty { provider.defaultModelId }
+        val nextProfile = current.copy(modelId = nextId)
+        updateProfileInState(nextProfile, persist = true)
         _uiState.update { cur ->
             cur.copy(
-                keyConfig = next,
-                tokenState = buildBaselineTokenState(nextId, cur.syncedModels, cur.tokenLedgers)
+                tokenState = buildBaselineTokenState(provider, nextId, cur.syncedModels, cur.tokenLedgers)
             )
         }
         syncContextTokens()
     }
 
     fun addCustomModel(rawModelId: String) {
+        val provider = _uiState.value.activeProvider
         val cleanId = rawModelId.trim()
             .removePrefix("publishers/google/models/")
             .removePrefix("models/")
@@ -473,22 +589,24 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         if (cleanId.isEmpty()) {
             _uiState.update {
                 it.copy(
-                    modelSyncStatusMessage = "Hãy nhập mã mô hình hợp lệ (ví dụ: gemini-3.8-flash).",
+                    modelSyncStatusMessage = "Hãy nhập mã mô hình hợp lệ (ví dụ: ${provider.defaultModelId}).",
                     modelSyncSuccess = false
                 )
             }
             return
         }
-        val updatedModels = keyPrefs.addCustomModel(cleanId)
-        val nextConfig = _uiState.value.keyConfig.copy(modelId = cleanId)
-        keyPrefs.save(nextConfig)
+        val updatedModels = keyPrefs.addCustomModel(provider, cleanId)
+        val now = System.currentTimeMillis()
+        val nextProfile = _uiState.value.activeProfile.copy(
+            modelId = cleanId,
+            syncedModels = updatedModels,
+            syncedModelsUpdatedAt = now
+        )
+        updateProfileInState(nextProfile, persist = true)
         _uiState.update { cur ->
             cur.copy(
-                keyConfig = nextConfig,
-                syncedModels = updatedModels,
-                syncedModelsUpdatedAt = System.currentTimeMillis(),
-                tokenState = buildBaselineTokenState(cleanId, updatedModels, cur.tokenLedgers),
-                modelSyncStatusMessage = "Đã thêm và chọn mô hình '$cleanId'.",
+                tokenState = buildBaselineTokenState(provider, cleanId, updatedModels, cur.tokenLedgers),
+                modelSyncStatusMessage = "Đã thêm và chọn mô hình '$cleanId' cho ${provider.shortTitle}.",
                 modelSyncSuccess = true
             )
         }
@@ -496,19 +614,21 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun removeCustomModel(modelId: String) {
-        val updatedModels = keyPrefs.removeCustomModel(modelId)
-        val current = _uiState.value.keyConfig
+        val provider = _uiState.value.activeProvider
+        val updatedModels = keyPrefs.removeCustomModel(provider, modelId)
+        val current = _uiState.value.activeProfile
         val nextModelId = if (current.effectiveModelId.equals(modelId, ignoreCase = true)) {
-            updatedModels.firstOrNull()?.modelId ?: AiModelPreset.GEMINI_3_8_FLASH.modelId
+            updatedModels.firstOrNull()?.modelId ?: provider.defaultModelId
         } else {
             current.effectiveModelId
         }
-        val nextConfig = current.copy(modelId = nextModelId)
-        keyPrefs.save(nextConfig)
+        val nextProfile = current.copy(
+            modelId = nextModelId,
+            syncedModels = updatedModels
+        )
+        updateProfileInState(nextProfile, persist = true)
         _uiState.update {
             it.copy(
-                keyConfig = nextConfig,
-                syncedModels = updatedModels,
                 modelSyncStatusMessage = "Đã xóa mô hình tùy chỉnh '$modelId'.",
                 modelSyncSuccess = true
             )
@@ -516,20 +636,19 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private fun applyAutoResolvedModel(bestModel: AiSyncedModel, syncedFromServer: List<AiSyncedModel>) {
+        val provider = _uiState.value.activeProvider
         val existingCustom = _uiState.value.syncedModels.filter { it.source == "custom" }
-        val merged = AiResponseParser.sortSyncedModels(existingCustom + syncedFromServer)
+        val merged = AiResponseParser.sortSyncedModels(existingCustom + syncedFromServer, provider)
         val now = System.currentTimeMillis()
-        keyPrefs.saveSyncedModels(merged, now)
-        val nextConfig = _uiState.value.keyConfig.copy(
+        keyPrefs.saveSyncedModels(provider, merged, now)
+        val nextProfile = _uiState.value.activeProfile.copy(
             modelId = bestModel.modelId,
-            providerMode = AiProviderMode.PERSONAL_API_KEY
+            syncedModels = merged,
+            syncedModelsUpdatedAt = now
         )
-        keyPrefs.save(nextConfig)
+        updateProfileInState(nextProfile, persist = true)
         _uiState.update { cur ->
             cur.copy(
-                keyConfig = nextConfig,
-                syncedModels = merged,
-                syncedModelsUpdatedAt = now,
                 modelSyncStatusMessage = "Đã tự động đồng bộ ${merged.size} mô hình và chuyển sang '${bestModel.modelId}'.",
                 modelSyncSuccess = true
             )
@@ -537,24 +656,49 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     /**
-     * Synchronizes live models available in the user's account:
-     * - If an API key is available (either saved or typed in draft), fetches the full catalog via REST
-     *   (supports both `AIza...` AI Studio keys and `AQ....` Vertex AI Express keys), automatically
-     *   activates `PERSONAL_API_KEY`, and selects a valid model from the account if the previous model isn't available.
-     * - Else if signed in with Google (Firebase AI Logic), probes live availability on `Firebase.ai`.
+     * Synchronizes live models available on the active provider (Google Account, Google AI Key,
+     * OpenAI, OpenRouter, Groq, DeepSeek, Anthropic Claude, or Custom OpenAI-compatible URL).
      */
-    fun syncAccountModels(overrideApiKey: String? = null) {
+    fun syncAccountModels(
+        overrideApiKey: String? = null,
+        overrideBaseUrl: String? = null
+    ) {
         if (_uiState.value.isSyncingModels) return
         val state = _uiState.value
-        val cleanedOverride = overrideApiKey?.let { AiResponseParser.sanitizeApiKey(it) }.orEmpty()
-        val candidateKey = cleanedOverride.ifEmpty { state.keyConfig.trimmedKey }
-        val existingCustomModels = state.syncedModels.filter { it.source == "custom" }
+        val provider = state.activeProvider
+        val profile = state.activeProfile
+        val cleanedOverrideKey = overrideApiKey?.let { AiResponseParser.sanitizeApiKey(it) }.orEmpty()
+        val candidateKey = cleanedOverrideKey.ifEmpty { profile.trimmedKey }
+        val candidateBaseUrl = if (provider.supportsCustomBaseUrl) {
+            AiProvider.normalizeBaseUrl(overrideBaseUrl ?: profile.baseUrl)
+        } else {
+            provider.defaultBaseUrl
+        }
+        val existingCustomModels = profile.syncedModels.filter { it.source == "custom" }
         val customIds = existingCustomModels.map { it.modelId }
 
-        if (candidateKey.isEmpty() && !state.isSignedInWithGoogle) {
+        if (provider == AiProvider.GOOGLE_ACCOUNT && !state.isSignedInWithGoogle) {
             _uiState.update {
                 it.copy(
-                    modelSyncStatusMessage = "Hãy đăng nhập Google hoặc nhập API Key (AIza... hoặc AQ....) rồi bấm Đồng bộ mô hình.",
+                    modelSyncStatusMessage = "Hãy đăng nhập Google hoặc chọn một nhà cung cấp API Key phía trên rồi bấm Đồng bộ mô hình.",
+                    modelSyncSuccess = false
+                )
+            }
+            return
+        }
+        if (provider == AiProvider.CUSTOM_OPENAI && candidateBaseUrl.isEmpty()) {
+            _uiState.update {
+                it.copy(
+                    modelSyncStatusMessage = "Vui lòng nhập Base URL của máy chủ (vd: https://api.together.xyz/v1) trước khi đồng bộ.",
+                    modelSyncSuccess = false
+                )
+            }
+            return
+        }
+        if (provider.requiresApiKey && candidateKey.isEmpty()) {
+            _uiState.update {
+                it.copy(
+                    modelSyncStatusMessage = "Hãy nhập API Key ${provider.shortTitle} rồi bấm Đồng bộ mô hình.",
                     modelSyncSuccess = false
                 )
             }
@@ -564,11 +708,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         _uiState.update {
             it.copy(
                 isSyncingModels = true,
-                modelSyncStatusMessage = if (candidateKey.isNotEmpty()) {
-                    "Đang đồng bộ danh sách mô hình từ tài khoản API Key..."
-                } else {
-                    "Đang kiểm tra các mô hình khả dụng trên Google Gemini..."
-                },
+                modelSyncStatusMessage = "Đang đồng bộ danh sách mô hình từ ${provider.shortTitle}...",
                 modelSyncSuccess = true
             )
         }
@@ -577,39 +717,49 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         activeSyncJob = viewModelScope.launch {
             try {
                 val syncResult = withTimeout(30_000L) {
-                    if (candidateKey.isNotEmpty()) {
-                        GeminiApiClient.syncAccountModels(
-                            apiKey = candidateKey,
-                            preferredModelId = state.keyConfig.effectiveModelId,
-                            extraModelIds = customIds
-                        )
-                    } else {
-                        FirebaseAiClient.probeAvailableModels(extraModelIds = customIds)
+                    when (provider) {
+                        AiProvider.GOOGLE_ACCOUNT ->
+                            FirebaseAiClient.probeAvailableModels(extraModelIds = customIds)
+                        AiProvider.GOOGLE_API_KEY ->
+                            GeminiApiClient.syncAccountModels(
+                                apiKey = candidateKey,
+                                preferredModelId = profile.effectiveModelId,
+                                extraModelIds = customIds
+                            )
+                        AiProvider.ANTHROPIC ->
+                            AnthropicApiClient.syncAccountModels(apiKey = candidateKey)
+                        AiProvider.OPENAI,
+                        AiProvider.OPENROUTER,
+                        AiProvider.GROQ,
+                        AiProvider.DEEPSEEK,
+                        AiProvider.CUSTOM_OPENAI ->
+                            OpenAiCompatApiClient.syncAccountModels(
+                                provider = provider,
+                                apiKey = candidateKey,
+                                customBaseUrl = candidateBaseUrl
+                            )
                     }
                 }
 
                 syncResult.onSuccess { result ->
-                    val merged = AiResponseParser.sortSyncedModels(existingCustomModels + result.models)
+                    val merged = AiResponseParser.sortSyncedModels(existingCustomModels + result.models, provider)
                     val now = System.currentTimeMillis()
-                    keyPrefs.saveSyncedModels(merged, now)
+                    keyPrefs.saveSyncedModels(provider, merged, now)
 
-                    val curConfig = _uiState.value.keyConfig
-                    val currentId = curConfig.effectiveModelId
+                    val currentId = profile.effectiveModelId
                     val isCurrentValid = result.models.any { it.modelId.equals(currentId, ignoreCase = true) } ||
                         existingCustomModels.any { it.modelId.equals(currentId, ignoreCase = true) }
-                    val autoPicked = if (!isCurrentValid) AiResponseParser.pickBestChatModel(result.models) else null
+                    val autoPicked = if (!isCurrentValid) AiResponseParser.pickBestChatModel(result.models, provider) else null
                     val finalModelId = autoPicked?.modelId ?: currentId
 
-                    val nextConfig = if (candidateKey.isNotEmpty()) {
-                        curConfig.copy(
-                            apiKey = candidateKey,
-                            modelId = finalModelId,
-                            providerMode = AiProviderMode.PERSONAL_API_KEY
-                        )
-                    } else {
-                        curConfig.copy(modelId = finalModelId)
-                    }
-                    keyPrefs.save(nextConfig)
+                    val nextProfile = profile.copy(
+                        apiKey = if (provider != AiProvider.GOOGLE_ACCOUNT) candidateKey else profile.apiKey,
+                        baseUrl = if (provider.supportsCustomBaseUrl) candidateBaseUrl else profile.baseUrl,
+                        modelId = finalModelId,
+                        syncedModels = merged,
+                        syncedModelsUpdatedAt = now
+                    )
+                    updateProfileInState(nextProfile, persist = true)
 
                     val statusMsg = buildString {
                         append(result.message)
@@ -620,24 +770,21 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
 
                     _uiState.update { cur ->
                         cur.copy(
-                            keyConfig = nextConfig,
-                            syncedModels = merged,
-                            syncedModelsUpdatedAt = now,
-                            tokenState = buildBaselineTokenState(finalModelId, merged, cur.tokenLedgers),
-                            keyStatusMessage = if (candidateKey.isNotEmpty()) statusMsg else cur.keyStatusMessage,
-                            keyStatusSuccess = if (candidateKey.isNotEmpty()) true else cur.keyStatusSuccess,
+                            tokenState = buildBaselineTokenState(provider, finalModelId, merged, cur.tokenLedgers),
+                            keyStatusMessage = if (provider != AiProvider.GOOGLE_ACCOUNT) statusMsg else cur.keyStatusMessage,
+                            keyStatusSuccess = if (provider != AiProvider.GOOGLE_ACCOUNT) true else cur.keyStatusSuccess,
                             modelSyncStatusMessage = statusMsg,
                             modelSyncSuccess = true
                         )
                     }
                     syncContextTokens()
                 }.onFailure { err ->
-                    Log.e(TAG, "Account model sync failed", err)
+                    Log.e(TAG, "Account model sync failed for $provider", err)
                     val errText = err.localizedMessage ?: "Đồng bộ danh sách mô hình thất bại."
                     _uiState.update {
                         it.copy(
-                            keyStatusMessage = if (candidateKey.isNotEmpty()) errText else it.keyStatusMessage,
-                            keyStatusSuccess = if (candidateKey.isNotEmpty()) false else it.keyStatusSuccess,
+                            keyStatusMessage = if (provider != AiProvider.GOOGLE_ACCOUNT) errText else it.keyStatusMessage,
+                            keyStatusSuccess = if (provider != AiProvider.GOOGLE_ACCOUNT) false else it.keyStatusSuccess,
                             modelSyncStatusMessage = errText,
                             modelSyncSuccess = false
                         )
@@ -647,8 +794,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 val timeoutMsg = "Quá thời gian đồng bộ mô hình (30 giây). Hãy kiểm tra kết nối mạng."
                 _uiState.update {
                     it.copy(
-                        keyStatusMessage = if (candidateKey.isNotEmpty()) timeoutMsg else it.keyStatusMessage,
-                        keyStatusSuccess = if (candidateKey.isNotEmpty()) false else it.keyStatusSuccess,
+                        keyStatusMessage = if (provider != AiProvider.GOOGLE_ACCOUNT) timeoutMsg else it.keyStatusMessage,
+                        keyStatusSuccess = if (provider != AiProvider.GOOGLE_ACCOUNT) false else it.keyStatusSuccess,
                         modelSyncStatusMessage = timeoutMsg,
                         modelSyncSuccess = false
                     )
@@ -660,8 +807,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 val msg = "Lỗi đồng bộ mô hình: ${e.localizedMessage ?: e.javaClass.simpleName}"
                 _uiState.update {
                     it.copy(
-                        keyStatusMessage = if (candidateKey.isNotEmpty()) msg else it.keyStatusMessage,
-                        keyStatusSuccess = if (candidateKey.isNotEmpty()) false else it.keyStatusSuccess,
+                        keyStatusMessage = if (provider != AiProvider.GOOGLE_ACCOUNT) msg else it.keyStatusMessage,
+                        keyStatusSuccess = if (provider != AiProvider.GOOGLE_ACCOUNT) false else it.keyStatusSuccess,
                         modelSyncStatusMessage = msg,
                         modelSyncSuccess = false
                     )
@@ -673,25 +820,46 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     /**
-     * Sends a real lightweight `generateContent` request to EVERY model in the catalog (3 concurrent workers
-     * to stay friendly with rate limits), streaming per-model status + latency live into the UI.
-     * If no account models are synced yet and an API key is available, automatically syncs first.
+     * Sends a real lightweight request to models of the active provider (3 concurrent workers),
+     * streaming per-model status + latency live into the UI.
+     * For massive catalogs (e.g., OpenRouter with 200+ models), respects optional [subsetModelIds]
+     * from the UI filter/search, or caps to top 24 models to protect user credits/rate limits.
      */
-    fun probeAllModels(overrideApiKey: String? = null) {
+    fun probeAllModels(
+        overrideApiKey: String? = null,
+        overrideBaseUrl: String? = null,
+        subsetModelIds: List<String>? = null
+    ) {
         if (_uiState.value.isProbingAllModels) {
             cancelProbeAllModels()
             return
         }
         val state = _uiState.value
+        val provider = state.activeProvider
+        val profile = state.activeProfile
         val cleanedOverride = overrideApiKey?.let { AiResponseParser.sanitizeApiKey(it) }.orEmpty()
-        val candidateKey = cleanedOverride.ifEmpty { state.keyConfig.trimmedKey }
-        val useApiKey = candidateKey.isNotEmpty() && (!state.useGoogleGeminiActive || cleanedOverride.isNotEmpty())
+        val candidateKey = cleanedOverride.ifEmpty { profile.trimmedKey }
+        val candidateBaseUrl = if (provider.supportsCustomBaseUrl) {
+            AiProvider.normalizeBaseUrl(overrideBaseUrl ?: profile.baseUrl)
+        } else {
+            provider.defaultBaseUrl
+        }
 
-        if (!useApiKey && !state.isSignedInWithGoogle) {
+        if (provider == AiProvider.GOOGLE_ACCOUNT && !state.isSignedInWithGoogle) {
             _uiState.update {
-                it.copy(
-                    modelProbeSummary = "Hãy đăng nhập Google hoặc nhập API Key rồi bấm Test tất cả mô hình."
-                )
+                it.copy(modelProbeSummary = "Hãy đăng nhập Google hoặc chọn nhà cung cấp API Key rồi bấm Test tất cả.")
+            }
+            return
+        }
+        if (provider == AiProvider.CUSTOM_OPENAI && candidateBaseUrl.isEmpty()) {
+            _uiState.update {
+                it.copy(modelProbeSummary = "Hãy nhập Base URL trước khi test mô hình.")
+            }
+            return
+        }
+        if (provider.requiresApiKey && candidateKey.isEmpty()) {
+            _uiState.update {
+                it.copy(modelProbeSummary = "Hãy nhập API Key ${provider.shortTitle} rồi bấm Test tất cả.")
             }
             return
         }
@@ -699,45 +867,51 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         activeProbeAllJob?.cancel()
         activeProbeAllJob = viewModelScope.launch {
             try {
-                // Ensure the saved key is persisted & activated if the user typed a fresh key draft
-                if (useApiKey && cleanedOverride.isNotEmpty() && cleanedOverride != state.keyConfig.trimmedKey) {
-                    val updatedCfg = state.keyConfig.copy(
-                        apiKey = cleanedOverride,
-                        providerMode = AiProviderMode.PERSONAL_API_KEY
+                // Persist fresh draft key/URL if user edited before clicking Test
+                if (provider != AiProvider.GOOGLE_ACCOUNT &&
+                    (candidateKey != profile.trimmedKey || candidateBaseUrl != profile.effectiveBaseUrl)
+                ) {
+                    updateProfileInState(
+                        profile.copy(apiKey = candidateKey, baseUrl = candidateBaseUrl),
+                        persist = true
                     )
-                    keyPrefs.save(updatedCfg)
-                    _uiState.update { it.copy(keyConfig = updatedCfg) }
                 }
 
-                // If user hasn't synced their account catalog yet, auto-sync first so we test ALL their real models
-                if (useApiKey && _uiState.value.syncedModels.isEmpty()) {
+                // Auto-sync catalog first if not yet synced on API providers
+                if (provider != AiProvider.GOOGLE_ACCOUNT && _uiState.value.syncedModels.isEmpty()) {
                     _uiState.update {
                         it.copy(
                             isProbingAllModels = true,
                             probeProgressDone = 0,
                             probeProgressTotal = 0,
                             modelProbeResults = emptyMap(),
-                            modelProbeSummary = "Đang tải danh sách mô hình từ tài khoản trước khi test..."
+                            modelProbeSummary = "Đang tải danh sách mô hình từ ${provider.shortTitle} trước khi test..."
                         )
                     }
                     val existingCustom = _uiState.value.syncedModels.filter { it.source == "custom" }
                     val syncRes = runCatching {
                         withTimeout(25_000L) {
-                            GeminiApiClient.syncAccountModels(
-                                apiKey = candidateKey,
-                                preferredModelId = _uiState.value.keyConfig.effectiveModelId,
-                                extraModelIds = existingCustom.map { it.modelId }
-                            )
+                            when (provider) {
+                                AiProvider.GOOGLE_API_KEY -> GeminiApiClient.syncAccountModels(
+                                    apiKey = candidateKey,
+                                    preferredModelId = _uiState.value.activeProfile.effectiveModelId,
+                                    extraModelIds = existingCustom.map { it.modelId }
+                                )
+                                AiProvider.ANTHROPIC -> AnthropicApiClient.syncAccountModels(candidateKey)
+                                else -> OpenAiCompatApiClient.syncAccountModels(provider, candidateKey, candidateBaseUrl)
+                            }
                         }
                     }.getOrNull()
                     syncRes?.onSuccess { result ->
-                        val merged = AiResponseParser.sortSyncedModels(existingCustom + result.models)
+                        val merged = AiResponseParser.sortSyncedModels(existingCustom + result.models, provider)
                         val now = System.currentTimeMillis()
-                        keyPrefs.saveSyncedModels(merged, now)
+                        keyPrefs.saveSyncedModels(provider, merged, now)
+                        updateProfileInState(
+                            _uiState.value.activeProfile.copy(syncedModels = merged, syncedModelsUpdatedAt = now),
+                            persist = true
+                        )
                         _uiState.update {
                             it.copy(
-                                syncedModels = merged,
-                                syncedModelsUpdatedAt = now,
                                 modelSyncStatusMessage = result.message,
                                 modelSyncSuccess = true
                             )
@@ -745,7 +919,17 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     }
                 }
 
-                val targetModels = _uiState.value.displayModels
+                val catalog = _uiState.value.displayModels
+                val baseTargets = if (!subsetModelIds.isNullOrEmpty()) {
+                    val allowed = subsetModelIds.map { it.lowercase() }.toSet()
+                    catalog.filter { it.modelId.lowercase() in allowed }
+                } else {
+                    catalog
+                }
+                val maxProbeBatch = 24
+                val wasCapped = baseTargets.size > maxProbeBatch
+                val targetModels = if (wasCapped) baseTargets.take(maxProbeBatch) else baseTargets
+
                 if (targetModels.isEmpty()) {
                     _uiState.update {
                         it.copy(
@@ -756,13 +940,14 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     return@launch
                 }
 
+                val cappedNote = if (wasCapped) " (giới hạn top $maxProbeBatch/${baseTargets.size} để tiết kiệm credit; hãy lọc/tìm để test nhóm khác)" else ""
                 _uiState.update {
                     it.copy(
                         isProbingAllModels = true,
                         probeProgressDone = 0,
                         probeProgressTotal = targetModels.size,
                         modelProbeResults = emptyMap(),
-                        modelProbeSummary = "Đang gửi request kiểm tra ${targetModels.size} mô hình..."
+                        modelProbeSummary = "Đang gửi request kiểm tra ${targetModels.size} mô hình trên ${provider.shortTitle}...$cappedNote"
                     )
                 }
 
@@ -785,13 +970,22 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                                             )
                                     )
                                 }
-                                val probeRes = if (useApiKey) {
-                                    GeminiApiClient.probeModelGenerateContent(candidateKey, model.modelId)
-                                } else {
-                                    FirebaseAiClient.probeModelGenerateContent(model.modelId)
+                                val probeRes = when (provider) {
+                                    AiProvider.GOOGLE_ACCOUNT ->
+                                        FirebaseAiClient.probeModelGenerateContent(model.modelId)
+                                    AiProvider.GOOGLE_API_KEY ->
+                                        GeminiApiClient.probeModelGenerateContent(candidateKey, model.modelId)
+                                    AiProvider.ANTHROPIC ->
+                                        AnthropicApiClient.probeModel(candidateKey, model.modelId)
+                                    AiProvider.OPENAI,
+                                    AiProvider.OPENROUTER,
+                                    AiProvider.GROQ,
+                                    AiProvider.DEEPSEEK,
+                                    AiProvider.CUSTOM_OPENAI ->
+                                        OpenAiCompatApiClient.probeModel(provider, candidateKey, candidateBaseUrl, model.modelId)
                                 }
                                 probeRes.tokenUsage?.let { usage ->
-                                    recordServerTokenUsage(model.modelId, usage, updateContextFromTurn = false)
+                                    recordServerTokenUsage(provider, model.modelId, usage, updateContextFromTurn = false)
                                 }
                                 val done = completedCounter.incrementAndGet()
                                 _uiState.update { cur ->
@@ -800,7 +994,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                                     cur.copy(
                                         probeProgressDone = done,
                                         modelProbeResults = updatedMap,
-                                        modelProbeSummary = "Đang kiểm tra $done / $total mô hình · Hoạt động: $okCount"
+                                        modelProbeSummary = "Đang kiểm tra $done / $total mô hình (${provider.shortTitle}) · Hoạt động: $okCount"
                                     )
                                 }
                                 probeRes
@@ -813,47 +1007,47 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 val quotaCount = results.count { it.status == AiModelProbeStatus.QUOTA_LIMIT }
                 val failedCount = results.count { it.status == AiModelProbeStatus.FAILED }
 
-                // If currently selected model failed/quota-limited while working models exist, auto-switch to the best working model
-                val curCfg = _uiState.value.keyConfig
-                val currentWorking = workingList.any { it.modelId.equals(curCfg.effectiveModelId, ignoreCase = true) }
+                val curProfile = _uiState.value.activeProfile
+                val currentWorking = workingList.any { it.modelId.equals(curProfile.effectiveModelId, ignoreCase = true) }
                 var autoSwitchedText = ""
                 if (!currentWorking && workingList.isNotEmpty()) {
                     val workingIdSet = workingList.map { it.modelId.lowercase() }.toSet()
                     val workingModels = targetModels.filter { it.modelId.lowercase() in workingIdSet }
-                    val bestWorking = AiResponseParser.pickBestChatModel(workingModels)
+                    val bestWorking = AiResponseParser.pickBestChatModel(workingModels, provider)
                         ?: workingModels.minByOrNull { m ->
                             workingList.firstOrNull { it.modelId.equals(m.modelId, ignoreCase = true) }?.latencyMs
                                 ?: Long.MAX_VALUE
                         }
                     if (bestWorking != null) {
-                        val nextCfg = curCfg.copy(
-                            modelId = bestWorking.modelId,
-                            providerMode = if (useApiKey) AiProviderMode.PERSONAL_API_KEY else curCfg.providerMode
-                        )
-                        keyPrefs.save(nextCfg)
+                        updateProfileInState(curProfile.copy(modelId = bestWorking.modelId), persist = true)
                         val bestLatency = workingList.firstOrNull { it.modelId.equals(bestWorking.modelId, ignoreCase = true) }?.latencyMs ?: 0L
                         autoSwitchedText = " Đã tự chọn '${bestWorking.modelId}' (${bestLatency}ms)."
-                        _uiState.update { it.copy(keyConfig = nextCfg) }
                     }
                 }
 
                 val summary = buildString {
-                    append("Hoàn tất kiểm tra $total mô hình: ")
+                    append("Hoàn tất kiểm tra $total mô hình (${provider.shortTitle}): ")
                     append("${workingList.size} hoạt động")
-                    if (quotaCount > 0) append(" · $quotaCount hết lượt (429)")
+                    if (quotaCount > 0) append(" · $quotaCount hết quota/credit")
                     if (failedCount > 0) append(" · $failedCount lỗi")
                     append(".")
+                    if (wasCapped) append(" (Top $maxProbeBatch/${baseTargets.size})")
                     append(autoSwitchedText)
                 }
+                probeResultsByProvider[provider] = _uiState.value.modelProbeResults
+                probeSummaryByProvider[provider] = summary
                 _uiState.update { it.copy(modelProbeSummary = summary) }
             } catch (e: CancellationException) {
                 val curResults = _uiState.value.modelProbeResults
                     .filterValues { it.status != AiModelProbeStatus.TESTING }
                 val okCount = curResults.values.count { it.status == AiModelProbeStatus.WORKING }
+                val stoppedMsg = "Đã dừng kiểm tra (${curResults.size}/${_uiState.value.probeProgressTotal} mô hình · Hoạt động: $okCount)."
+                probeResultsByProvider[provider] = curResults
+                probeSummaryByProvider[provider] = stoppedMsg
                 _uiState.update {
                     it.copy(
                         modelProbeResults = curResults,
-                        modelProbeSummary = "Đã dừng kiểm tra (${curResults.size}/${it.probeProgressTotal} mô hình · Hoạt động: $okCount)."
+                        modelProbeSummary = stoppedMsg
                     )
                 }
             } catch (e: Throwable) {
@@ -877,27 +1071,27 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
         activeProbeAllJob = null
     }
 
-    /**
-     * Public 1-tap refresh that synchronizes exact model `inputTokenLimit` + live `countTokens`
-     * from Google's server (100% free; does not consume generation quota).
-     */
     fun refreshTokenSync() {
         syncContextTokens(forceFetchLimits = true)
     }
 
     private fun buildBaselineTokenState(
+        provider: AiProvider,
         modelId: String,
         models: List<AiSyncedModel>,
         ledgers: Map<String, AiModelTokenLedger>,
         prev: AiContextTokenState? = null
     ): AiContextTokenState {
-        val cleanId = modelId.trim().ifEmpty { AiModelPreset.GEMINI_3_8_FLASH.modelId }
+        val cleanId = modelId.trim().ifEmpty { provider.defaultModelId }
         val matched = models.firstOrNull { it.modelId.equals(cleanId, ignoreCase = true) }
         val ledger = ledgers[cleanId.lowercase()]
         val sameModelPrev = prev?.takeIf { it.modelId.equals(cleanId, ignoreCase = true) }
+        val inferredLimit = matched?.inputTokenLimit?.takeIf { it > 0 }
+            ?: sameModelPrev?.inputTokenLimit?.takeIf { it > 0 }
+            ?: AiResponseParser.inferKnownContextWindow(cleanId, provider)
         return AiContextTokenState(
             modelId = cleanId,
-            inputTokenLimit = matched?.inputTokenLimit?.takeIf { it > 0 } ?: sameModelPrev?.inputTokenLimit ?: 0,
+            inputTokenLimit = inferredLimit,
             outputTokenLimit = matched?.outputTokenLimit?.takeIf { it > 0 } ?: sameModelPrev?.outputTokenLimit ?: 0,
             currentContextTokens = sameModelPrev?.currentContextTokens ?: 0,
             lastTurnUsage = ledger?.takeIf { it.lastTotalTokens > 0 }?.let {
@@ -911,20 +1105,26 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             requestsToday = ledger?.requestsToday ?: 0,
             isSyncingTokens = sameModelPrev?.isSyncingTokens ?: false,
             isServerVerified = sameModelPrev?.isServerVerified ?: false,
+            verificationSource = sameModelPrev?.verificationSource.orEmpty(),
+            rateLimitRemainingTokens = sameModelPrev?.rateLimitRemainingTokens,
+            rateLimitTotalTokens = sameModelPrev?.rateLimitTotalTokens,
+            accountBalanceLabel = sameModelPrev?.accountBalanceLabel,
             lastSyncedAtMillis = sameModelPrev?.lastSyncedAtMillis ?: 0L,
             syncError = sameModelPrev?.syncError
         )
     }
 
     private fun recordServerTokenUsage(
+        provider: AiProvider,
         modelId: String,
         usage: AiTokenUsage?,
         updateContextFromTurn: Boolean
     ) {
         if (usage == null || !usage.hasData) return
-        val updatedLedgers = keyPrefs.recordTokenUsage(modelId, usage)
+        val updatedLedgers = keyPrefs.recordTokenUsage(provider, modelId, usage)
         _uiState.update { cur ->
-            val activeId = cur.keyConfig.effectiveModelId
+            if (cur.activeProvider != provider) return@update cur
+            val activeId = cur.activeProfile.effectiveModelId
             val isActiveModel = activeId.equals(modelId.trim().removePrefix("models/"), ignoreCase = true)
             val nextTokenState = if (isActiveModel) {
                 val ledger = updatedLedgers[activeId.lowercase()]
@@ -939,6 +1139,9 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     usedTokensToday = ledger?.usedTokensToday ?: cur.tokenState.usedTokensToday,
                     requestsToday = ledger?.requestsToday ?: cur.tokenState.requestsToday,
                     isServerVerified = true,
+                    verificationSource = cur.tokenState.verificationSource.ifBlank { "${provider.shortTitle} usage" },
+                    rateLimitRemainingTokens = usage.rateLimitRemainingTokens ?: cur.tokenState.rateLimitRemainingTokens,
+                    rateLimitTotalTokens = usage.rateLimitTotalTokens ?: cur.tokenState.rateLimitTotalTokens,
                     lastSyncedAtMillis = System.currentTimeMillis(),
                     syncError = null
                 )
@@ -955,20 +1158,26 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     private fun syncContextTokens(forceFetchLimits: Boolean = false) {
         val state = _uiState.value
         if (!state.isAiReady) return
-        val activeModelId = state.keyConfig.effectiveModelId
+        val provider = state.activeProvider
+        val profile = state.activeProfile
+        val activeModelId = profile.effectiveModelId
         val matchedModel = state.syncedModels.firstOrNull { it.modelId.equals(activeModelId, ignoreCase = true) }
         val knownInput = if (forceFetchLimits) 0 else (matchedModel?.inputTokenLimit ?: state.tokenState.inputTokenLimit)
         val knownOutput = if (forceFetchLimits) 0 else (matchedModel?.outputTokenLimit ?: state.tokenState.outputTokenLimit)
-        val useGoogleGemini = state.useGoogleGeminiActive
-        val apiKey = state.keyConfig.trimmedKey
+        val apiKey = profile.trimmedKey
+        val baseUrl = profile.effectiveBaseUrl
         val historySnapshot = state.messages
         val attachedPage = state.attachedPdfPage
+        val prevMeasured = if (state.messages.isEmpty()) 0 else state.tokenState.currentContextTokens
+        val prevRlRem = state.tokenState.rateLimitRemainingTokens
+        val prevRlTotal = state.tokenState.rateLimitTotalTokens
 
         activeTokenSyncJob?.cancel()
         activeTokenSyncJob = viewModelScope.launch {
             _uiState.update { cur ->
                 cur.copy(
                     tokenState = buildBaselineTokenState(
+                        provider,
                         activeModelId,
                         cur.syncedModels,
                         cur.tokenLedgers,
@@ -979,8 +1188,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             try {
                 val pageBmp = attachedPage?.let { renderPdfPageForAi(it) }
                 val res = withTimeout(18_000L) {
-                    if (useGoogleGemini) {
-                        FirebaseAiClient.countDocsContextTokens(
+                    when (provider) {
+                        AiProvider.GOOGLE_ACCOUNT -> FirebaseAiClient.countDocsContextTokens(
                             modelId = activeModelId,
                             history = historySnapshot,
                             knownInputLimit = knownInput,
@@ -988,8 +1197,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                             attachedPageBitmap = pageBmp,
                             attachedPageNumber = attachedPage
                         )
-                    } else {
-                        GeminiApiClient.syncExactContextTokens(
+                        AiProvider.GOOGLE_API_KEY -> GeminiApiClient.syncExactContextTokens(
                             apiKey = apiKey,
                             modelId = activeModelId,
                             history = historySnapshot,
@@ -998,10 +1206,35 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                             attachedPageBitmap = pageBmp,
                             attachedPageNumber = attachedPage
                         )
+                        AiProvider.ANTHROPIC -> AnthropicApiClient.syncExactContextTokens(
+                            apiKey = apiKey,
+                            modelId = activeModelId,
+                            history = historySnapshot,
+                            knownInputLimit = knownInput,
+                            knownOutputLimit = knownOutput,
+                            attachedPageBitmap = pageBmp,
+                            attachedPageNumber = attachedPage
+                        )
+                        AiProvider.OPENAI,
+                        AiProvider.OPENROUTER,
+                        AiProvider.GROQ,
+                        AiProvider.DEEPSEEK,
+                        AiProvider.CUSTOM_OPENAI -> OpenAiCompatApiClient.syncContextTokens(
+                            provider = provider,
+                            apiKey = apiKey,
+                            customBaseUrl = baseUrl,
+                            modelId = activeModelId,
+                            knownInputLimit = knownInput,
+                            knownOutputLimit = knownOutput,
+                            lastMeasuredContextTokens = prevMeasured,
+                            lastRateLimitRemaining = prevRlRem,
+                            lastRateLimitTotal = prevRlTotal
+                        )
                     }
                 }
                 res.onSuccess { exact ->
                     _uiState.update { cur ->
+                        if (cur.activeProvider != provider) return@update cur
                         val updatedSynced = if (exact.inputTokenLimit > 0) {
                             cur.syncedModels.map { m ->
                                 if (m.modelId.equals(exact.modelId, ignoreCase = true) && m.inputTokenLimit != exact.inputTokenLimit) {
@@ -1013,7 +1246,11 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                             }
                         } else cur.syncedModels
                         if (updatedSynced !== cur.syncedModels) {
-                            keyPrefs.saveSyncedModels(updatedSynced, cur.syncedModelsUpdatedAt.takeIf { it > 0L } ?: System.currentTimeMillis())
+                            keyPrefs.saveSyncedModels(
+                                provider,
+                                updatedSynced,
+                                cur.syncedModelsUpdatedAt.takeIf { it > 0L } ?: System.currentTimeMillis()
+                            )
                         }
                         val ledger = cur.tokenLedgers[activeModelId.lowercase()]
                         cur.copy(
@@ -1026,7 +1263,11 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                                 usedTokensToday = ledger?.usedTokensToday ?: cur.tokenState.usedTokensToday,
                                 requestsToday = ledger?.requestsToday ?: cur.tokenState.requestsToday,
                                 isSyncingTokens = false,
-                                isServerVerified = true,
+                                isServerVerified = exact.isServerVerified,
+                                verificationSource = exact.verificationSource,
+                                rateLimitRemainingTokens = exact.rateLimitRemainingTokens ?: cur.tokenState.rateLimitRemainingTokens,
+                                rateLimitTotalTokens = exact.rateLimitTotalTokens ?: cur.tokenState.rateLimitTotalTokens,
+                                accountBalanceLabel = exact.accountBalanceLabel ?: cur.tokenState.accountBalanceLabel,
                                 lastSyncedAtMillis = exact.syncedAtMillis,
                                 syncError = null
                             )
@@ -1034,6 +1275,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     }
                 }.onFailure { err ->
                     _uiState.update { cur ->
+                        if (cur.activeProvider != provider) return@update cur
                         cur.copy(
                             tokenState = cur.tokenState.copy(
                                 isSyncingTokens = false,
@@ -1046,6 +1288,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 throw e
             } catch (e: Throwable) {
                 _uiState.update { cur ->
+                    if (cur.activeProvider != provider) return@update cur
                     cur.copy(
                         tokenState = cur.tokenState.copy(
                             isSyncingTokens = false,
@@ -1058,78 +1301,119 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun clearApiKey() {
-        keyPrefs.clearKey()
+        val provider = _uiState.value.activeProvider
+        if (provider == AiProvider.GOOGLE_ACCOUNT) return
+        val cleared = keyPrefs.clearProviderKey(provider)
+        updateProfileInState(cleared, persist = false)
         _uiState.update {
             it.copy(
-                keyConfig = it.keyConfig.copy(apiKey = "", providerMode = AiProviderMode.GOOGLE_GEMINI),
-                keyStatusMessage = "Đã xóa API Key khỏi thiết bị.",
+                keyStatusMessage = "Đã xóa cấu hình Key của ${provider.shortTitle} khỏi thiết bị.",
                 keyStatusSuccess = false
             )
         }
     }
 
-    fun saveAndVerifyApiKey(rawKey: String, modelId: String) {
-        val trimmed = AiResponseParser.sanitizeApiKey(rawKey)
-        val current = _uiState.value.keyConfig
-        val existingCustomModels = _uiState.value.syncedModels.filter { it.source == "custom" }
-        val next = current.copy(
-            apiKey = trimmed,
-            modelId = modelId.trim(),
-            providerMode = if (trimmed.isNotEmpty()) AiProviderMode.PERSONAL_API_KEY else AiProviderMode.GOOGLE_GEMINI
+    fun saveAndVerifyApiKey(
+        rawKey: String,
+        modelId: String,
+        customBaseUrl: String = _uiState.value.activeProfile.baseUrl
+    ) {
+        val provider = _uiState.value.activeProvider.let {
+            if (it == AiProvider.GOOGLE_ACCOUNT) AiProvider.GOOGLE_API_KEY else it
+        }
+        if (provider != _uiState.value.activeProvider) {
+            selectProvider(provider)
+        }
+        val trimmedKey = AiResponseParser.sanitizeApiKey(rawKey)
+        val normalizedUrl = if (provider.supportsCustomBaseUrl) {
+            AiProvider.normalizeBaseUrl(customBaseUrl)
+        } else {
+            provider.defaultBaseUrl
+        }
+        val current = _uiState.value.providerProfiles[provider] ?: keyPrefs.loadProfile(provider)
+        val existingCustomModels = current.syncedModels.filter { it.source == "custom" }
+        val nextProfile = current.copy(
+            apiKey = trimmedKey,
+            baseUrl = normalizedUrl,
+            modelId = modelId.trim().ifEmpty { current.effectiveModelId }
         )
-        keyPrefs.save(next)
+        keyPrefs.saveActiveProvider(provider)
+        updateProfileInState(nextProfile, persist = true)
+
+        if (provider == AiProvider.CUSTOM_OPENAI && normalizedUrl.isEmpty()) {
+            _uiState.update {
+                it.copy(
+                    keyStatusMessage = "Vui lòng nhập Base URL hợp lệ (vd: https://api.together.xyz/v1).",
+                    keyStatusSuccess = false
+                )
+            }
+            return
+        }
+        if (provider.requiresApiKey && trimmedKey.isEmpty()) {
+            _uiState.update {
+                it.copy(
+                    keyStatusMessage = "Vui lòng nhập API Key ${provider.shortTitle}.",
+                    keyStatusSuccess = false
+                )
+            }
+            return
+        }
+
         _uiState.update {
             it.copy(
-                keyConfig = next,
                 isVerifyingKey = true,
                 isSyncingModels = true,
-                keyStatusMessage = "Đang kiểm tra API Key & đồng bộ danh sách mô hình...",
+                keyStatusMessage = "Đang kiểm tra Key & đồng bộ danh sách mô hình ${provider.shortTitle}...",
                 keyStatusSuccess = true,
-                modelSyncStatusMessage = "Đang đồng bộ danh sách mô hình từ API Key...",
+                modelSyncStatusMessage = "Đang đồng bộ danh sách mô hình từ ${provider.shortTitle}...",
                 modelSyncSuccess = true
             )
         }
         viewModelScope.launch {
             try {
                 val res = withTimeout(30_000L) {
-                    GeminiApiClient.verifyApiKey(
-                        apiKey = trimmed,
-                        preferredModelId = next.effectiveModelId
-                    )
+                    when (provider) {
+                        AiProvider.GOOGLE_API_KEY -> GeminiApiClient.verifyApiKey(
+                            apiKey = trimmedKey,
+                            preferredModelId = nextProfile.effectiveModelId
+                        )
+                        AiProvider.ANTHROPIC -> AnthropicApiClient.syncAccountModels(apiKey = trimmedKey)
+                        else -> OpenAiCompatApiClient.syncAccountModels(
+                            provider = provider,
+                            apiKey = trimmedKey,
+                            customBaseUrl = normalizedUrl
+                        )
+                    }
                 }
                 res.onSuccess { syncResult ->
-                    val merged = AiResponseParser.sortSyncedModels(existingCustomModels + syncResult.models)
+                    val merged = AiResponseParser.sortSyncedModels(existingCustomModels + syncResult.models, provider)
                     val now = System.currentTimeMillis()
-                    keyPrefs.saveSyncedModels(merged, now)
+                    keyPrefs.saveSyncedModels(provider, merged, now)
 
-                    val currentId = next.effectiveModelId
+                    val currentId = nextProfile.effectiveModelId
                     val isCurrentValid = syncResult.models.any { it.modelId.equals(currentId, ignoreCase = true) } ||
                         existingCustomModels.any { it.modelId.equals(currentId, ignoreCase = true) }
-                    val autoPicked = if (!isCurrentValid) AiResponseParser.pickBestChatModel(syncResult.models) else null
+                    val autoPicked = if (!isCurrentValid) AiResponseParser.pickBestChatModel(syncResult.models, provider) else null
                     val finalModelId = autoPicked?.modelId ?: currentId
-                    val verifiedConfig = next.copy(
+                    val verifiedProfile = nextProfile.copy(
                         modelId = finalModelId,
-                        providerMode = AiProviderMode.PERSONAL_API_KEY
+                        syncedModels = merged,
+                        syncedModelsUpdatedAt = now
                     )
-                    keyPrefs.save(verifiedConfig)
+                    updateProfileInState(verifiedProfile, persist = true)
 
                     val finalMessage = buildString {
                         append(syncResult.message)
                         if (autoPicked != null) {
-                            append(" Đã tự động chọn '${autoPicked.modelId}' và chuyển sang dùng API Key riêng.")
-                        } else {
-                            append(" Đã chuyển sang dùng API Key riêng.")
+                            append(" Đã tự động chọn '${autoPicked.modelId}'.")
                         }
                     }
 
                     _uiState.update { cur ->
                         cur.copy(
-                            keyConfig = verifiedConfig,
                             isVerifyingKey = false,
                             isSyncingModels = false,
-                            syncedModels = merged,
-                            syncedModelsUpdatedAt = now,
-                            tokenState = buildBaselineTokenState(finalModelId, merged, cur.tokenLedgers),
+                            tokenState = buildBaselineTokenState(provider, finalModelId, merged, cur.tokenLedgers),
                             keyStatusMessage = finalMessage,
                             keyStatusSuccess = true,
                             modelSyncStatusMessage = finalMessage,
@@ -1138,8 +1422,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                     }
                     syncContextTokens()
                 }.onFailure { err ->
-                    Log.e(TAG, "API key verification failed", err)
-                    val errText = err.localizedMessage ?: "Kiểm tra API Key thất bại."
+                    Log.e(TAG, "API key verification failed for $provider", err)
+                    val errText = err.localizedMessage ?: "Kiểm tra API Key ${provider.shortTitle} thất bại."
                     _uiState.update {
                         it.copy(
                             isVerifyingKey = false,
@@ -1257,8 +1541,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
 
-        val useGoogleGemini = snapshot.useGoogleGeminiActive
-        val cfg = snapshot.keyConfig
+        val provider = snapshot.activeProvider
+        val profile = snapshot.activeProfile
         val explicitPage = snapshot.attachedPdfPage ?: extractMentionedPage(question)
         val userMsg = AiChatMessage(
             id = "u_${msgSeq++}",
@@ -1267,7 +1551,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             attachedPdfPage = explicitPage
         )
         val historySnapshot = snapshot.messages
-        val providerName = if (useGoogleGemini) "Google Gemini" else "API Key riêng"
+        val providerName = provider.shortTitle
 
         _uiState.update {
             it.copy(
@@ -1277,7 +1561,7 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 docsStatusText = if (explicitPage != null) {
                     "Đang đọc ảnh Trang $explicitPage & kết nối $providerName..."
                 } else {
-                    "Đang kết nối $providerName (${cfg.effectiveModelId})..."
+                    "Đang kết nối $providerName (${profile.effectiveModelId})..."
                 },
                 docsElapsedSeconds = 0,
                 lastFailedDocsQuestion = null,
@@ -1298,26 +1582,26 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             try {
                 val pageBmp = explicitPage?.let { renderPdfPageForAi(it) }
                 val res = withTimeout(90_000L) {
-                    if (useGoogleGemini) {
-                        FirebaseAiClient.askDocumentAssistant(
-                            modelId = cfg.effectiveModelId,
+                    val partialCallback: (String) -> Unit = { partial ->
+                        _uiState.update {
+                            it.copy(
+                                streamingDocsAnswer = partial,
+                                docsStatusText = "$providerName đang trả lời..."
+                            )
+                        }
+                    }
+                    when (provider) {
+                        AiProvider.GOOGLE_ACCOUNT -> FirebaseAiClient.askDocumentAssistant(
+                            modelId = profile.effectiveModelId,
                             question = question,
                             history = historySnapshot,
                             attachedPageBitmap = pageBmp,
                             attachedPageNumber = explicitPage,
-                            onPartialAnswer = { partial ->
-                                _uiState.update {
-                                    it.copy(
-                                        streamingDocsAnswer = partial,
-                                        docsStatusText = "AI đang trả lời..."
-                                    )
-                                }
-                            }
+                            onPartialAnswer = partialCallback
                         )
-                    } else {
-                        GeminiApiClient.askDocumentAssistant(
-                            apiKey = cfg.trimmedKey,
-                            modelId = cfg.effectiveModelId,
+                        AiProvider.GOOGLE_API_KEY -> GeminiApiClient.askDocumentAssistant(
+                            apiKey = profile.trimmedKey,
+                            modelId = profile.effectiveModelId,
                             question = question,
                             history = historySnapshot,
                             attachedPageBitmap = pageBmp,
@@ -1328,6 +1612,30 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                                     it.copy(docsStatusText = "Đã chuyển sang ${bestModel.modelId}, đang trả lời...")
                                 }
                             }
+                        )
+                        AiProvider.ANTHROPIC -> AnthropicApiClient.askDocumentAssistant(
+                            apiKey = profile.trimmedKey,
+                            modelId = profile.effectiveModelId,
+                            question = question,
+                            history = historySnapshot,
+                            attachedPageBitmap = pageBmp,
+                            attachedPageNumber = explicitPage,
+                            onPartialAnswer = partialCallback
+                        )
+                        AiProvider.OPENAI,
+                        AiProvider.OPENROUTER,
+                        AiProvider.GROQ,
+                        AiProvider.DEEPSEEK,
+                        AiProvider.CUSTOM_OPENAI -> OpenAiCompatApiClient.askDocumentAssistant(
+                            provider = provider,
+                            apiKey = profile.trimmedKey,
+                            customBaseUrl = profile.effectiveBaseUrl,
+                            modelId = profile.effectiveModelId,
+                            question = question,
+                            history = historySnapshot,
+                            attachedPageBitmap = pageBmp,
+                            attachedPageNumber = explicitPage,
+                            onPartialAnswer = partialCallback
                         )
                     }
                 }
@@ -1344,8 +1652,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                             lastFailedDocsQuestion = null
                         )
                     }
-                    val resolvedModel = _uiState.value.keyConfig.effectiveModelId
-                    recordServerTokenUsage(resolvedModel, reply.tokenUsage, updateContextFromTurn = true)
+                    val resolvedModel = _uiState.value.activeProfile.effectiveModelId
+                    recordServerTokenUsage(provider, resolvedModel, reply.tokenUsage, updateContextFromTurn = true)
                     syncContextTokens()
                 }.onFailure { err ->
                     Log.e(TAG, "Document Q&A failed", err)
@@ -1495,9 +1803,9 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
 
-        val useGoogleGemini = state.useGoogleGeminiActive
-        val cfg = state.keyConfig
-        val providerName = if (useGoogleGemini) "Google Gemini" else "API Key riêng"
+        val provider = state.activeProvider
+        val profile = state.activeProfile
+        val providerName = provider.shortTitle
 
         _uiState.update {
             it.copy(
@@ -1506,9 +1814,9 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                 latestDrawingPlan = null,
                 problemElapsedSeconds = 0,
                 problemStatusText = if (state.problemBitmap != null) {
-                    "Đang gửi ảnh đề bài tới $providerName (${cfg.effectiveModelId})..."
+                    "Đang gửi ảnh đề bài tới $providerName (${profile.effectiveModelId})..."
                 } else {
-                    "Đang gửi đề bài tới $providerName (${cfg.effectiveModelId})..."
+                    "Đang gửi đề bài tới $providerName (${profile.effectiveModelId})..."
                 }
             )
         }
@@ -1525,21 +1833,21 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
             }
             try {
                 val res = withTimeout(90_000L) {
-                    if (useGoogleGemini) {
-                        FirebaseAiClient.analyzeProblemToDrawing(
-                            modelId = cfg.effectiveModelId,
+                    val progressCallback: (Int) -> Unit = { chars ->
+                        _uiState.update {
+                            it.copy(problemStatusText = "$providerName đang dựng cấu trúc hình... ($chars ký tự)")
+                        }
+                    }
+                    when (provider) {
+                        AiProvider.GOOGLE_ACCOUNT -> FirebaseAiClient.analyzeProblemToDrawing(
+                            modelId = profile.effectiveModelId,
                             problemBitmap = state.problemBitmap,
                             problemNote = state.problemNote,
-                            onProgressChars = { chars ->
-                                _uiState.update {
-                                    it.copy(problemStatusText = "AI đang dựng cấu trúc hình... ($chars ký tự)")
-                                }
-                            }
+                            onProgressChars = progressCallback
                         )
-                    } else {
-                        GeminiApiClient.analyzeProblemToDrawing(
-                            apiKey = cfg.trimmedKey,
-                            modelId = cfg.effectiveModelId,
+                        AiProvider.GOOGLE_API_KEY -> GeminiApiClient.analyzeProblemToDrawing(
+                            apiKey = profile.trimmedKey,
+                            modelId = profile.effectiveModelId,
                             problemBitmap = state.problemBitmap,
                             problemNote = state.problemNote,
                             onAutoResolvedModel = { bestModel, synced ->
@@ -1548,6 +1856,26 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                                     it.copy(problemStatusText = "Đã chuyển sang ${bestModel.modelId}, đang dựng hình...")
                                 }
                             }
+                        )
+                        AiProvider.ANTHROPIC -> AnthropicApiClient.analyzeProblemToDrawing(
+                            apiKey = profile.trimmedKey,
+                            modelId = profile.effectiveModelId,
+                            problemBitmap = state.problemBitmap,
+                            problemNote = state.problemNote,
+                            onProgressChars = progressCallback
+                        )
+                        AiProvider.OPENAI,
+                        AiProvider.OPENROUTER,
+                        AiProvider.GROQ,
+                        AiProvider.DEEPSEEK,
+                        AiProvider.CUSTOM_OPENAI -> OpenAiCompatApiClient.analyzeProblemToDrawing(
+                            provider = provider,
+                            apiKey = profile.trimmedKey,
+                            customBaseUrl = profile.effectiveBaseUrl,
+                            modelId = profile.effectiveModelId,
+                            problemBitmap = state.problemBitmap,
+                            problemNote = state.problemNote,
+                            onProgressChars = progressCallback
                         )
                     }
                 }
@@ -1558,8 +1886,8 @@ class AiAssistantViewModel(application: Application) : AndroidViewModel(applicat
                             problemError = null
                         )
                     }
-                    val resolvedModel = _uiState.value.keyConfig.effectiveModelId
-                    recordServerTokenUsage(resolvedModel, plan.tokenUsage, updateContextFromTurn = false)
+                    val resolvedModel = _uiState.value.activeProfile.effectiveModelId
+                    recordServerTokenUsage(provider, resolvedModel, plan.tokenUsage, updateContextFromTurn = false)
                 }.onFailure { err ->
                     Log.e(TAG, "Problem drawing analysis failed", err)
                     _uiState.update {
