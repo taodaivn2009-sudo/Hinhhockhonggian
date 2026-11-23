@@ -350,7 +350,7 @@ object GeminiApiClient {
 
         val startMs = System.currentTimeMillis()
         try {
-            executeGenerateContent(
+            val raw = executeGenerateContent(
                 apiKey = cleanKey,
                 modelId = safeModel,
                 payload = payload,
@@ -358,12 +358,14 @@ object GeminiApiClient {
                 readTimeoutMs = 14_000
             )
             val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+            val tokNote = raw.usage?.let { " · ${it.totalTokens} tok" }.orEmpty()
             AiModelProbeResult(
                 modelId = safeModel,
                 status = AiModelProbeStatus.WORKING,
                 latencyMs = elapsed,
                 httpCode = 200,
-                detail = "Phản hồi thành công (${elapsed}ms)"
+                detail = "Phản hồi thành công (${elapsed}ms$tokNote)",
+                tokenUsage = raw.usage
             )
         } catch (e: HttpStatusException) {
             val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
@@ -450,15 +452,190 @@ object GeminiApiClient {
                 })
             }
 
-            val rawResponseText = executeWithModelAutoRecovery(
+            val rawResult = executeWithModelAutoRecovery(
                 apiKey = cleanKey,
                 modelId = modelId,
                 payload = payload,
                 systemText = systemText,
                 onAutoResolvedModel = onAutoResolvedModel
             )
-            AiResponseParser.parseDocsReply(rawResponseText)
+            AiResponseParser.parseDocsReply(rawResult.text).copy(tokenUsage = rawResult.usage)
         }
+    }
+
+    /**
+     * Synchronizes EXACT context token limits and current conversation token count directly from Google's server:
+     * 1. Reads exact `inputTokenLimit` & `outputTokenLimit` via `GET /models/{model}` (or reuses known values if > 0).
+     * 2. Calls Google's 100% FREE `POST /models/{model}:countTokens` (does not consume RPM/TPM/RPD quota)
+     *    on the exact docs system prompt + sanitized chat history + optional attached PDF page bitmap.
+     */
+    suspend fun syncExactContextTokens(
+        apiKey: String,
+        modelId: String,
+        history: List<AiChatMessage>,
+        knownInputLimit: Int = 0,
+        knownOutputLimit: Int = 0,
+        attachedPageBitmap: Bitmap? = null,
+        attachedPageNumber: Int? = null
+    ): Result<AiExactContextTokenSync> = withContext(Dispatchers.IO) {
+        val cleanKey = AiResponseParser.sanitizeApiKey(apiKey)
+        val safeModel = modelId.trim()
+            .removePrefix("publishers/google/models/")
+            .removePrefix("models/")
+            .ifEmpty { AiModelPreset.GEMINI_3_8_FLASH.modelId }
+        if (cleanKey.isEmpty()) {
+            return@withContext Result.failure(IllegalStateException("Chưa có API Key để đồng bộ token."))
+        }
+
+        runCatching {
+            var inputLimit = knownInputLimit
+            var outputLimit = knownOutputLimit
+            if (inputLimit <= 0) {
+                val meta = fetchSingleModelLimits(cleanKey, safeModel)
+                if (meta != null) {
+                    inputLimit = meta.first
+                    outputLimit = meta.second
+                }
+            }
+
+            val systemText = buildDocsSystemPrompt()
+            val contents = JSONArray()
+            AiResponseParser.sanitizeChatHistory(history, maxTurns = 6).forEach { msg ->
+                contents.put(
+                    JSONObject().apply {
+                        put("role", if (msg.isUser) "user" else "model")
+                        put("parts", JSONArray().put(JSONObject().put("text", msg.text)))
+                    }
+                )
+            }
+            if (attachedPageBitmap != null) {
+                val pParts = JSONArray().apply {
+                    put(bitmapToInlineDataPart(attachedPageBitmap, maxDim = 1024))
+                    put(JSONObject().put("text", "Trang ${attachedPageNumber ?: 1} PDF đính kèm"))
+                }
+                contents.put(JSONObject().apply {
+                    put("role", "user")
+                    put("parts", pParts)
+                })
+            } else if (contents.length() == 0) {
+                // countTokens requires non-empty contents; include minimal empty user turn alongside systemInstruction
+                contents.put(
+                    JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().put(JSONObject().put("text", " ")))
+                    }
+                )
+            }
+
+            val countPayload = JSONObject().apply {
+                put(
+                    "generateContentRequest",
+                    JSONObject().apply {
+                        put("model", "models/$safeModel")
+                        put(
+                            "systemInstruction",
+                            JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemText)))
+                        )
+                        put("contents", contents)
+                    }
+                )
+            }
+            val fallbackPayload = JSONObject().apply {
+                put("contents", contents)
+            }
+
+            val counted = executeCountTokens(cleanKey, safeModel, countPayload, fallbackPayload)
+            AiExactContextTokenSync(
+                modelId = safeModel,
+                inputTokenLimit = inputLimit,
+                outputTokenLimit = outputLimit,
+                currentContextTokens = counted
+            )
+        }
+    }
+
+    private fun fetchSingleModelLimits(apiKey: String, safeModel: String): Pair<Int, Int>? {
+        val endpoints = listOf(
+            "$BASE_URL/models/$safeModel",
+            "$BASE_V1_URL/models/$safeModel"
+        )
+        for (ep in endpoints) {
+            val conn = (URL(ep).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 8_000
+                readTimeout = 10_000
+                setRequestProperty("x-goog-api-key", apiKey)
+                setRequestProperty("Accept", "application/json")
+            }
+            try {
+                val code = conn.responseCode
+                val body = readStream(if (code in 200..299) conn.inputStream else conn.errorStream)
+                if (code in 200..299) {
+                    val obj = JSONObject(body)
+                    val inLim = obj.optInt("inputTokenLimit", 0)
+                    val outLim = obj.optInt("outputTokenLimit", 0)
+                    if (inLim > 0) return inLim to outLim
+                }
+            } catch (_: Throwable) {
+                // try next endpoint
+            } finally {
+                conn.disconnect()
+            }
+        }
+        return null
+    }
+
+    private fun executeCountTokens(
+        apiKey: String,
+        safeModel: String,
+        fullPayload: JSONObject,
+        simplePayload: JSONObject
+    ): Int {
+        val devEndpoints = listOf(
+            "$BASE_URL/models/$safeModel:countTokens" to fullPayload,
+            "$BASE_URL/models/$safeModel:countTokens" to simplePayload,
+            "$BASE_V1_URL/models/$safeModel:countTokens" to simplePayload
+        )
+        val vertexEndpoints = listOf(
+            "$VERTEX_V1_BASE/models/$safeModel:countTokens" to simplePayload,
+            "$VERTEX_V1BETA1_BASE/models/$safeModel:countTokens" to simplePayload
+        )
+        val endpoints = if (preferredBackendByKey[apiKey] == ApiBackend.VERTEX_EXPRESS && isVertexExpressKey(apiKey)) {
+            vertexEndpoints + devEndpoints
+        } else if (isVertexExpressKey(apiKey)) {
+            devEndpoints + vertexEndpoints
+        } else {
+            devEndpoints
+        }
+
+        var lastErr = "Không thể đồng bộ countTokens"
+        for ((ep, payload) in endpoints) {
+            val bytes = payload.toString().toByteArray(Charsets.UTF_8)
+            val conn = (URL(ep).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 8_000
+                readTimeout = 10_000
+                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                setRequestProperty("x-goog-api-key", apiKey)
+            }
+            try {
+                conn.outputStream.use { it.write(bytes); it.flush() }
+                val code = conn.responseCode
+                val body = readStream(if (code in 200..299) conn.inputStream else conn.errorStream)
+                if (code in 200..299) {
+                    val total = JSONObject(body).optInt("totalTokens", -1)
+                    if (total >= 0) return total
+                } else {
+                    lastErr = formatHttpError(code, body)
+                }
+            } catch (e: Throwable) {
+                lastErr = e.localizedMessage ?: lastErr
+            } finally {
+                conn.disconnect()
+            }
+        }
+        throw IllegalStateException(lastErr)
     }
 
     suspend fun analyzeProblemToDrawing(
@@ -515,19 +692,25 @@ object GeminiApiClient {
                 })
             }
 
-            val rawResponseText = executeWithModelAutoRecovery(
+            val rawResult = executeWithModelAutoRecovery(
                 apiKey = cleanKey,
                 modelId = modelId,
                 payload = payload,
                 systemText = systemText,
                 onAutoResolvedModel = onAutoResolvedModel
             )
-            AiResponseParser.parseDrawingPlan(rawResponseText)
+            val plan = AiResponseParser.parseDrawingPlan(rawResult.text)
                 ?: throw IllegalStateException("AI không trả về dữ liệu dựng hình hợp lệ. Hãy thử chụp ảnh rõ nét hơn hoặc mô tả thêm đề bài.")
+            plan.copy(tokenUsage = rawResult.usage)
         }
     }
 
     private class HttpStatusException(val statusCode: Int, message: String) : IllegalStateException(message)
+
+    private data class GenerateContentRawResult(
+        val text: String,
+        val usage: AiTokenUsage?
+    )
 
     /**
      * Executes generateContent with automatic recovery:
@@ -542,7 +725,7 @@ object GeminiApiClient {
         payload: JSONObject,
         systemText: String,
         onAutoResolvedModel: (AiSyncedModel, List<AiSyncedModel>) -> Unit
-    ): String {
+    ): GenerateContentRawResult {
         return try {
             executeGenerateContentWithCompat(apiKey, modelId, payload, systemText)
         } catch (e: HttpStatusException) {
@@ -563,7 +746,7 @@ object GeminiApiClient {
         modelId: String,
         payload: JSONObject,
         systemText: String
-    ): String {
+    ): GenerateContentRawResult {
         return try {
             executeGenerateContent(apiKey, modelId, payload)
         } catch (e: HttpStatusException) {
@@ -607,7 +790,7 @@ object GeminiApiClient {
         payload: JSONObject,
         connectTimeoutMs: Int = CONNECT_TIMEOUT_MS,
         readTimeoutMs: Int = READ_TIMEOUT_MS
-    ): String {
+    ): GenerateContentRawResult {
         val safeModel = modelId.trim()
             .removePrefix("publishers/google/models/")
             .removePrefix("models/")
@@ -633,9 +816,9 @@ object GeminiApiClient {
             } catch (vertexErr: HttpStatusException) {
                 if (vertexErr.statusCode == 401 || vertexErr.statusCode == 403) {
                     try {
-                        val text = postGenerateContentGroup(geminiDevEndpoints, apiKey, payloadBytes, connectTimeoutMs, readTimeoutMs)
+                        val res = postGenerateContentGroup(geminiDevEndpoints, apiKey, payloadBytes, connectTimeoutMs, readTimeoutMs)
                         preferredBackendByKey[apiKey] = ApiBackend.GEMINI_DEV
-                        text
+                        res
                     } catch (devErr: HttpStatusException) {
                         if (devErr.statusCode == 404) {
                             preferredBackendByKey[apiKey] = ApiBackend.GEMINI_DEV
@@ -652,9 +835,9 @@ object GeminiApiClient {
         // Default for ALL keys (both legacy `AIza...` and modern Google AI Studio `AQ.` keys):
         // Try Gemini Developer API (`generativelanguage.googleapis.com`) FIRST!
         return try {
-            val text = postGenerateContentGroup(geminiDevEndpoints, apiKey, payloadBytes, connectTimeoutMs, readTimeoutMs)
+            val res = postGenerateContentGroup(geminiDevEndpoints, apiKey, payloadBytes, connectTimeoutMs, readTimeoutMs)
             preferredBackendByKey[apiKey] = ApiBackend.GEMINI_DEV
-            text
+            res
         } catch (devErr: HttpStatusException) {
             if (devErr.statusCode == 404) {
                 // Key is valid on Gemini Developer API; only the modelId doesn't exist -> let auto-recovery sync & swap model!
@@ -667,9 +850,9 @@ object GeminiApiClient {
             ) {
                 // Only fall back to Vertex AI Express if Gemini Developer API rejected auth/service on an `AQ.` key
                 try {
-                    val text = postGenerateContentGroup(vertexEndpoints, apiKey, payloadBytes, connectTimeoutMs, readTimeoutMs)
+                    val res = postGenerateContentGroup(vertexEndpoints, apiKey, payloadBytes, connectTimeoutMs, readTimeoutMs)
                     preferredBackendByKey[apiKey] = ApiBackend.VERTEX_EXPRESS
-                    text
+                    res
                 } catch (vertexErr: HttpStatusException) {
                     if (vertexErr.statusCode == 404) {
                         preferredBackendByKey[apiKey] = ApiBackend.VERTEX_EXPRESS
@@ -690,7 +873,7 @@ object GeminiApiClient {
         payloadBytes: ByteArray,
         connectTimeoutMs: Int = CONNECT_TIMEOUT_MS,
         readTimeoutMs: Int = READ_TIMEOUT_MS
-    ): String {
+    ): GenerateContentRawResult {
         var lastError: HttpStatusException? = null
         for ((idx, endpoint) in endpoints.withIndex()) {
             val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
@@ -717,6 +900,7 @@ object GeminiApiClient {
                     throw err
                 }
                 val root = JSONObject(body)
+                val usage = AiResponseParser.parseUsageMetadata(root)
                 val candidates = root.optJSONArray("candidates")
                 val first = candidates?.optJSONObject(0)
                 val parts = first?.optJSONObject("content")?.optJSONArray("parts")
@@ -731,7 +915,7 @@ object GeminiApiClient {
                 if (result.isEmpty()) {
                     throw IllegalStateException("AI trả về nội dung trống. Vui lòng thử lại.")
                 }
-                return result
+                return GenerateContentRawResult(text = result, usage = usage)
             } catch (e: UnknownHostException) {
                 throw IllegalStateException("Không có kết nối Internet hoặc không truy cập được máy chủ Google AI. Hãy kiểm tra Wi-Fi/4G.")
             } catch (e: SocketTimeoutException) {

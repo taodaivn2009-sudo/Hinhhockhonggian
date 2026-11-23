@@ -6,6 +6,9 @@ import com.example.engine.*
 import com.example.geo2d.*
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -71,12 +74,65 @@ enum class AiModelProbeStatus {
     FAILED
 }
 
+data class AiTokenUsage(
+    val promptTokens: Int = 0,
+    val outputTokens: Int = 0,
+    val thoughtsTokens: Int = 0,
+    val totalTokens: Int = 0
+) {
+    val hasData: Boolean get() = totalTokens > 0 || promptTokens > 0 || outputTokens > 0
+}
+
+data class AiModelTokenLedger(
+    val modelId: String,
+    val dayKey: String,
+    val usedTokensToday: Long = 0L,
+    val promptTokensToday: Long = 0L,
+    val outputTokensToday: Long = 0L,
+    val requestsToday: Int = 0,
+    val lastPromptTokens: Int = 0,
+    val lastOutputTokens: Int = 0,
+    val lastTotalTokens: Int = 0,
+    val lastUpdatedAtMillis: Long = 0L
+)
+
+data class AiExactContextTokenSync(
+    val modelId: String,
+    val inputTokenLimit: Int,
+    val outputTokenLimit: Int,
+    val currentContextTokens: Int,
+    val syncedAtMillis: Long = System.currentTimeMillis()
+)
+
+data class AiContextTokenState(
+    val modelId: String = "",
+    val inputTokenLimit: Int = 0,
+    val outputTokenLimit: Int = 0,
+    val currentContextTokens: Int = 0,
+    val lastTurnUsage: AiTokenUsage? = null,
+    val usedTokensToday: Long = 0L,
+    val requestsToday: Int = 0,
+    val isSyncingTokens: Boolean = false,
+    val isServerVerified: Boolean = false,
+    val lastSyncedAtMillis: Long = 0L,
+    val syncError: String? = null
+) {
+    val hasContextLimit: Boolean get() = inputTokenLimit > 0
+    val remainingContextTokens: Int
+        get() = if (inputTokenLimit > 0) (inputTokenLimit - currentContextTokens).coerceAtLeast(0) else 0
+    val remainingContextFraction: Float
+        get() = if (inputTokenLimit > 0) {
+            (remainingContextTokens.toFloat() / inputTokenLimit.toFloat()).coerceIn(0f, 1f)
+        } else 0f
+}
+
 data class AiModelProbeResult(
     val modelId: String,
     val status: AiModelProbeStatus,
     val latencyMs: Long = 0L,
     val httpCode: Int = 0,
-    val detail: String = ""
+    val detail: String = "",
+    val tokenUsage: AiTokenUsage? = null
 ) {
     val shortBadgeLabel: String
         get() = when (status) {
@@ -224,12 +280,94 @@ class AiKeyPreferences(context: Context) {
         return updated
     }
 
+    fun loadTokenLedgers(today: String = currentDayKey()): Map<String, AiModelTokenLedger> {
+        val raw = prefs.getString(KEY_TOKEN_LEDGERS, null).orEmpty()
+        if (raw.isBlank()) return emptyMap()
+        return runCatching {
+            val arr = JSONArray(raw)
+            val map = LinkedHashMap<String, AiModelTokenLedger>()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.optString("modelId").trim()
+                val day = o.optString("dayKey").trim()
+                if (id.isEmpty() || day != today) continue
+                map[id.lowercase()] = AiModelTokenLedger(
+                    modelId = id,
+                    dayKey = day,
+                    usedTokensToday = o.optLong("usedTokensToday", 0L),
+                    promptTokensToday = o.optLong("promptTokensToday", 0L),
+                    outputTokensToday = o.optLong("outputTokensToday", 0L),
+                    requestsToday = o.optInt("requestsToday", 0),
+                    lastPromptTokens = o.optInt("lastPromptTokens", 0),
+                    lastOutputTokens = o.optInt("lastOutputTokens", 0),
+                    lastTotalTokens = o.optInt("lastTotalTokens", 0),
+                    lastUpdatedAtMillis = o.optLong("lastUpdatedAtMillis", 0L)
+                )
+            }
+            map
+        }.getOrDefault(emptyMap())
+    }
+
+    fun recordTokenUsage(
+        modelId: String,
+        usage: AiTokenUsage,
+        today: String = currentDayKey(),
+        nowMillis: Long = System.currentTimeMillis()
+    ): Map<String, AiModelTokenLedger> {
+        val cleanId = modelId.trim().removePrefix("publishers/google/models/").removePrefix("models/")
+        if (cleanId.isEmpty() || !usage.hasData) return loadTokenLedgers(today)
+        val currentMap = loadTokenLedgers(today).toMutableMap()
+        val key = cleanId.lowercase()
+        val prev = currentMap[key]
+        val turnTotal = usage.totalTokens.takeIf { it > 0 } ?: (usage.promptTokens + usage.outputTokens + usage.thoughtsTokens)
+        val updated = AiModelTokenLedger(
+            modelId = cleanId,
+            dayKey = today,
+            usedTokensToday = (prev?.usedTokensToday ?: 0L) + turnTotal.toLong(),
+            promptTokensToday = (prev?.promptTokensToday ?: 0L) + usage.promptTokens.toLong(),
+            outputTokensToday = (prev?.outputTokensToday ?: 0L) + usage.outputTokens.toLong(),
+            requestsToday = (prev?.requestsToday ?: 0) + 1,
+            lastPromptTokens = usage.promptTokens,
+            lastOutputTokens = usage.outputTokens,
+            lastTotalTokens = turnTotal,
+            lastUpdatedAtMillis = nowMillis
+        )
+        currentMap[key] = updated
+        saveTokenLedgers(currentMap)
+        return currentMap
+    }
+
+    private fun saveTokenLedgers(map: Map<String, AiModelTokenLedger>) {
+        val arr = JSONArray()
+        map.values.forEach { entry ->
+            arr.put(
+                JSONObject().apply {
+                    put("modelId", entry.modelId)
+                    put("dayKey", entry.dayKey)
+                    put("usedTokensToday", entry.usedTokensToday)
+                    put("promptTokensToday", entry.promptTokensToday)
+                    put("outputTokensToday", entry.outputTokensToday)
+                    put("requestsToday", entry.requestsToday)
+                    put("lastPromptTokens", entry.lastPromptTokens)
+                    put("lastOutputTokens", entry.lastOutputTokens)
+                    put("lastTotalTokens", entry.lastTotalTokens)
+                    put("lastUpdatedAtMillis", entry.lastUpdatedAtMillis)
+                }
+            )
+        }
+        prefs.edit().putString(KEY_TOKEN_LEDGERS, arr.toString()).apply()
+    }
+
     companion object {
         private const val KEY_API_KEY = "gemini_user_api_key"
         private const val KEY_MODEL_ID = "gemini_model_id"
         private const val KEY_PROVIDER_MODE = "gemini_provider_mode"
         private const val KEY_SYNCED_MODELS = "gemini_synced_models_v1"
         private const val KEY_SYNCED_MODELS_AT = "gemini_synced_models_updated_at"
+        private const val KEY_TOKEN_LEDGERS = "gemini_token_ledgers_v1"
+
+        fun currentDayKey(nowMillis: Long = System.currentTimeMillis()): String =
+            SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(nowMillis))
     }
 }
 
@@ -241,7 +379,8 @@ data class AiPdfPageSuggestion(
 
 data class AiDocsReply(
     val answer: String,
-    val suggestedPages: List<AiPdfPageSuggestion> = emptyList()
+    val suggestedPages: List<AiPdfPageSuggestion> = emptyList(),
+    val tokenUsage: AiTokenUsage? = null
 )
 
 data class AiChatMessage(
@@ -335,7 +474,8 @@ data class AiDrawingPlan(
     val solutionHint: String,
     val scene3D: Ai3DSceneSpec? = null,
     val scene2D: Ai2DSceneSpec? = null,
-    val relatedPages: List<AiPdfPageSuggestion> = emptyList()
+    val relatedPages: List<AiPdfPageSuggestion> = emptyList(),
+    val tokenUsage: AiTokenUsage? = null
 )
 
 /**
@@ -361,6 +501,42 @@ object AiResponseParser {
             runCatching { return JSONObject(unwrapped.substring(start, end + 1)) }
         }
         return null
+    }
+
+    fun parseUsageMetadata(root: JSONObject?): AiTokenUsage? {
+        val u = root?.optJSONObject("usageMetadata") ?: return null
+        val prompt = u.optInt("promptTokenCount", 0).coerceAtLeast(0)
+        val output = u.optInt("candidatesTokenCount", 0).coerceAtLeast(0)
+        val thoughts = u.optInt("thoughtsTokenCount", 0).coerceAtLeast(0)
+        val total = u.optInt("totalTokenCount", prompt + output + thoughts).coerceAtLeast(0)
+        return if (total > 0 || prompt > 0 || output > 0) {
+            AiTokenUsage(
+                promptTokens = prompt,
+                outputTokens = output,
+                thoughtsTokens = thoughts,
+                totalTokens = if (total > 0) total else (prompt + output + thoughts)
+            )
+        } else null
+    }
+
+    fun formatExactTokens(value: Long): String {
+        val negative = value < 0L
+        val digits = kotlin.math.abs(value).toString()
+        val sb = StringBuilder()
+        for (i in digits.indices) {
+            if (i > 0 && (digits.length - i) % 3 == 0) sb.append('.')
+            sb.append(digits[i])
+        }
+        return if (negative) "-$sb" else sb.toString()
+    }
+
+    fun formatCompactTokens(value: Long): String {
+        val absVal = kotlin.math.abs(value)
+        return when {
+            absVal >= 1_000_000L -> String.format(Locale.US, "%.2fM", value / 1_000_000.0)
+            absVal >= 10_000L -> String.format(Locale.US, "%.1fK", value / 1_000.0)
+            else -> formatExactTokens(value)
+        }
     }
 
     fun formatModelDisplayName(modelId: String): String {

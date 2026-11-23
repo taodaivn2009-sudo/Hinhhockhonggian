@@ -60,6 +60,9 @@ fun AiModelPickerSection(
     modelProbeResults: Map<String, AiModelProbeResult> = emptyMap(),
     modelProbeSummary: String? = null,
     onProbeAllModels: () -> Unit = {},
+    tokenState: AiContextTokenState = AiContextTokenState(),
+    tokenLedgers: Map<String, AiModelTokenLedger> = emptyMap(),
+    onRefreshTokens: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -163,6 +166,12 @@ fun AiModelPickerSection(
                 overflow = TextOverflow.Ellipsis
             )
         }
+
+        // Exact Server-Synced Token Telemetry Card
+        AiTokenStatusCard(
+            tokenState = tokenState,
+            onRefreshTokens = onRefreshTokens
+        )
 
         // Dual Action Bar: "Đồng bộ mô hình" + "Test tất cả mô hình"
         Row(
@@ -482,10 +491,12 @@ fun AiModelPickerSection(
                 visibleModels.forEach { model ->
                     val active = selectedModelId.equals(model.modelId, ignoreCase = true)
                     val probe = modelProbeResults[model.modelId.lowercase()]
+                    val ledger = tokenLedgers[model.modelId.lowercase()]
                     ModelOptionCard(
                         model = model,
                         active = active,
                         probe = probe,
+                        ledger = ledger,
                         onSelect = { onSelectModel(model.modelId) },
                         onRemoveCustom = { onRemoveCustomModel(model.modelId) }
                     )
@@ -636,6 +647,7 @@ private fun ModelOptionCard(
     model: AiSyncedModel,
     active: Boolean,
     probe: AiModelProbeResult?,
+    ledger: AiModelTokenLedger? = null,
     onSelect: () -> Unit,
     onRemoveCustom: () -> Unit
 ) {
@@ -691,7 +703,7 @@ private fun ModelOptionCard(
                 )
                 val badgeText = when {
                     model.source == "custom" -> "Tùy chỉnh"
-                    model.formattedContextWindow.isNotEmpty() -> model.formattedContextWindow
+                    model.formattedContextWindow.isNotEmpty() -> "Ctx ${model.formattedContextWindow.removeSuffix(" token")}"
                     model.source == "api" -> "AI Studio"
                     model.source == "vertex" -> "Vertex"
                     else -> ""
@@ -718,6 +730,23 @@ private fun ModelOptionCard(
                             color = if (model.source == "custom") IndigoBright else SlateTextSecondary,
                             fontSize = 9.sp,
                             fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+                if (ledger != null && ledger.usedTokensToday > 0L) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(CyanAccent.copy(alpha = 0.12f))
+                            .border(1.dp, CyanAccent.copy(alpha = 0.35f), RoundedCornerShape(5.dp))
+                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "Dùng ${AiResponseParser.formatCompactTokens(ledger.usedTokensToday)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CyanAccent,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }

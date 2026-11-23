@@ -279,13 +279,22 @@ object FirebaseAiClient {
             }
             val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
             val text = reply.text.orEmpty().trim()
+            val usage = reply.usageMetadata?.let { u ->
+                AiTokenUsage(
+                    promptTokens = u.promptTokenCount,
+                    outputTokens = u.candidatesTokenCount ?: 0,
+                    totalTokens = u.totalTokenCount
+                ).takeIf { it.hasData }
+            }
             if (text.isNotEmpty()) {
+                val tokNote = usage?.let { " · ${it.totalTokens} tok" }.orEmpty()
                 AiModelProbeResult(
                     modelId = safeModel,
                     status = AiModelProbeStatus.WORKING,
                     latencyMs = elapsed,
                     httpCode = 200,
-                    detail = "Google Gemini phản hồi OK (${elapsed}ms)"
+                    detail = "Google Gemini phản hồi OK (${elapsed}ms$tokNote)",
+                    tokenUsage = usage
                 )
             } else {
                 AiModelProbeResult(
@@ -378,7 +387,16 @@ object FirebaseAiClient {
                 model.generateContentStream(userPrompt)
             }
 
+            var lastUsage: AiTokenUsage? = null
             stream.collect { chunk ->
+                chunk.usageMetadata?.let { u ->
+                    val parsed = AiTokenUsage(
+                        promptTokens = u.promptTokenCount,
+                        outputTokens = u.candidatesTokenCount ?: 0,
+                        totalTokens = u.totalTokenCount
+                    )
+                    if (parsed.hasData) lastUsage = parsed
+                }
                 val part = chunk.text.orEmpty()
                 if (part.isNotEmpty()) {
                     accumulated.append(part)
@@ -393,11 +411,57 @@ object FirebaseAiClient {
             if (rawText.isEmpty()) {
                 throw IllegalStateException("Google Gemini trả về nội dung trống. Vui lòng thử lại.")
             }
-            Result.success(AiResponseParser.parseDocsReply(rawText))
+            Result.success(AiResponseParser.parseDocsReply(rawText).copy(tokenUsage = lastUsage))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             Log.e(FIREBASE_AI_TAG, "Firebase AI document query failed ($safeModel)", e)
+            Result.failure(IllegalStateException(formatFirebaseAiError(e, safeModel), e))
+        }
+    }
+
+    /**
+     * Calls Firebase AI Logic `countTokens` to get the exact current context token count for the docs chat.
+     */
+    suspend fun countDocsContextTokens(
+        modelId: String,
+        history: List<AiChatMessage>,
+        knownInputLimit: Int = 0,
+        knownOutputLimit: Int = 0,
+        attachedPageBitmap: Bitmap? = null,
+        attachedPageNumber: Int? = null
+    ): Result<AiExactContextTokenSync> = withContext(Dispatchers.IO) {
+        val safeModel = sanitizeModelId(modelId)
+        try {
+            val model = getDocsModel(safeModel)
+            val sanitizedHistory = AiResponseParser.sanitizeChatHistory(history, maxTurns = 6)
+            val contents = sanitizedHistory.map { msg ->
+                content(role = if (msg.isUser) "user" else "model") { text(msg.text) }
+            }.toMutableList()
+            if (attachedPageBitmap != null) {
+                contents.add(
+                    content(role = "user") {
+                        image(GeminiApiClient.downscaleBitmap(attachedPageBitmap, maxDim = 1024))
+                        text("Trang ${attachedPageNumber ?: 1} PDF đính kèm")
+                    }
+                )
+            } else if (contents.isEmpty()) {
+                contents.add(content(role = "user") { text(" ") })
+            }
+            val counted = withTimeout(12_000L) {
+                model.countTokens(contents).totalTokens
+            }
+            Result.success(
+                AiExactContextTokenSync(
+                    modelId = safeModel,
+                    inputTokenLimit = knownInputLimit,
+                    outputTokenLimit = knownOutputLimit,
+                    currentContextTokens = counted
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
             Result.failure(IllegalStateException(formatFirebaseAiError(e, safeModel), e))
         }
     }
@@ -436,7 +500,16 @@ object FirebaseAiClient {
             }
 
             val accumulated = StringBuilder()
+            var lastUsage: AiTokenUsage? = null
             model.generateContentStream(input).collect { chunk ->
+                chunk.usageMetadata?.let { u ->
+                    val parsed = AiTokenUsage(
+                        promptTokens = u.promptTokenCount,
+                        outputTokens = u.candidatesTokenCount ?: 0,
+                        totalTokens = u.totalTokenCount
+                    )
+                    if (parsed.hasData) lastUsage = parsed
+                }
                 val part = chunk.text.orEmpty()
                 if (part.isNotEmpty()) {
                     accumulated.append(part)
@@ -452,7 +525,7 @@ object FirebaseAiClient {
                 ?: throw IllegalStateException(
                     "AI trả về dữ liệu chưa đúng cấu trúc dựng hình 3D/2D. Hãy thử chụp ảnh rõ nét hơn hoặc mô tả ngắn gọn đề bài."
                 )
-            Result.success(plan)
+            Result.success(plan.copy(tokenUsage = lastUsage))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {

@@ -33,7 +33,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -163,8 +165,37 @@ fun AiWorkspaceScreen(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (uiState.useGoogleGeminiActive) EmeraldLight else CyanAccent,
                                     fontSize = 11.sp,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
+                                val tok = uiState.tokenState
+                                val tokenLine = when {
+                                    tok.hasContextLimit -> {
+                                        val rem = AiResponseParser.formatExactTokens(tok.remainingContextTokens.toLong())
+                                        val maxTok = AiResponseParser.formatCompactTokens(tok.inputTokenLimit.toLong())
+                                        val todayStr = if (tok.usedTokensToday > 0L) {
+                                            " · Hôm nay: ${AiResponseParser.formatExactTokens(tok.usedTokensToday)}"
+                                        } else ""
+                                        "Còn $rem / $maxTok ctx$todayStr"
+                                    }
+                                    tok.currentContextTokens > 0 || tok.usedTokensToday > 0L -> {
+                                        "Phiên: ${AiResponseParser.formatExactTokens(tok.currentContextTokens.toLong())} · Hôm nay: ${AiResponseParser.formatExactTokens(tok.usedTokensToday)}"
+                                    }
+                                    tok.isSyncingTokens -> "Đang đồng bộ số token..."
+                                    else -> ""
+                                }
+                                if (tokenLine.isNotEmpty()) {
+                                    Text(
+                                        text = tokenLine,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = SlateTextSecondary,
+                                        fontSize = 10.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.testTag("ai_top_bar_token_status")
+                                    )
+                                }
                             }
                             Text(
                                 text = "Đổi mô hình",
@@ -268,6 +299,9 @@ fun AiWorkspaceScreen(
                                     modelProbeResults = uiState.modelProbeResults,
                                     modelProbeSummary = uiState.modelProbeSummary,
                                     onProbeAllModels = { overrideKey -> aiViewModel.probeAllModels(overrideKey) },
+                                    tokenState = uiState.tokenState,
+                                    tokenLedgers = uiState.tokenLedgers,
+                                    onRefreshTokens = { aiViewModel.refreshTokenSync() },
                                     onAddCustomModel = { aiViewModel.addCustomModel(it) },
                                     onRemoveCustomModel = { aiViewModel.removeCustomModel(it) },
                                     isVerifying = uiState.isVerifyingKey,

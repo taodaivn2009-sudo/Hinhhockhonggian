@@ -92,6 +92,9 @@ fun AiKeySetupSection(
     modelProbeResults: Map<String, AiModelProbeResult> = emptyMap(),
     modelProbeSummary: String? = null,
     onProbeAllModels: (overrideApiKey: String?) -> Unit = {},
+    tokenState: AiContextTokenState = AiContextTokenState(),
+    tokenLedgers: Map<String, AiModelTokenLedger> = emptyMap(),
+    onRefreshTokens: () -> Unit = {},
     onAddCustomModel: (String) -> Unit = {},
     onRemoveCustomModel: (String) -> Unit = {},
     isVerifying: Boolean,
@@ -207,7 +210,10 @@ fun AiKeySetupSection(
             probeProgressTotal = probeProgressTotal,
             modelProbeResults = modelProbeResults,
             modelProbeSummary = modelProbeSummary,
-            onProbeAllModels = { onProbeAllModels(keyDraft.trim().ifEmpty { null }) }
+            onProbeAllModels = { onProbeAllModels(keyDraft.trim().ifEmpty { null }) },
+            tokenState = tokenState,
+            tokenLedgers = tokenLedgers,
+            onRefreshTokens = onRefreshTokens
         )
 
         // 3. OPTIONAL SECONDARY FALLBACK: Manual Gemini API Key

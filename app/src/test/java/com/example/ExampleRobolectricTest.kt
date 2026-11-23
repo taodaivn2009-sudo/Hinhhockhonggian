@@ -1250,6 +1250,43 @@ class ExampleRobolectricTest {
         assertEquals("OK · 280ms", probeMap["gemma-3-27b-it"]?.shortBadgeLabel)
         assertEquals("429 · Hết lượt", probeMap["gemini-3.5-pro-preview"]?.shortBadgeLabel)
         assertEquals("Lỗi 400", probeMap["gemini-4-tts-preview"]?.shortBadgeLabel)
+
+        // 7. Exact server usageMetadata parsing, remaining context math, formatting, and daily ledger persistence
+        val usageJson = org.json.JSONObject(
+            """
+            {
+              "usageMetadata": {
+                "promptTokenCount": 1420,
+                "candidatesTokenCount": 318,
+                "thoughtsTokenCount": 62,
+                "totalTokenCount": 1800
+              }
+            }
+            """.trimIndent()
+        )
+        val parsedUsage = AiResponseParser.parseUsageMetadata(usageJson)
+        assertEquals(1420, parsedUsage?.promptTokens)
+        assertEquals(318, parsedUsage?.outputTokens)
+        assertEquals(62, parsedUsage?.thoughtsTokens)
+        assertEquals(1800, parsedUsage?.totalTokens)
+
+        val ctxState = AiContextTokenState(
+            modelId = "gemini-3.8-flash",
+            inputTokenLimit = 1_048_576,
+            currentContextTokens = 2_756
+        )
+        assertEquals(1_045_820, ctxState.remainingContextTokens)
+        assertEquals("1.045.820", AiResponseParser.formatExactTokens(ctxState.remainingContextTokens.toLong()))
+
+        val ledgerDay1 = prefs.recordTokenUsage("gemini-3.8-flash", parsedUsage!!, today = "2026-11-22")
+        assertEquals(1800L, ledgerDay1["gemini-3.8-flash"]?.usedTokensToday)
+        assertEquals(1, ledgerDay1["gemini-3.8-flash"]?.requestsToday)
+        val ledgerDay1Second = prefs.recordTokenUsage("gemini-3.8-flash", AiTokenUsage(400, 100, 0, 500), today = "2026-11-22")
+        assertEquals(2300L, ledgerDay1Second["gemini-3.8-flash"]?.usedTokensToday)
+        assertEquals(2, ledgerDay1Second["gemini-3.8-flash"]?.requestsToday)
+        // Daily reset on next calendar day
+        val ledgerNextDay = prefs.loadTokenLedgers(today = "2026-11-23")
+        assertTrue(ledgerNextDay.isEmpty())
     }
 }
 
