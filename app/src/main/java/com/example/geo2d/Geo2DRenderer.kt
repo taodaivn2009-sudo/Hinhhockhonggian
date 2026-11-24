@@ -200,11 +200,6 @@ object Geo2DRenderer {
             drawAxes(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, majorStep, useDarkInk, scratch)
         }
 
-        // 3b. Definite Integral / Bounded Area Shaded Region (drawn under function curves)
-        if (uiState.integralEnabled && snap.functions.isNotEmpty()) {
-            drawIntegralOverlay(canvas, width, height, density, cam, uiState, scratch)
-        }
-
         // 4. Compile (LRU-cached) & Draw Arbitrary Mathematical Function Graphs y = f(x, m) and optional Derivative y = f'(x, m)
         val compiledFunctions = ArrayList<Triple<GraphFunction, MathExprParser.Expr, MathExprParser.Expr?>>(snap.functions.size)
         val xSpan = max(1e-9, xMax - xMin)

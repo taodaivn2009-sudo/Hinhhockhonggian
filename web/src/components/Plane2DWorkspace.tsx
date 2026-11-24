@@ -1,12 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AreaChart,
   Check,
   Download,
   Eye,
   EyeOff,
   Grid,
-  Link2,
   Magnet,
   Maximize2,
   Minimize2,
@@ -19,7 +17,6 @@ import {
   Sigma,
   SlidersHorizontal,
   Table2,
-  TableProperties,
   Trash2,
   Undo2,
   Upload,
@@ -27,6 +24,7 @@ import {
 } from 'lucide-react';
 import {
   angleDegrees2D,
+  GraphAsymptote,
   buildPreset2DGeometry,
   detectAsymptotes,
   detectIntersections,
@@ -43,6 +41,7 @@ import {
   Geo2DSnapshot,
   Geo2DToolId,
   GraphFunctionItem,
+  KeyPoint2D,
   isVerifyAnswerCorrect,
   lineEquation2D,
   numericalDerivative,
@@ -50,14 +49,9 @@ import {
   PRESET_2D_SHAPES,
   QUICK_MATH_KEYS
 } from '../engine/geo2d';
-import {
-  buildValueTable2D,
-  computeIntegral2D,
-  deriveSymbolicExpr
-} from '../engine/geo2dAdvanced';
+import { deriveSymbolicExpr } from '../engine/geo2dAdvanced';
 import { analyzeVariationTable, VariationTableResult } from '../engine/variationTable';
 import { VariationTableModal } from './VariationTableModal';
-import { buildShareUrl2D } from '../services/shareUrl';
 import { AiDrawingPlan, Sensitivity2D } from '../types/app';
 
 interface Plane2DWorkspaceProps {
@@ -74,7 +68,7 @@ interface Plane2DWorkspaceProps {
 }
 
 type DrawerTab2D = 'functions' | 'presets' | 'objects' | 'settings';
-type VerifyTarget2D = 'fn_val' | 'segment' | 'polygon_area' | 'circle_radius' | 'angle' | 'extrema' | 'integral_area';
+type VerifyTarget2D = 'fn_val' | 'segment' | 'polygon_area' | 'circle_radius' | 'angle' | 'extrema';
 
 const FN_COLORS = ['#38bdf8', '#10b981', '#f43f5e', '#f59e0b', '#a855f7', '#06b6d4'];
 const AUTO_SAVE_2D_KEY = 'tooltoan_2d_autosave_v2';
@@ -147,19 +141,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
   const [showAsymptotes, setShowAsymptotes] = useState<boolean>(true);
   const [showTangent, setShowTangent] = useState<boolean>(true);
 
-  // Item 20: Definite Integral, Area & Revolution Volume
-  const [integralEnabled, setIntegralEnabled] = useState<boolean>(false);
-  const [integralFnId, setIntegralFnId] = useState<string>('');
-  const [integralSecondFnId, setIntegralSecondFnId] = useState<string>(''); // '' = Ox (y=0)
-  const [integralAInput, setIntegralAInput] = useState<string>('0');
-  const [integralBInput, setIntegralBInput] = useState<string>('2');
-
-  // Item 20: Casio-style Value Table Modal
-  const [tableModalExpr, setTableModalExpr] = useState<string | null>(null);
-  const [tableStart, setTableStart] = useState<string>('-3');
-  const [tableEnd, setTableEnd] = useState<string>('3');
-  const [tableStep, setTableStep] = useState<string>('0.5');
-
   // Export options
   const [pngTransparent, setPngTransparent] = useState<boolean>(true);
   const [exportFilename, setExportFilename] = useState<string>('');
@@ -177,19 +158,29 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
   const [ptXInput, setPtXInput] = useState<string>('2');
   const [ptYInput, setPtYInput] = useState<string>('1');
 
-  // Item 9: Full Verify 2D Mode
+  // Verify 2D Mode
   const [verifyTarget, setVerifyTarget] = useState<VerifyTarget2D>('fn_val');
   const [verifyX, setVerifyX] = useState<string>('1');
   const [verifyAns, setVerifyAns] = useState<string>('');
   const [verifyMsg, setVerifyMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [revealVerifyAns, setRevealVerifyAns] = useState<boolean>(false);
 
-  // Camera
-  const [view, setView] = useState<{ cx: number; cy: number; scale: number }>({
+  // Camera stored in ref -> ZERO React re-renders during pan/pinch/wheel!
+  const viewRef = useRef<{ cx: number; cy: number; scale: number }>({
     cx: 0,
     cy: 0,
     scale: 56
   });
+  const rafRef = useRef<number | null>(null);
+  const analysisCacheRef = useRef<{
+    signature: string;
+    xMin: number;
+    xMax: number;
+    scale: number;
+    asymptotesByFn: Map<string, GraphAsymptote[]>;
+    keyPointsByFn: Map<string, KeyPoint2D[]>;
+    intersections: { x: number; y: number }[];
+  } | null>(null);
 
   const dragRef = useRef<{
     mode: 'none' | 'pan' | 'point' | 'trace';
@@ -263,17 +254,11 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
     onExternalSnapshotConsumed();
   }, [externalSnapshot, onExternalSnapshotConsumed]);
 
-  // Consume external AI 2D plan (including integral2d!)
+  // Consume external AI 2D plan
   useEffect(() => {
     if (!externalPlan || externalPlan.target !== 'plane2d') return;
     const now = Date.now();
     const exprs = externalPlan.expressions2d ? [...externalPlan.expressions2d] : [];
-    if (externalPlan.integral2d) {
-      if (exprs.length === 0) exprs.push(externalPlan.integral2d.expr);
-      if (externalPlan.integral2d.secondExpr && !exprs.includes(externalPlan.integral2d.secondExpr)) {
-        exprs.push(externalPlan.integral2d.secondExpr);
-      }
-    }
     const createdFns: GraphFunctionItem[] = exprs.map((expr, i) => ({
       id: `ai-${now}-${i}`,
       label: `f${i + 1}(x)`,
@@ -292,15 +277,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
         objects: preset ? preset.objects : prev.objects
       };
     });
-
-    if (externalPlan.integral2d) {
-      setIntegralEnabled(true);
-      setIntegralAInput(String(externalPlan.integral2d.a));
-      setIntegralBInput(String(externalPlan.integral2d.b));
-      if (createdFns[0]) setIntegralFnId(createdFns[0].id);
-      if (externalPlan.integral2d.secondExpr && createdFns[1]) setIntegralSecondFnId(createdFns[1].id);
-      else setIntegralSecondFnId('');
-    }
 
     setToast(`Đã vẽ từ AI: ${externalPlan.title}`);
     onPlanConsumed();
@@ -343,40 +319,7 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
   const primaryFn = snapshot.functions.find((f) => f.visible && f.expression.trim().length > 0);
   const activeToolInfo = GEO2D_TOOLS.find((t) => t.id === activeTool) || GEO2D_TOOLS[0];
 
-  // Item 20: Integral computation
-  const integralFn = useMemo(
-    () => snapshot.functions.find((f) => f.id === integralFnId) || primaryFn || null,
-    [snapshot.functions, integralFnId, primaryFn]
-  );
-  const integralSecondFn = useMemo(
-    () => (integralSecondFnId ? snapshot.functions.find((f) => f.id === integralSecondFnId) || null : null),
-    [snapshot.functions, integralSecondFnId]
-  );
-  const integralResult = useMemo(() => {
-    if (!integralEnabled || !integralFn || !integralFn.expression.trim()) return null;
-    const a = evaluateVerifyAnswer(integralAInput);
-    const b = evaluateVerifyAnswer(integralBInput);
-    if (a === null || b === null) return null;
-    return computeIntegral2D(
-      integralFn.expression,
-      integralSecondFn && integralSecondFn.id !== integralFn.id ? integralSecondFn.expression : null,
-      a,
-      b,
-      snapshot.paramM
-    );
-  }, [integralEnabled, integralFn, integralSecondFn, integralAInput, integralBInput, snapshot.paramM]);
-
-  // Item 20: Casio-style Value Table rows
-  const valueTableRows = useMemo(() => {
-    if (!tableModalExpr) return [];
-    const s = parseFloat(tableStart.replace(',', '.'));
-    const e = parseFloat(tableEnd.replace(',', '.'));
-    const st = parseFloat(tableStep.replace(',', '.'));
-    if (!Number.isFinite(s) || !Number.isFinite(e) || !Number.isFinite(st) || st <= 0) return [];
-    return buildValueTable2D(tableModalExpr, s, e, st, snapshot.paramM);
-  }, [tableModalExpr, tableStart, tableEnd, tableStep, snapshot.paramM]);
-
-  // Item 9: Full 2D Verify expected value
+  // Verify 2D expected value
   const verifyExpectedInfo = useMemo<{ value: number | null; unit: string; hint: string }>(() => {
     if (verifyTarget === 'fn_val') {
       if (!primaryFn) return { value: null, unit: '', hint: 'Cần có ít nhất 1 hàm số đang bật.' };
@@ -419,254 +362,316 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
       if (!a || !v || !c) return { value: null, unit: '°', hint: 'Thiếu đỉnh góc.' };
       return { value: angleDegrees2D(a, v, c), unit: '°', hint: `Góc ∠${a.name}${v.name}${c.name}` };
     }
-    if (verifyTarget === 'extrema') {
-      if (!primaryFn) return { value: null, unit: '', hint: 'Cần có 1 hàm số đang bật.' };
-      const kps = detectKeyPoints(primaryFn.expression, snapshot.paramM, -10, 10, primaryFn.color);
-      const ext = kps.find((k) => k.kind === 'max' || k.kind === 'min');
-      if (!ext) return { value: null, unit: '', hint: 'Không tìm thấy cực trị trong [-10; 10].' };
-      return { value: ext.y, unit: '', hint: `Giá trị cực trị tại x ≈ ${format2DNum(ext.x)}` };
-    }
-    // integral_area
-    if (!integralResult) return { value: null, unit: '', hint: 'Hãy bật Tích phân xác định trước.' };
-    return { value: integralResult.boundedArea, unit: '', hint: `Diện tích hình phẳng S trên [${format2DNum(integralResult.a)}; ${format2DNum(integralResult.b)}]` };
-  }, [verifyTarget, primaryFn, verifyX, snapshot, pointMap, integralResult]);
+    if (!primaryFn) return { value: null, unit: '', hint: 'Cần có 1 hàm số đang bật.' };
+    const kps = detectKeyPoints(primaryFn.expression, snapshot.paramM, -10, 10, primaryFn.color);
+    const ext = kps.find((k) => k.kind === 'max' || k.kind === 'min');
+    if (!ext) return { value: null, unit: '', hint: 'Không tìm thấy cực trị trong [-10; 10].' };
+    return { value: ext.y, unit: '', hint: `Giá trị cực trị tại x ≈ ${format2DNum(ext.x)}` };
+  }, [verifyTarget, primaryFn, verifyX, snapshot, pointMap]);
 
-  // Render full 2D canvas
-  useEffect(() => {
+  // Keep latest non-camera render state in ref for 60fps zero-re-render panning/zooming
+  const renderStateRef = useRef({
+    snapshot,
+    pointMap,
+    activeTool,
+    traceX,
+    pendingPointIds,
+    showAxes,
+    showGrid,
+    showPointCoords,
+    showMeasurements,
+    showKeyPoints,
+    showAsymptotes,
+    showTangent,
+    themeMode,
+    primaryFn
+  });
+  renderStateRef.current = {
+    snapshot,
+    pointMap,
+    activeTool,
+    traceX,
+    pendingPointIds,
+    showAxes,
+    showGrid,
+    showPointCoords,
+    showMeasurements,
+    showKeyPoints,
+    showAsymptotes,
+    showTangent,
+    themeMode,
+    primaryFn
+  };
+
+  // Render full 2D canvas directly from refs (60fps + viewport-padded asymptote/extrema/intersection cache)
+  const paintCanvasNow = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const render = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const rect = canvas.getBoundingClientRect();
-      const w = Math.max(300, rect.width);
-      const h = Math.max(300, rect.height);
-      if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-        canvas.width = Math.round(w * dpr);
-        canvas.height = Math.round(h * dpr);
-      }
+    const st = renderStateRef.current;
+    const view = viewRef.current;
 
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const rect = canvas.getBoundingClientRect();
+    const w = Math.max(300, rect.width);
+    const h = Math.max(300, rect.height);
+    const targetW = Math.round(w * dpr);
+    const targetH = Math.round(h * dpr);
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
+
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const isLight = st.themeMode === 'light';
+    const toSX = (wx: number) => w / 2 + (wx - view.cx) * view.scale;
+    const toSY = (wy: number) => h / 2 - (wy - view.cy) * view.scale;
+    const xMin = view.cx - w / (2 * view.scale);
+    const xMax = view.cx + w / (2 * view.scale);
+    const yMin = view.cy - h / (2 * view.scale);
+    const yMax = view.cy + h / (2 * view.scale);
+
+    const rawStep = 70 / view.scale;
+    const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    const normStep = rawStep / mag;
+    const step = normStep < 1.5 ? mag : normStep < 3.5 ? 2 * mag : normStep < 7.5 ? 5 * mag : 10 * mag;
+
+    // Grid (batched in single path!)
+    if (st.showGrid) {
+      ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.09)' : 'rgba(148, 163, 184, 0.14)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let gx = Math.floor(xMin / step) * step; gx <= xMax; gx += step) {
+        const sx = toSX(gx);
+        ctx.moveTo(sx, 0);
+        ctx.lineTo(sx, h);
+      }
+      for (let gy = Math.floor(yMin / step) * step; gy <= yMax; gy += step) {
+        const sy = toSY(gy);
+        ctx.moveTo(0, sy);
+        ctx.lineTo(w, sy);
+      }
+      ctx.stroke();
+    }
+
+    // Oxy Axes
+    if (st.showAxes) {
+      const ox = toSX(0);
+      const oy = toSY(0);
+      ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.72)' : 'rgba(241, 245, 249, 0.65)';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(0, oy);
+      ctx.lineTo(w, oy);
+      ctx.moveTo(ox, 0);
+      ctx.lineTo(ox, h);
+      ctx.stroke();
+
+      ctx.font = '600 11px "JetBrains Mono", monospace';
+      ctx.fillStyle = isLight ? '#475569' : '#94a3b8';
+      for (let gx = Math.floor(xMin / step) * step; gx <= xMax; gx += step) {
+        if (Math.abs(gx) < step * 0.1) continue;
+        ctx.fillText(format2DNum(gx), toSX(gx) + 3, Math.min(h - 8, Math.max(16, oy + 14)));
+      }
+      for (let gy = Math.floor(yMin / step) * step; gy <= yMax; gy += step) {
+        if (Math.abs(gy) < step * 0.1) continue;
+        ctx.fillText(format2DNum(gy), Math.min(w - 32, Math.max(8, ox + 6)), toSY(gy) - 4);
+      }
+    }
+
+    // Drawn 2D Objects
+    for (const obj of st.snapshot.objects) {
       ctx.save();
-      ctx.scale(dpr, dpr);
-      ctx.clearRect(0, 0, w, h);
+      ctx.strokeStyle = obj.color;
+      ctx.fillStyle = `${obj.color}24`;
+      ctx.lineWidth = 2.3;
 
-      const isLight = themeMode === 'light';
-      const toSX = (wx: number) => w / 2 + (wx - view.cx) * view.scale;
-      const toSY = (wy: number) => h / 2 - (wy - view.cy) * view.scale;
-      const xMin = view.cx - w / (2 * view.scale);
-      const xMax = view.cx + w / (2 * view.scale);
-      const yMin = view.cy - h / (2 * view.scale);
-      const yMax = view.cy + h / (2 * view.scale);
-
-      const rawStep = 70 / view.scale;
-      const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
-      const normStep = rawStep / mag;
-      const step = normStep < 1.5 ? mag : normStep < 3.5 ? 2 * mag : normStep < 7.5 ? 5 * mag : 10 * mag;
-
-      // Grid
-      if (showGrid) {
-        ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.09)' : 'rgba(148, 163, 184, 0.14)';
-        ctx.lineWidth = 1;
-        for (let gx = Math.floor(xMin / step) * step; gx <= xMax; gx += step) {
-          const sx = toSX(gx);
+      if (obj.kind === 'polygon') {
+        const pts = obj.pointIds.map((id) => st.pointMap.get(id)).filter((p): p is Geo2DPoint => Boolean(p));
+        if (pts.length >= 3) {
           ctx.beginPath();
-          ctx.moveTo(sx, 0);
-          ctx.lineTo(sx, h);
+          pts.forEach((pt, idx) => {
+            if (idx === 0) ctx.moveTo(toSX(pt.x), toSY(pt.y));
+            else ctx.lineTo(toSX(pt.x), toSY(pt.y));
+          });
+          ctx.closePath();
+          ctx.fill();
           ctx.stroke();
         }
-        for (let gy = Math.floor(yMin / step) * step; gy <= yMax; gy += step) {
-          const sy = toSY(gy);
+      } else if (obj.kind === 'segment') {
+        const a = st.pointMap.get(obj.p1Id);
+        const b = st.pointMap.get(obj.p2Id);
+        if (a && b) {
+          if (obj.dashed) ctx.setLineDash([6, 5]);
           ctx.beginPath();
-          ctx.moveTo(0, sy);
-          ctx.lineTo(w, sy);
+          ctx.moveTo(toSX(a.x), toSY(a.y));
+          ctx.lineTo(toSX(b.x), toSY(b.y));
           ctx.stroke();
+          if (st.showMeasurements) {
+            const mx = (toSX(a.x) + toSX(b.x)) / 2;
+            const my = (toSY(a.y) + toSY(b.y)) / 2;
+            ctx.fillStyle = isLight ? '#0f172a' : '#e2e8f0';
+            ctx.font = '700 11px "JetBrains Mono", monospace';
+            ctx.fillText(Math.hypot(b.x - a.x, b.y - a.y).toFixed(2), mx + 5, my - 5);
+          }
         }
-      }
-
-      // Oxy Axes
-      if (showAxes) {
-        const ox = toSX(0);
-        const oy = toSY(0);
-        ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.72)' : 'rgba(241, 245, 249, 0.65)';
-        ctx.lineWidth = 1.8;
-        ctx.beginPath();
-        ctx.moveTo(0, oy);
-        ctx.lineTo(w, oy);
-        ctx.moveTo(ox, 0);
-        ctx.lineTo(ox, h);
-        ctx.stroke();
-
-        ctx.font = '600 11px "JetBrains Mono", monospace';
-        ctx.fillStyle = isLight ? '#475569' : '#94a3b8';
-        for (let gx = Math.floor(xMin / step) * step; gx <= xMax; gx += step) {
-          if (Math.abs(gx) < step * 0.1) continue;
-          ctx.fillText(format2DNum(gx), toSX(gx) + 3, Math.min(h - 8, Math.max(16, oy + 14)));
-        }
-        for (let gy = Math.floor(yMin / step) * step; gy <= yMax; gy += step) {
-          if (Math.abs(gy) < step * 0.1) continue;
-          ctx.fillText(format2DNum(gy), Math.min(w - 32, Math.max(8, ox + 6)), toSY(gy) - 4);
-        }
-      }
-
-      // Item 20: Shaded Definite Integral Region
-      if (integralResult && integralResult.samples.length >= 2) {
-        const samps = integralResult.samples;
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(toSX(samps[0].x), toSY(samps[0].yTop));
-        for (let i = 1; i < samps.length; i++) {
-          ctx.lineTo(toSX(samps[i].x), toSY(samps[i].yTop));
-        }
-        for (let i = samps.length - 1; i >= 0; i--) {
-          ctx.lineTo(toSX(samps[i].x), toSY(samps[i].yBot));
-        }
-        ctx.closePath();
-        ctx.fillStyle = `${accentHex}38`;
-        ctx.fill();
-
-        // Dashed vertical limit lines x = a and x = b
-        ctx.strokeStyle = accentHex;
-        ctx.lineWidth = 1.6;
-        ctx.setLineDash([5, 4]);
-        for (const lim of [samps[0], samps[samps.length - 1]]) {
-          ctx.beginPath();
-          ctx.moveTo(toSX(lim.x), toSY(lim.yBot));
-          ctx.lineTo(toSX(lim.x), toSY(lim.yTop));
-          ctx.stroke();
-        }
-        ctx.restore();
-      }
-
-      // Drawn 2D Objects
-      for (const obj of snapshot.objects) {
-        ctx.save();
-        ctx.strokeStyle = obj.color;
-        ctx.fillStyle = `${obj.color}24`;
-        ctx.lineWidth = 2.3;
-
-        if (obj.kind === 'polygon') {
-          const pts = obj.pointIds.map((id) => pointMap.get(id)).filter((p): p is Geo2DPoint => Boolean(p));
-          if (pts.length >= 3) {
+      } else if (obj.kind === 'line') {
+        const a = st.pointMap.get(obj.p1Id);
+        const b = st.pointMap.get(obj.p2Id);
+        if (a && b) {
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const len = Math.hypot(dx, dy);
+          if (len > 1e-5) {
+            const scaleExt = 400;
             ctx.beginPath();
-            pts.forEach((pt, idx) => {
-              if (idx === 0) ctx.moveTo(toSX(pt.x), toSY(pt.y));
-              else ctx.lineTo(toSX(pt.x), toSY(pt.y));
-            });
-            ctx.closePath();
-            ctx.fill();
+            ctx.moveTo(toSX(a.x - (dx / len) * scaleExt), toSY(a.y - (dy / len) * scaleExt));
+            ctx.lineTo(toSX(a.x + (dx / len) * scaleExt), toSY(a.y + (dy / len) * scaleExt));
             ctx.stroke();
           }
-        } else if (obj.kind === 'segment') {
-          const a = pointMap.get(obj.p1Id);
-          const b = pointMap.get(obj.p2Id);
-          if (a && b) {
-            if (obj.dashed) ctx.setLineDash([6, 5]);
+        }
+      } else if (obj.kind === 'ray') {
+        const a = st.pointMap.get(obj.startId);
+        const b = st.pointMap.get(obj.throughId);
+        if (a && b) {
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const len = Math.hypot(dx, dy);
+          if (len > 1e-5) {
             ctx.beginPath();
             ctx.moveTo(toSX(a.x), toSY(a.y));
-            ctx.lineTo(toSX(b.x), toSY(b.y));
+            ctx.lineTo(toSX(a.x + (dx / len) * 400), toSY(a.y + (dy / len) * 400));
             ctx.stroke();
-            if (showMeasurements) {
-              const mx = (toSX(a.x) + toSX(b.x)) / 2;
-              const my = (toSY(a.y) + toSY(b.y)) / 2;
-              ctx.fillStyle = isLight ? '#0f172a' : '#e2e8f0';
-              ctx.font = '700 11px "JetBrains Mono", monospace';
-              ctx.fillText(Math.hypot(b.x - a.x, b.y - a.y).toFixed(2), mx + 5, my - 5);
-            }
-          }
-        } else if (obj.kind === 'line') {
-          const a = pointMap.get(obj.p1Id);
-          const b = pointMap.get(obj.p2Id);
-          if (a && b) {
-            const dx = b.x - a.x;
-            const dy = b.y - a.y;
-            const len = Math.hypot(dx, dy);
-            if (len > 1e-5) {
-              const scaleExt = 400;
-              ctx.beginPath();
-              ctx.moveTo(toSX(a.x - (dx / len) * scaleExt), toSY(a.y - (dy / len) * scaleExt));
-              ctx.lineTo(toSX(a.x + (dx / len) * scaleExt), toSY(a.y + (dy / len) * scaleExt));
-              ctx.stroke();
-            }
-          }
-        } else if (obj.kind === 'ray') {
-          const a = pointMap.get(obj.startId);
-          const b = pointMap.get(obj.throughId);
-          if (a && b) {
-            const dx = b.x - a.x;
-            const dy = b.y - a.y;
-            const len = Math.hypot(dx, dy);
-            if (len > 1e-5) {
-              ctx.beginPath();
-              ctx.moveTo(toSX(a.x), toSY(a.y));
-              ctx.lineTo(toSX(a.x + (dx / len) * 400), toSY(a.y + (dy / len) * 400));
-              ctx.stroke();
-            }
-          }
-        } else if (obj.kind === 'vector') {
-          const a = pointMap.get(obj.fromId);
-          const b = pointMap.get(obj.toId);
-          if (a && b) {
-            const sx1 = toSX(a.x);
-            const sy1 = toSY(a.y);
-            const sx2 = toSX(b.x);
-            const sy2 = toSY(b.y);
-            ctx.beginPath();
-            ctx.moveTo(sx1, sy1);
-            ctx.lineTo(sx2, sy2);
-            ctx.stroke();
-            const ang = Math.atan2(sy2 - sy1, sx2 - sx1);
-            ctx.fillStyle = obj.color;
-            ctx.beginPath();
-            ctx.moveTo(sx2, sy2);
-            ctx.lineTo(sx2 - 12 * Math.cos(ang - 0.4), sy2 - 12 * Math.sin(ang - 0.4));
-            ctx.lineTo(sx2 - 12 * Math.cos(ang + 0.4), sy2 - 12 * Math.sin(ang + 0.4));
-            ctx.closePath();
-            ctx.fill();
-          }
-        } else if (obj.kind === 'circle') {
-          const c = pointMap.get(obj.centerId);
-          const e = obj.edgePointId ? pointMap.get(obj.edgePointId) : null;
-          if (c) {
-            const r = e ? Math.hypot(e.x - c.x, e.y - c.y) : obj.fixedRadius || 2;
-            ctx.beginPath();
-            ctx.arc(toSX(c.x), toSY(c.y), r * view.scale, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-          }
-        } else if (obj.kind === 'angle') {
-          const a = pointMap.get(obj.pAId);
-          const v = pointMap.get(obj.vertexId);
-          const c = pointMap.get(obj.pCId);
-          if (a && v && c) {
-            const vx = toSX(v.x);
-            const vy = toSY(v.y);
-            const a1 = Math.atan2(toSY(a.y) - vy, toSX(a.x) - vx);
-            const a2 = Math.atan2(toSY(c.y) - vy, toSX(c.x) - vx);
-            let diff = a2 - a1;
-            while (diff > Math.PI) diff -= Math.PI * 2;
-            while (diff < -Math.PI) diff += Math.PI * 2;
-            ctx.beginPath();
-            ctx.arc(vx, vy, 24, a1, a1 + diff, diff < 0);
-            ctx.stroke();
-            const deg = angleDegrees2D(a, v, c);
-            const midA = a1 + diff * 0.5;
-            ctx.fillStyle = '#fbbf24';
-            ctx.font = '800 11.5px "JetBrains Mono", monospace';
-            ctx.fillText(`${deg.toFixed(1)}°`, vx + 30 * Math.cos(midA) - 10, vy + 30 * Math.sin(midA) + 4);
           }
         }
-        ctx.restore();
+      } else if (obj.kind === 'vector') {
+        const a = st.pointMap.get(obj.fromId);
+        const b = st.pointMap.get(obj.toId);
+        if (a && b) {
+          const sx1 = toSX(a.x);
+          const sy1 = toSY(a.y);
+          const sx2 = toSX(b.x);
+          const sy2 = toSY(b.y);
+          ctx.beginPath();
+          ctx.moveTo(sx1, sy1);
+          ctx.lineTo(sx2, sy2);
+          ctx.stroke();
+          const ang = Math.atan2(sy2 - sy1, sx2 - sx1);
+          ctx.fillStyle = obj.color;
+          ctx.beginPath();
+          ctx.moveTo(sx2, sy2);
+          ctx.lineTo(sx2 - 12 * Math.cos(ang - 0.4), sy2 - 12 * Math.sin(ang - 0.4));
+          ctx.lineTo(sx2 - 12 * Math.cos(ang + 0.4), sy2 - 12 * Math.sin(ang + 0.4));
+          ctx.closePath();
+          ctx.fill();
+        }
+      } else if (obj.kind === 'circle') {
+        const c = st.pointMap.get(obj.centerId);
+        const e = obj.edgePointId ? st.pointMap.get(obj.edgePointId) : null;
+        if (c) {
+          const r = e ? Math.hypot(e.x - c.x, e.y - c.y) : obj.fixedRadius || 2;
+          ctx.beginPath();
+          ctx.arc(toSX(c.x), toSY(c.y), r * view.scale, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      } else if (obj.kind === 'angle') {
+        const a = st.pointMap.get(obj.pAId);
+        const v = st.pointMap.get(obj.vertexId);
+        const c = st.pointMap.get(obj.pCId);
+        if (a && v && c) {
+          const vx = toSX(v.x);
+          const vy = toSY(v.y);
+          const a1 = Math.atan2(toSY(a.y) - vy, toSX(a.x) - vx);
+          const a2 = Math.atan2(toSY(c.y) - vy, toSX(c.x) - vx);
+          let diff = a2 - a1;
+          while (diff > Math.PI) diff -= Math.PI * 2;
+          while (diff < -Math.PI) diff += Math.PI * 2;
+          ctx.beginPath();
+          ctx.arc(vx, vy, 24, a1, a1 + diff, diff < 0);
+          ctx.stroke();
+          const deg = angleDegrees2D(a, v, c);
+          const midA = a1 + diff * 0.5;
+          ctx.fillStyle = '#fbbf24';
+          ctx.font = '800 11.5px "JetBrains Mono", monospace';
+          ctx.fillText(`${deg.toFixed(1)}°`, vx + 30 * Math.cos(midA) - 10, vy + 30 * Math.sin(midA) + 4);
+        }
+      }
+      ctx.restore();
+    }
+
+    // Functions, Derivatives & Cached Asymptotes / Key Points / Intersections
+    const visibleFns = st.snapshot.functions.filter((f) => (f.visible || f.showDerivative) && f.expression.trim());
+    const sampleCount = Math.min(720, Math.max(300, Math.round(w * 0.85)));
+
+    // Resolve viewport-padded analysis cache (eliminates per-frame root-finding jank while panning!)
+    const fnsVisibleOnly = visibleFns.filter((f) => f.visible);
+    const cacheSig = `${st.snapshot.paramM.toFixed(3)}|${st.showAsymptotes ? 1 : 0}|${st.showKeyPoints ? 1 : 0}|${fnsVisibleOnly
+      .map((f) => `${f.id}:${f.expression}`)
+      .join(';')}`;
+
+    let cache = analysisCacheRef.current;
+    const scaleRatio = cache ? view.scale / cache.scale : 99;
+    const cacheValid =
+      cache !== null &&
+      cache.signature === cacheSig &&
+      xMin >= cache.xMin &&
+      xMax <= cache.xMax &&
+      scaleRatio >= 0.6 &&
+      scaleRatio <= 1.65;
+
+    if (!cache || !cacheValid) {
+      const pad = (xMax - xMin) * 0.55;
+      const cMin = xMin - pad;
+      const cMax = xMax + pad;
+      const asymptotesByFn = new Map<string, GraphAsymptote[]>();
+      const keyPointsByFn = new Map<string, KeyPoint2D[]>();
+      const intersections: { x: number; y: number }[] = [];
+
+      for (const fn of fnsVisibleOnly) {
+        if (st.showAsymptotes) {
+          asymptotesByFn.set(fn.id, detectAsymptotes(fn.expression, st.snapshot.paramM, cMin, cMax, '#fbbf24'));
+        }
+        if (st.showKeyPoints) {
+          keyPointsByFn.set(fn.id, detectKeyPoints(fn.expression, st.snapshot.paramM, cMin, cMax, fn.color));
+        }
+      }
+      if (st.showKeyPoints && fnsVisibleOnly.length >= 2) {
+        for (let i = 0; i < fnsVisibleOnly.length; i++) {
+          for (let j = i + 1; j < fnsVisibleOnly.length; j++) {
+            const inters = detectIntersections(
+              fnsVisibleOnly[i].expression,
+              fnsVisibleOnly[j].expression,
+              st.snapshot.paramM,
+              cMin,
+              cMax
+            );
+            for (const pt of inters) intersections.push(pt);
+          }
+        }
       }
 
-      // Functions, Derivatives, Asymptotes, Key Points & Intersections
-      const visibleFns = snapshot.functions.filter((f) => (f.visible || f.showDerivative) && f.expression.trim());
-      const sampleCount = Math.min(900, Math.max(360, Math.round(w)));
+      cache = {
+        signature: cacheSig,
+        xMin: cMin,
+        xMax: cMax,
+        scale: view.scale,
+        asymptotesByFn,
+        keyPointsByFn,
+        intersections
+      };
+      analysisCacheRef.current = cache;
+    }
 
-      for (const fn of visibleFns) {
-        if (showAsymptotes && fn.visible) {
-          const asyms = detectAsymptotes(fn.expression, snapshot.paramM, xMin, xMax, '#fbbf24');
+    for (const fn of visibleFns) {
+      if (st.showAsymptotes && fn.visible) {
+        const asyms = cache.asymptotesByFn.get(fn.id) || [];
+        if (asyms.length > 0) {
           ctx.save();
           ctx.strokeStyle = 'rgba(251, 191, 36, 0.72)';
           ctx.setLineDash([6, 5]);
@@ -689,162 +694,184 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
           }
           ctx.restore();
         }
-
-        if (fn.visible) {
-          ctx.save();
-          ctx.strokeStyle = fn.color;
-          ctx.lineWidth = 2.6;
-          ctx.beginPath();
-          let down = false;
-          let lastSy = 0;
-          for (let i = 0; i <= sampleCount; i++) {
-            const sx = (i / sampleCount) * w;
-            const wx = view.cx + (sx - w / 2) / view.scale;
-            const wy = evaluateMathExpr(fn.expression, wx, snapshot.paramM);
-            if (!Number.isFinite(wy) || Math.abs(wy) > 1e4) {
-              down = false;
-              continue;
-            }
-            const sy = toSY(wy);
-            if (down && Math.abs(sy - lastSy) > h * 1.35) down = false;
-            if (!down) {
-              ctx.moveTo(sx, sy);
-              down = true;
-            } else {
-              ctx.lineTo(sx, sy);
-            }
-            lastSy = sy;
-          }
-          ctx.stroke();
-          ctx.restore();
-        }
-
-        if (fn.showDerivative) {
-          ctx.save();
-          ctx.strokeStyle = fn.color;
-          ctx.globalAlpha = 0.65;
-          ctx.setLineDash([6, 5]);
-          ctx.lineWidth = 1.9;
-          ctx.beginPath();
-          let down = false;
-          let lastSy = 0;
-          for (let i = 0; i <= sampleCount; i++) {
-            const sx = (i / sampleCount) * w;
-            const wx = view.cx + (sx - w / 2) / view.scale;
-            const wy = numericalDerivative(fn.expression, wx, snapshot.paramM);
-            if (!Number.isFinite(wy) || Math.abs(wy) > 1e4) {
-              down = false;
-              continue;
-            }
-            const sy = toSY(wy);
-            if (down && Math.abs(sy - lastSy) > h * 1.35) down = false;
-            if (!down) {
-              ctx.moveTo(sx, sy);
-              down = true;
-            } else {
-              ctx.lineTo(sx, sy);
-            }
-            lastSy = sy;
-          }
-          ctx.stroke();
-          ctx.restore();
-        }
-
-        if (showKeyPoints && fn.visible) {
-          const pts = detectKeyPoints(fn.expression, snapshot.paramM, xMin, xMax, fn.color);
-          for (const kp of pts) {
-            const sx = toSX(kp.x);
-            const sy = toSY(kp.y);
-            ctx.beginPath();
-            ctx.arc(sx, sy, 4.3, 0, Math.PI * 2);
-            ctx.fillStyle =
-              kp.kind === 'root' || kp.kind === 'y_intercept'
-                ? '#10b981'
-                : kp.kind === 'inflection'
-                  ? '#a855f7'
-                  : '#fbbf24';
-            ctx.fill();
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 1.3;
-            ctx.stroke();
-          }
-        }
       }
 
-      if (showKeyPoints && visibleFns.length >= 2) {
-        for (let i = 0; i < visibleFns.length; i++) {
-          for (let j = i + 1; j < visibleFns.length; j++) {
-            const inters = detectIntersections(visibleFns[i].expression, visibleFns[j].expression, snapshot.paramM, xMin, xMax);
-            for (const pt of inters) {
-              ctx.beginPath();
-              ctx.arc(toSX(pt.x), toSY(pt.y), 5, 0, Math.PI * 2);
-              ctx.fillStyle = '#f43f5e';
-              ctx.fill();
-              ctx.strokeStyle = '#ffffff';
-              ctx.lineWidth = 1.6;
-              ctx.stroke();
-            }
-          }
-        }
-      }
-
-      // Draw interactive Points on top
-      for (const pt of snapshot.points) {
-        const sx = toSX(pt.x);
-        const sy = toSY(pt.y);
-        const isPending = pendingPointIds.includes(pt.id);
+      if (fn.visible) {
+        ctx.save();
+        ctx.strokeStyle = fn.color;
+        ctx.lineWidth = 2.6;
         ctx.beginPath();
-        ctx.arc(sx, sy, isPending ? 6.5 : 4.8, 0, Math.PI * 2);
-        ctx.fillStyle = isPending ? '#fbbf24' : pt.color;
-        ctx.fill();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.8;
+        let down = false;
+        let lastSy = 0;
+        for (let i = 0; i <= sampleCount; i++) {
+          const sx = (i / sampleCount) * w;
+          const wx = view.cx + (sx - w / 2) / view.scale;
+          const wy = evaluateMathExpr(fn.expression, wx, st.snapshot.paramM);
+          if (!Number.isFinite(wy) || Math.abs(wy) > 1e4) {
+            down = false;
+            continue;
+          }
+          const sy = toSY(wy);
+          if (down && Math.abs(sy - lastSy) > h * 1.35) down = false;
+          if (!down) {
+            ctx.moveTo(sx, sy);
+            down = true;
+          } else {
+            ctx.lineTo(sx, sy);
+          }
+          lastSy = sy;
+        }
         ctx.stroke();
-
-        ctx.font = '800 12.5px "Plus Jakarta Sans", sans-serif';
-        ctx.fillStyle = isLight ? '#0f172a' : '#f8fafc';
-        const lbl = showPointCoords ? `${pt.name}(${format2DNum(pt.x)};${format2DNum(pt.y)})` : pt.name;
-        ctx.fillText(lbl, sx + 8, sy - 6);
+        ctx.restore();
       }
 
-      // Trace marker & tangent line
-      if (activeTool === 'trace' && primaryFn) {
-        const ty = evaluateMathExpr(primaryFn.expression, traceX, snapshot.paramM);
-        const slope = numericalDerivative(primaryFn.expression, traceX, snapshot.paramM);
-        if (Number.isFinite(ty)) {
-          const sx = toSX(traceX);
-          const sy = toSY(ty);
-          if (showTangent && Number.isFinite(slope)) {
-            ctx.save();
-            ctx.strokeStyle = '#f59e0b';
-            ctx.lineWidth = 1.8;
-            ctx.setLineDash([6, 4]);
-            ctx.beginPath();
-            ctx.moveTo(toSX(xMin), toSY(ty + slope * (xMin - traceX)));
-            ctx.lineTo(toSX(xMax), toSY(ty + slope * (xMax - traceX)));
-            ctx.stroke();
-            ctx.restore();
+      if (fn.showDerivative) {
+        ctx.save();
+        ctx.strokeStyle = fn.color;
+        ctx.globalAlpha = 0.65;
+        ctx.setLineDash([6, 5]);
+        ctx.lineWidth = 1.9;
+        ctx.beginPath();
+        let down = false;
+        let lastSy = 0;
+        for (let i = 0; i <= sampleCount; i++) {
+          const sx = (i / sampleCount) * w;
+          const wx = view.cx + (sx - w / 2) / view.scale;
+          const wy = numericalDerivative(fn.expression, wx, st.snapshot.paramM);
+          if (!Number.isFinite(wy) || Math.abs(wy) > 1e4) {
+            down = false;
+            continue;
           }
+          const sy = toSY(wy);
+          if (down && Math.abs(sy - lastSy) > h * 1.35) down = false;
+          if (!down) {
+            ctx.moveTo(sx, sy);
+            down = true;
+          } else {
+            ctx.lineTo(sx, sy);
+          }
+          lastSy = sy;
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      if (st.showKeyPoints && fn.visible) {
+        const pts = cache.keyPointsByFn.get(fn.id) || [];
+        for (const kp of pts) {
+          if (kp.x < xMin || kp.x > xMax) continue;
+          const sx = toSX(kp.x);
+          const sy = toSY(kp.y);
           ctx.beginPath();
-          ctx.arc(sx, sy, 6.2, 0, Math.PI * 2);
-          ctx.fillStyle = '#f59e0b';
+          ctx.arc(sx, sy, 4.3, 0, Math.PI * 2);
+          ctx.fillStyle =
+            kp.kind === 'root' || kp.kind === 'y_intercept'
+              ? '#10b981'
+              : kp.kind === 'inflection'
+                ? '#a855f7'
+                : '#fbbf24';
           ctx.fill();
           ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 2;
+          ctx.lineWidth = 1.3;
           ctx.stroke();
         }
       }
+    }
 
-      ctx.restore();
+    if (st.showKeyPoints && cache.intersections.length > 0) {
+      for (const pt of cache.intersections) {
+        if (pt.x < xMin || pt.x > xMax) continue;
+        ctx.beginPath();
+        ctx.arc(toSX(pt.x), toSY(pt.y), 5, 0, Math.PI * 2);
+        ctx.fillStyle = '#f43f5e';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+      }
+    }
+
+    // Draw interactive Points on top
+    ctx.font = '800 12.5px "Plus Jakarta Sans", sans-serif';
+    for (const pt of st.snapshot.points) {
+      const sx = toSX(pt.x);
+      const sy = toSY(pt.y);
+      const isPending = st.pendingPointIds.includes(pt.id);
+      ctx.beginPath();
+      ctx.arc(sx, sy, isPending ? 6.5 : 4.8, 0, Math.PI * 2);
+      ctx.fillStyle = isPending ? '#fbbf24' : pt.color;
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+
+      ctx.fillStyle = isLight ? '#0f172a' : '#f8fafc';
+      const lbl = st.showPointCoords ? `${pt.name}(${format2DNum(pt.x)};${format2DNum(pt.y)})` : pt.name;
+      ctx.fillText(lbl, sx + 8, sy - 6);
+    }
+
+    // Trace marker & tangent line
+    if (st.activeTool === 'trace' && st.primaryFn) {
+      const ty = evaluateMathExpr(st.primaryFn.expression, st.traceX, st.snapshot.paramM);
+      const slope = numericalDerivative(st.primaryFn.expression, st.traceX, st.snapshot.paramM);
+      if (Number.isFinite(ty)) {
+        const sx = toSX(st.traceX);
+        const sy = toSY(ty);
+        if (st.showTangent && Number.isFinite(slope)) {
+          ctx.save();
+          ctx.strokeStyle = '#f59e0b';
+          ctx.lineWidth = 1.8;
+          ctx.setLineDash([6, 4]);
+          ctx.beginPath();
+          ctx.moveTo(toSX(xMin), toSY(ty + slope * (xMin - st.traceX)));
+          ctx.lineTo(toSX(xMax), toSY(ty + slope * (xMax - st.traceX)));
+          ctx.stroke();
+          ctx.restore();
+        }
+        ctx.beginPath();
+        ctx.arc(sx, sy, 6.2, 0, Math.PI * 2);
+        ctx.fillStyle = '#f59e0b';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
+  }, []);
+
+  const scheduleRender = useCallback(() => {
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      paintCanvasNow();
+    });
+  }, [paintCanvasNow]);
+
+  // Attach ResizeObserver ONCE on mount (zero teardown/re-bind on pan or zoom)
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    paintCanvasNow();
+    const ro = new ResizeObserver(() => scheduleRender());
+    ro.observe(canvas);
+    return () => {
+      ro.disconnect();
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
     };
+  }, [paintCanvasNow, scheduleRender]);
 
-    render();
-    window.addEventListener('resize', render);
-    return () => window.removeEventListener('resize', render);
+  // Repaint when React scene/display state changes
+  useEffect(() => {
+    scheduleRender();
   }, [
+    scheduleRender,
     snapshot,
     pointMap,
-    view,
     activeTool,
     traceX,
     pendingPointIds,
@@ -856,23 +883,22 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
     showAsymptotes,
     showTangent,
     themeMode,
-    primaryFn,
-    integralResult,
-    accentHex
+    primaryFn
   ]);
 
-  // Coordinate helpers
+  // Coordinate helpers reading viewRef directly
   const screenToWorld = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
+    const view = viewRef.current;
     const wx = view.cx + (clientX - rect.left - rect.width / 2) / view.scale;
     const wy = view.cy - (clientY - rect.top - rect.height / 2) / view.scale;
     return { x: wx, y: wy };
   };
 
   const findHitPoint = (wx: number, wy: number): Geo2DPoint | null => {
-    const hitTol = (18 * sensitivity.touchRadius) / view.scale;
+    const hitTol = (18 * sensitivity.touchRadius) / viewRef.current.scale;
     let best: Geo2DPoint | null = null;
     let bestD = hitTol;
     for (const pt of snapshot.points) {
@@ -1007,7 +1033,8 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
       if (dragRef.current.pinchDist && dist > 10) {
         const rawFactor = dist / dragRef.current.pinchDist;
         const factor = 1 + (rawFactor - 1) * sensitivity.zoom;
-        setView((prev) => ({ ...prev, scale: Math.min(260, Math.max(12, prev.scale * factor)) }));
+        viewRef.current.scale = Math.min(2000, Math.max(4, viewRef.current.scale * factor));
+        scheduleRender();
       }
       dragRef.current.pinchDist = dist;
       return;
@@ -1037,7 +1064,9 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
       const dy = (e.clientY - dragRef.current.y) * sensitivity.pan;
       dragRef.current.x = e.clientX;
       dragRef.current.y = e.clientY;
-      setView((prev) => ({ ...prev, cx: prev.cx - dx / prev.scale, cy: prev.cy + dy / prev.scale }));
+      viewRef.current.cx -= dx / viewRef.current.scale;
+      viewRef.current.cy += dy / viewRef.current.scale;
+      scheduleRender();
     }
   };
 
@@ -1053,7 +1082,8 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     const stepFactor = 1 + 0.1 * sensitivity.zoom;
     const factor = e.deltaY > 0 ? 1 / stepFactor : stepFactor;
-    setView((prev) => ({ ...prev, scale: Math.min(260, Math.max(12, prev.scale * factor)) }));
+    viewRef.current.scale = Math.min(2000, Math.max(4, viewRef.current.scale * factor));
+    scheduleRender();
   };
 
   const addFunctionExpr = (expr: string) => {
@@ -1102,23 +1132,13 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
   };
 
   const exportJson = () => {
-    const blob = new Blob([JSON.stringify({ snapshot, view }, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ snapshot, view: viewRef.current }, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `${getBaseFilename()}.json`;
     a.click();
     URL.revokeObjectURL(url);
-  };
-
-  const handleCopyShareLink = async () => {
-    try {
-      const url = buildShareUrl2D(snapshot);
-      await navigator.clipboard.writeText(url);
-      setToast('Đã sao chép liên kết chia sẻ đồ thị 2D!');
-    } catch {
-      setToast('Không thể sao chép liên kết.');
-    }
   };
 
   const importJson = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1129,7 +1149,10 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
       try {
         const parsed = JSON.parse(String(reader.result));
         if (parsed.snapshot) commit(() => parsed.snapshot);
-        if (parsed.view) setView(parsed.view);
+        if (parsed.view) {
+          viewRef.current = { ...viewRef.current, ...parsed.view };
+          scheduleRender();
+        }
         setToast('Đã nhập bài vẽ 2D từ JSON.');
       } catch {
         setToast('File JSON 2D không hợp lệ.');
@@ -1225,21 +1248,15 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setView({ cx: 0, cy: 0, scale: 56 })}
+              onClick={() => {
+                viewRef.current = { cx: 0, cy: 0, scale: 56 };
+                scheduleRender();
+              }}
               className="icon-btn glass-press"
               style={{ width: 34, height: 34 }}
               title="Về gốc tọa độ"
             >
               <RotateCcw size={15} />
-            </button>
-            <button
-              type="button"
-              onClick={handleCopyShareLink}
-              className="icon-btn glass-press"
-              style={{ width: 34, height: 34 }}
-              title="Sao chép link chia sẻ đồ thị 2D"
-            >
-              <Link2 size={15} />
             </button>
             <button
               type="button"
@@ -1318,17 +1335,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
                 onChange={(e) => setSnapshot((p) => ({ ...p, paramM: parseFloat(e.target.value) }))}
               />
             </div>
-
-            {integralResult && (
-              <div
-                className="glass-surface mono"
-                style={{ pointerEvents: 'auto', padding: '5px 11px', borderRadius: 999, fontSize: 11, display: 'inline-flex', gap: 8 }}
-              >
-                <span style={{ color: accentHex }}>∫={integralResult.signedIntegral.toFixed(2)}</span>
-                <span style={{ color: '#10b981' }}>S={integralResult.boundedArea.toFixed(2)}</span>
-                <span style={{ color: '#fbbf24' }}>V={integralResult.revolutionVolume.toFixed(2)}</span>
-              </div>
-            )}
 
             {activeTool === 'trace' && primaryFn && Number.isFinite(traceY) && (
               <div
@@ -1425,7 +1431,10 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
           <button
             type="button"
             className="studio-rail-btn"
-            onClick={() => setView((v) => ({ ...v, scale: Math.min(2000, v.scale * 1.22) }))}
+            onClick={() => {
+              viewRef.current.scale = Math.min(2000, viewRef.current.scale * 1.22);
+              scheduleRender();
+            }}
             title="Phóng to"
             aria-label="Phóng to"
           >
@@ -1434,7 +1443,10 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
           <button
             type="button"
             className="studio-rail-btn"
-            onClick={() => setView((v) => ({ ...v, scale: Math.max(4, v.scale * 0.82) }))}
+            onClick={() => {
+              viewRef.current.scale = Math.max(4, viewRef.current.scale * 0.82);
+              scheduleRender();
+            }}
             title="Thu nhỏ"
             aria-label="Thu nhỏ"
           >
@@ -1625,15 +1637,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
                               <Table2 size={12} />
                               <span>BBT</span>
                             </button>
-                            <button
-                              type="button"
-                              className="chip-btn"
-                              style={{ minHeight: 26, padding: '2px 8px', fontSize: 10.5 }}
-                              onClick={() => setTableModalExpr(fn.expression)}
-                            >
-                              <TableProperties size={12} />
-                              <span>Bảng giá trị</span>
-                            </button>
                           </div>
 
                           <div style={{ display: 'flex', gap: 3 }}>
@@ -1665,77 +1668,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
                       </div>
                     );
                   })}
-                </div>
-
-                {/* Item 20: Definite Integral, Area & Volume of Revolution */}
-                <div style={{ padding: 11, borderRadius: 15, border: '1px solid rgba(56,189,248,0.45)', background: 'rgba(56,189,248,0.08)', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: 11.5, fontWeight: 800, color: accentHex, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                      <AreaChart size={13} />
-                      <span>TÍCH PHÂN, DIỆN TÍCH & THỂ TÍCH KHỐI TRÒN XOAY</span>
-                    </span>
-                    <button
-                      type="button"
-                      className={`chip-btn${integralEnabled ? ' active' : ''}`}
-                      style={{ minHeight: 26, padding: '2px 8px', fontSize: 10.5 }}
-                      onClick={() => setIntegralEnabled((v) => !v)}
-                    >
-                      {integralEnabled ? 'Đang bật' : 'Bật'}
-                    </button>
-                  </div>
-                  {integralEnabled && (
-                    <>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                        <select
-                          className="glass-select"
-                          style={{ padding: '6px', fontSize: 11.5 }}
-                          value={integralFn?.id || ''}
-                          onChange={(e) => setIntegralFnId(e.target.value)}
-                        >
-                          {snapshot.functions.map((f) => (
-                            <option key={f.id} value={f.id} style={{ color: '#0f172a' }}>f: {f.expression}</option>
-                          ))}
-                        </select>
-                        <select
-                          className="glass-select"
-                          style={{ padding: '6px', fontSize: 11.5 }}
-                          value={integralSecondFnId}
-                          onChange={(e) => setIntegralSecondFnId(e.target.value)}
-                        >
-                          <option value="" style={{ color: '#0f172a' }}>Trục Ox (y = 0)</option>
-                          {snapshot.functions.map((f) => (
-                            <option key={f.id} value={f.id} style={{ color: '#0f172a' }}>g: {f.expression}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                        <label style={{ fontSize: 11, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                          <span>Cận dưới a</span>
-                          <input className="glass-input mono" style={{ padding: '6px 8px', fontSize: 12 }} value={integralAInput} onChange={(e) => setIntegralAInput(e.target.value)} />
-                        </label>
-                        <label style={{ fontSize: 11, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                          <span>Cận trên b</span>
-                          <input className="glass-input mono" style={{ padding: '6px 8px', fontSize: 12 }} value={integralBInput} onChange={(e) => setIntegralBInput(e.target.value)} />
-                        </label>
-                      </div>
-                      {integralResult && (
-                        <div className="mono" style={{ fontSize: 11.5, padding: 9, borderRadius: 11, background: 'rgba(2,6,23,0.44)', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', color: accentHex }}>
-                            <span>∫(f - g)dx:</span>
-                            <b>{integralResult.signedIntegral.toFixed(4)}</b>
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#10b981' }}>
-                            <span>Diện tích S = ∫|f - g|dx:</span>
-                            <b>{integralResult.boundedArea.toFixed(4)}</b>
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#fbbf24' }}>
-                            <span>V tròn xoay (Ox):</span>
-                            <b>{integralResult.revolutionVolume.toFixed(4)} ({(integralResult.revolutionVolume / Math.PI).toFixed(3)}π)</b>
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  )}
                 </div>
 
                 {/* 31-Template Categorized Library */}
@@ -1940,7 +1872,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
                     {[
                       { id: 'fn_val' as const, label: 'f(x₀)' },
                       { id: 'extrema' as const, label: 'Cực trị' },
-                      { id: 'integral_area' as const, label: 'S tích phân' },
                       { id: 'segment' as const, label: 'Độ dài đoạn' },
                       { id: 'polygon_area' as const, label: 'S đa giác' },
                       { id: 'circle_radius' as const, label: 'Bán kính R' },
@@ -2104,10 +2035,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
                 <hr style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', margin: 0 }} />
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                  <button type="button" className="primary-btn" style={{ minHeight: 38, fontSize: 12.5 }} onClick={handleCopyShareLink}>
-                    <Link2 size={14} />
-                    <span>Sao chép Link chia sẻ 2D</span>
-                  </button>
                   <input
                     type="text"
                     className="glass-input"
@@ -2151,101 +2078,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
         accentHex={accentHex}
         onClose={() => setVariationData(null)}
       />
-
-      {/* Item 20: Casio-style Value Table Modal (x, f(x), f'(x)) */}
-      {tableModalExpr && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(2, 6, 23, 0.65)',
-            backdropFilter: 'blur(6px)',
-            zIndex: 60,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 16
-          }}
-          onClick={() => setTableModalExpr(null)}
-        >
-          <div
-            className="glass-surface"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: 'min(480px, 100%)',
-              maxHeight: '82vh',
-              borderRadius: 22,
-              padding: 16,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 10
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 800 }}>Bảng Giá Trị (MODE TABLE)</div>
-                <div className="mono" style={{ fontSize: 11.5, color: accentHex }}>
-                  y = {tableModalExpr} (m = {snapshot.paramM.toFixed(1)})
-                </div>
-              </div>
-              <button type="button" className="icon-btn" style={{ width: 30, height: 30 }} onClick={() => setTableModalExpr(null)}>
-                <X size={16} />
-              </button>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
-              <label style={{ fontSize: 11, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <span>Start</span>
-                <input className="glass-input mono" style={{ padding: '6px 8px', fontSize: 12 }} value={tableStart} onChange={(e) => setTableStart(e.target.value)} />
-              </label>
-              <label style={{ fontSize: 11, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <span>End</span>
-                <input className="glass-input mono" style={{ padding: '6px 8px', fontSize: 12 }} value={tableEnd} onChange={(e) => setTableEnd(e.target.value)} />
-              </label>
-              <label style={{ fontSize: 11, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <span>Step</span>
-                <input className="glass-input mono" style={{ padding: '6px 8px', fontSize: 12 }} value={tableStep} onChange={(e) => setTableStep(e.target.value)} />
-              </label>
-            </div>
-
-            <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-              Chạm vào 1 dòng bất kỳ để nhảy thẳng tới điểm đó trên đồ thị Oxy.
-            </div>
-
-            <div className="scroll-area" style={{ flex: 1, borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'rgba(2,6,23,0.4)' }}>
-              <table className="mono" style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', textAlign: 'center' }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border-subtle)', position: 'sticky', top: 0, background: 'rgba(15,23,42,0.92)' }}>
-                    <th style={{ padding: '7px 6px' }}>x</th>
-                    <th style={{ padding: '7px 6px', color: accentHex }}>f(x)</th>
-                    <th style={{ padding: '7px 6px', color: '#fbbf24' }}>f&apos;(x)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {valueTableRows.map((row) => (
-                    <tr
-                      key={row.x}
-                      onClick={() => {
-                        if (Number.isFinite(row.y)) {
-                          setView((v) => ({ ...v, cx: row.x, cy: row.y }));
-                          setActiveTool('trace');
-                          setTraceX(row.x);
-                          setTableModalExpr(null);
-                        }
-                      }}
-                      style={{ borderBottom: '1px solid rgba(148,163,184,0.12)', cursor: 'pointer' }}
-                    >
-                      <td style={{ padding: '6px' }}>{format2DNum(row.x)}</td>
-                      <td style={{ padding: '6px', fontWeight: 700 }}>{Number.isFinite(row.y) ? row.y.toFixed(4) : 'Không XĐ'}</td>
-                      <td style={{ padding: '6px', color: '#fbbf24' }}>{Number.isFinite(row.dy) ? row.dy.toFixed(4) : '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

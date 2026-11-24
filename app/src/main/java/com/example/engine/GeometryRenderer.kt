@@ -152,16 +152,9 @@ object GeometryRenderer {
             drawGrid(canvas, proj, density, canvasTheme.gridMinorArgb, canvasTheme.gridMajorArgb, scratch)
         }
 
-        val unfoldedFaces = if (uiState.unfoldRatio > 0.005f && !snap.shape.isRound) {
-            Geo3DMathHelpers.buildUnfoldedFaces(scene, snap.shape, uiState.unfoldRatio)
-        } else null
-
-        if (unfoldedFaces != null) {
-            drawUnfoldedPolyhedronNet(canvas, proj, unfoldedFaces, density, useDarkInk, scratch)
-        } else {
-            // 3. Translucent 3D Surfaces: Polyhedra, Curved Meshes (Cylinder/Cone/Sphere), Sections & Custom Planes
-            val sortedFaces = scratch.sortedFaces
-            sortedFaces.clear()
+        // 3. Translucent 3D Surfaces: Polyhedra, Curved Meshes (Cylinder/Cone/Sphere), Sections & Custom Planes
+        val sortedFaces = scratch.sortedFaces
+        sortedFaces.clear()
             var poolCursor = 0
             for (face in scene.faces) {
                 val pts = face.points
@@ -294,47 +287,8 @@ object GeometryRenderer {
                 paint.color = prevColor
             }
 
-            // 5b. Round Body Silhouette Generators (Exact 3D perspective tangent outlines for cylinder/cone/sphere)
-            scene.roundBodyHint?.let { drawRoundBodySilhouettes(canvas, proj, camPos, it, solidEdgePaint, scratch) }
-        }
-
-        val solidEdgePaint = scratch.solidEdgePaint.apply {
-            strokeWidth = 1.7f * density
-            color = if (useDarkInk) 0xFF0F172A.toInt() else canvasTheme.edgeSolidArgb
-        }
-        val dashedEdgePaint = scratch.dashedEdgePaint.apply {
-            strokeWidth = 1.35f * density
-            color = if (useDarkInk) 0xFF64748B.toInt() else canvasTheme.edgeDashedArgb
-            pathEffect = scratch.dash75
-        }
-
-        // 5c. Circumscribed & Inscribed Spheres (3D wireframe great-circle rings + center badge)
-        if (unfoldedFaces == null && (uiState.showCircumSphere || uiState.showInSphere)) {
-            val originWorld = ShapeBuilder.getOriginWorld(scene.pointRegistry, snap.originPoint)
-            if (uiState.showCircumSphere) {
-                Geo3DMathHelpers.computeCircumSphere(scene, snap, originWorld)?.let { sp ->
-                    drawWireframeSphere(canvas, proj, sp.centerWorld, sp.radius, 0xCC38BDF8.toInt(), "I", density, scratch)
-                }
-            }
-            if (uiState.showInSphere) {
-                Geo3DMathHelpers.computeInSphere(scene, snap, originWorld)?.let { sp ->
-                    drawWireframeSphere(canvas, proj, sp.centerWorld, sp.radius, 0xCC10B981.toInt(), "Iₙₜ", density, scratch)
-                }
-            }
-        }
-
-        // 5d. Skew Lines Common Perpendicular Segment (H₁H₂)
-        if (unfoldedFaces == null && uiState.showSkewPerp) {
-            val vA = scene.pointRegistry[uiState.calcPointA]
-            val vB = scene.pointRegistry[uiState.calcPointB]
-            val vC = scene.pointRegistry[uiState.skewPointC]
-            val vD = scene.pointRegistry[uiState.skewPointD]
-            if (vA != null && vB != null && vC != null && vD != null) {
-                Geo3DMathHelpers.computeSkewLinesDistance(vA, vB, vC, vD)?.let { skew ->
-                    drawSkewCommonPerp(canvas, proj, skew, density, scratch)
-                }
-            }
-        }
+        // 5b. Round Body Silhouette Generators (Exact 3D perspective tangent outlines for cylinder/cone/sphere)
+        scene.roundBodyHint?.let { drawRoundBodySilhouettes(canvas, proj, camPos, it, solidEdgePaint, scratch) }
 
         // 6. Section, Dynamic 3-Point Section & Custom Plane Borders
         scene.sectionBorder?.let { pts ->

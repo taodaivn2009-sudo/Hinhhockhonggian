@@ -1234,24 +1234,36 @@ export function getCameraBasis(cam: Camera3D): CameraBasis3D {
   return { camPos, forward, right, up };
 }
 
+export function projectWithBasis(
+  p: Vec3,
+  basis: CameraBasis3D,
+  halfW: number,
+  centerY: number,
+  focal: number
+): { x: number; y: number; depth: number } {
+  const rx = p.x - basis.camPos.x;
+  const ry = p.y - basis.camPos.y;
+  const rz = p.z - basis.camPos.z;
+  const cx = rx * basis.right.x + ry * basis.right.y + rz * basis.right.z;
+  const cy = rx * basis.up.x + ry * basis.up.y + rz * basis.up.z;
+  const cz = Math.max(0.2, rx * basis.forward.x + ry * basis.forward.y + rz * basis.forward.z);
+  const invZ = focal / cz;
+  return {
+    x: halfW + cx * invZ,
+    y: centerY - cy * invZ,
+    depth: cz
+  };
+}
+
 export function projectPoint(
   p: Vec3,
   cam: Camera3D,
   width: number,
   height: number
 ): { x: number; y: number; depth: number } {
-  const { camPos, forward, right, up } = getCameraBasis(cam);
-  const rel = sub3(p, camPos);
-  const cx = dot3(rel, right);
-  const cy = dot3(rel, up);
-  const cz = Math.max(0.2, dot3(rel, forward));
+  const basis = getCameraBasis(cam);
   const focal = Math.min(width, height) * 1.15;
-
-  return {
-    x: width * 0.5 + (cx / cz) * focal,
-    y: height * 0.52 - (cy / cz) * focal,
-    depth: cz
-  };
+  return projectWithBasis(p, basis, width * 0.5, height * 0.52, focal);
 }
 
 /**

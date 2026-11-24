@@ -425,19 +425,6 @@ fun Geo2DStudioScreen(
                     )
                 }
             }
-
-            // 10. Casio-Style Value Table (MODE TABLE) Dialog
-            uiState.valueTableFnId?.let { targetId ->
-                val targetFn = uiState.snapshot.functions.firstOrNull { it.id == targetId }
-                if (targetFn != null) {
-                    Geo2DValueTableDialog(
-                        fn = targetFn,
-                        paramM = uiState.snapshot.paramM,
-                        onJumpToPoint = { x, y -> viewModel.jumpToPointAndTrace(x, y) },
-                        onDismiss = { viewModel.closeValueTable() }
-                    )
-                }
-            }
         }
     }
 }

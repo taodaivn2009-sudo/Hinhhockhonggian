@@ -37,8 +37,10 @@ import {
   exportSceneToObj,
   exportSceneToSvg,
   formatMathNum,
+  getCameraBasis,
   nextAutoPointName,
   projectPoint,
+  projectWithBasis,
   sub3,
   dot3,
   cross3,
@@ -47,12 +49,7 @@ import {
 } from '../engine/geo3d';
 import {
   buildOccluderFaces,
-  buildUnfoldedFaces3D,
-  computeCircumSphere,
-  computeInSphere,
-  computeSkewLinesDistance,
   formatCoord3D,
-  getCameraWorldPosition,
   getRoundBodyHint,
   isSegmentOccludedBySolid
 } from '../engine/geo3dAdvanced';
@@ -68,7 +65,6 @@ import {
   findBestRailForPoint3D,
   findNearestEdgeHit3D
 } from '../engine/geo3dDragSnap';
-import { buildShareUrl3D } from '../services/shareUrl';
 import { AiDrawingPlan, Sensitivity3D, ThemeMode } from '../types/app';
 import { SavedProject3D, Space3DExportModal } from './Space3DExportModal';
 import { InspectorTab3D, Space3DInspector } from './Space3DInspector';
@@ -137,7 +133,13 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
   const [undoStack, setUndoStack] = useState<Scene3DSnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<Scene3DSnapshot[]>([]);
 
-  const [camera, setCamera] = useState<Camera3D>(DEFAULT_CAMERA);
+  const cameraRef = useRef<Camera3D>({
+    theta: DEFAULT_CAMERA.theta,
+    phi: DEFAULT_CAMERA.phi,
+    radius: DEFAULT_CAMERA.radius,
+    target: { ...DEFAULT_CAMERA.target }
+  });
+  const rafRef = useRef<number | null>(null);
   const [mode, setMode] = useState<InteractionMode3D>('view');
   const [dragConstraint, setDragConstraint] = useState<DragConstraint3D>('horizontal');
   const [keepRelations, setKeepRelations] = useState<boolean>(true);
@@ -147,9 +149,6 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
   const [showHiddenDashed, setShowHiddenDashed] = useState<boolean>(true);
   const [showAxes, setShowAxes] = useState<boolean>(true);
   const [autoRotate, setAutoRotate] = useState<boolean>(false);
-  const [showCircumSphere, setShowCircumSphere] = useState<boolean>(false);
-  const [showInSphere, setShowInSphere] = useState<boolean>(false);
-  const [unfoldRatio, setUnfoldRatio] = useState<number>(0);
 
   const [inspectorOpen, setInspectorOpen] = useState<boolean>(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab3D>('shapes');
@@ -163,8 +162,6 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
   const [edgePreview, setEdgePreview] = useState<EdgeHit3D | null>(null);
   const [dragFeedback, setDragFeedback] = useState<LiveDragFeedback | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
-
-  const [skewOverlay, setSkewOverlay] = useState<{ a1: string; a2: string; b1: string; b2: string } | null>(null);
 
   // Replay
   const [replayStep, setReplayStep] = useState<number | null>(null);
@@ -296,9 +293,6 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
           : null
       };
     });
-    if (externalPlan.showCircumSphere !== undefined) {
-      setShowCircumSphere(Boolean(externalPlan.showCircumSphere));
-    }
     onPlanConsumed();
     showToast(`Đã áp dụng: ${externalPlan.title}`);
   }, [externalPlan, commitSnap, onPlanConsumed, showToast]);
@@ -347,27 +341,11 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
     [snap.vertexOverrides]
   );
 
-  const circumSphere = useMemo(
-    () => computeCircumSphere(scene, snap.shapeKey, snap.a, snap.b, snap.h, originWorld),
-    [scene, snap.shapeKey, snap.a, snap.b, snap.h, originWorld]
+  const occluderFaces = useMemo(() => buildOccluderFaces(scene), [scene]);
+  const roundBodyHint = useMemo(
+    () => getRoundBodyHint(snap.shapeKey, snap.a, snap.h),
+    [snap.shapeKey, snap.a, snap.h]
   );
-  const inSphere = useMemo(
-    () => computeInSphere(scene, snap.shapeKey, snap.a, snap.b, snap.h, originWorld),
-    [scene, snap.shapeKey, snap.a, snap.b, snap.h, originWorld]
-  );
-  const unfoldedFaces = useMemo(
-    () => buildUnfoldedFaces3D(scene, snap.shapeKey, unfoldRatio),
-    [scene, snap.shapeKey, unfoldRatio]
-  );
-  const skewLinesData = useMemo(() => {
-    if (!skewOverlay) return null;
-    const a1 = scene.pointRegistry[skewOverlay.a1];
-    const a2 = scene.pointRegistry[skewOverlay.a2];
-    const b1 = scene.pointRegistry[skewOverlay.b1];
-    const b2 = scene.pointRegistry[skewOverlay.b2];
-    if (!a1 || !a2 || !b1 || !b2) return null;
-    return computeSkewLinesDistance(a1, a2, b1, b2);
-  }, [skewOverlay, scene.pointRegistry]);
 
   // Replay timer
   const totalConstructionSteps =
@@ -392,26 +370,52 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
     return () => window.clearInterval(id);
   }, [isReplaying, totalConstructionSteps]);
 
-  // Auto-rotate animation
-  useEffect(() => {
-    if (!autoRotate) return;
-    let rafId = 0;
-    let last = performance.now();
-    const tick = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
-      last = now;
-      if (!dragSessionRef.current) {
-        setCamera((c) => ({ ...c, theta: c.theta + dt * 0.42 }));
-      }
-      rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
-  }, [autoRotate]);
+  // Keep latest non-camera render state in a ref so canvas renders at 60fps with ZERO React re-renders during orbit/zoom
+  const renderStateRef = useRef({
+    themeMode,
+    accentHex,
+    showAxes,
+    originWorld,
+    scene,
+    occluderFaces,
+    roundBodyHint,
+    snap,
+    showFaces,
+    showHiddenDashed,
+    replayStep,
+    dragFeedback,
+    dragConstraint,
+    mode,
+    edgePreview,
+    selectedFirstPt,
+    inspectedVertex
+  });
+  renderStateRef.current = {
+    themeMode,
+    accentHex,
+    showAxes,
+    originWorld,
+    scene,
+    occluderFaces,
+    roundBodyHint,
+    snap,
+    showFaces,
+    showHiddenDashed,
+    replayStep,
+    dragFeedback,
+    dragConstraint,
+    mode,
+    edgePreview,
+    selectedFirstPt,
+    inspectedVertex
+  };
 
   // ===================== CANVAS 3D RENDERING ENGINE =====================
-  const renderSceneToCanvas = useCallback(
+  const drawSceneToCtx = useCallback(
     (ctx: CanvasRenderingContext2D, width: number, height: number, clearTransparent = false) => {
+      const st = renderStateRef.current;
+      const cam = cameraRef.current;
+
       ctx.clearRect(0, 0, width, height);
       if (!clearTransparent) {
         const bgGrad = ctx.createRadialGradient(
@@ -422,7 +426,7 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
           height * 0.5,
           Math.max(width, height) * 0.72
         );
-        if (themeMode === 'light') {
+        if (st.themeMode === 'light') {
           bgGrad.addColorStop(0, '#f8fbff');
           bgGrad.addColorStop(1, '#dce8f8');
         } else {
@@ -433,76 +437,47 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
         ctx.fillRect(0, 0, width, height);
       }
 
-      const isLight = themeMode === 'light';
-      const camPos = getCameraWorldPosition(camera);
-      const proj = (p: Vec3) => projectPoint(p, camera, width, height);
-
-      // Helper to draw wireframe sphere (circumscribed / inscribed)
-      const drawWireSphere = (center: Vec3, radius: number, color: string, label: string) => {
-        ctx.save();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.15;
-        ctx.setLineDash([4, 4]);
-        const segs = 36;
-        // 3 great circles
-        const drawCircle = (fn: (a: number) => Vec3) => {
-          ctx.beginPath();
-          for (let i = 0; i <= segs; i++) {
-            const ang = (i * 2 * Math.PI) / segs;
-            const p = proj(fn(ang));
-            if (i === 0) ctx.moveTo(p.x, p.y);
-            else ctx.lineTo(p.x, p.y);
-          }
-          ctx.stroke();
-        };
-        drawCircle((a) => ({ x: center.x + radius * Math.cos(a), y: center.y, z: center.z + radius * Math.sin(a) }));
-        drawCircle((a) => ({ x: center.x + radius * Math.cos(a), y: center.y + radius * Math.sin(a), z: center.z }));
-        drawCircle((a) => ({ x: center.x, y: center.y + radius * Math.sin(a), z: center.z + radius * Math.cos(a) }));
-
-        // Center dot + label
-        ctx.setLineDash([]);
-        const cp = proj(center);
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(cp.x, cp.y, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.font = '700 11px "JetBrains Mono", monospace';
-        ctx.fillText(label, cp.x + 7, cp.y - 5);
-        ctx.restore();
-      };
+      const isLight = st.themeMode === 'light';
+      // Compute camera basis ONCE per frame instead of per vertex/edge!
+      const basis = getCameraBasis(cam);
+      const camPos = basis.camPos;
+      const halfW = width * 0.5;
+      const centerY = height * 0.52;
+      const focal = Math.min(width, height) * 1.15;
+      const proj = (p: Vec3) => projectWithBasis(p, basis, halfW, centerY, focal);
 
       // 1. Subtle Oxy Ground Grid
       ctx.save();
       ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.08)' : 'rgba(148, 163, 184, 0.11)';
       ctx.lineWidth = 1;
       const gridLim = 5;
+      ctx.beginPath();
       for (let g = -gridLim; g <= gridLim; g++) {
         const a1 = proj({ x: g, y: 0, z: -gridLim });
         const b1 = proj({ x: g, y: 0, z: gridLim });
-        ctx.beginPath();
         ctx.moveTo(a1.x, a1.y);
         ctx.lineTo(b1.x, b1.y);
-        ctx.stroke();
 
         const a2 = proj({ x: -gridLim, y: 0, z: g });
         const b2 = proj({ x: gridLim, y: 0, z: g });
-        ctx.beginPath();
         ctx.moveTo(a2.x, a2.y);
         ctx.lineTo(b2.x, b2.y);
-        ctx.stroke();
       }
+      ctx.stroke();
       ctx.restore();
 
       // 2. Oxyz Coordinate Axes anchored at originWorld
-      if (showAxes) {
+      if (st.showAxes) {
         const axisLen = 4.6;
+        const ow = st.originWorld;
         const axes: { end: Vec3; color: string; label: string }[] = [
-          { end: { x: originWorld.x + axisLen, y: originWorld.y, z: originWorld.z }, color: '#f43f5e', label: 'x' },
-          { end: { x: originWorld.x, y: originWorld.y, z: originWorld.z + axisLen }, color: '#10b981', label: 'y' },
-          { end: { x: originWorld.x, y: originWorld.y + axisLen, z: originWorld.z }, color: '#38bdf8', label: 'z' }
+          { end: { x: ow.x + axisLen, y: ow.y, z: ow.z }, color: '#f43f5e', label: 'x' },
+          { end: { x: ow.x, y: ow.y, z: ow.z + axisLen }, color: '#10b981', label: 'y' },
+          { end: { x: ow.x, y: ow.y + axisLen, z: ow.z }, color: '#38bdf8', label: 'z' }
         ];
-        const oProj = proj(originWorld);
+        const oProj = proj(ow);
         ctx.save();
+        ctx.font = '800 13px "Plus Jakarta Sans", sans-serif';
         for (const ax of axes) {
           const eProj = proj(ax.end);
           ctx.strokeStyle = ax.color;
@@ -512,7 +487,6 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
           ctx.lineTo(eProj.x, eProj.y);
           ctx.stroke();
 
-          // Arrow tip
           const ang = Math.atan2(eProj.y - oProj.y, eProj.x - oProj.x);
           ctx.fillStyle = ax.color;
           ctx.beginPath();
@@ -522,202 +496,162 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
           ctx.closePath();
           ctx.fill();
 
-          ctx.font = '800 13px "Plus Jakarta Sans", sans-serif';
           ctx.fillText(ax.label, eProj.x + 6, eProj.y + 4);
         }
         ctx.restore();
       }
 
-      // 3. Circumscribed & Inscribed Spheres (behind/around solid)
-      if (showCircumSphere && circumSphere) {
-        drawWireSphere(circumSphere.centerWorld, circumSphere.radius, 'rgba(56, 189, 248, 0.7)', `I_ng (R=${formatMathNum(circumSphere.radius)})`);
-      }
-      if (showInSphere && inSphere) {
-        drawWireSphere(inSphere.centerWorld, inSphere.radius, 'rgba(16, 185, 129, 0.78)', `I_n (r=${formatMathNum(inSphere.radius)})`);
-      }
-
-      // 4. Solid Geometry OR Unfolded Polyhedron Net
-      const occluderFaces = buildOccluderFaces(scene);
-      const roundBodyHint = unfoldRatio > 0.01 ? null : getRoundBodyHint(snap.shapeKey, snap.a, snap.h);
-
-      if (unfoldedFaces && unfoldRatio > 0.001) {
-        // Render unfolded net
-        const sortedNet = [...unfoldedFaces]
-          .map((uf) => {
-            const pPts = uf.points.map(proj);
-            const avgDepth = pPts.reduce((s, p) => s + p.depth, 0) / Math.max(1, pPts.length);
-            return { uf, pPts, avgDepth };
+      // 3. Directional Shaded Solid Faces (Painter's Algorithm)
+      if (st.showFaces) {
+        const lightDir = norm3({ x: 0.45, y: 0.85, z: 0.55 });
+        const faceItems = st.scene.faces
+          .map((face) => {
+            const pts3D = face.map((i) => st.scene.vertices[i].pos);
+            const pts2D = pts3D.map(proj);
+            const avgDepth = pts2D.reduce((s, p) => s + p.depth, 0) / Math.max(1, pts2D.length);
+            const n =
+              pts3D.length >= 3
+                ? norm3(cross3(sub3(pts3D[1], pts3D[0]), sub3(pts3D[2], pts3D[0])))
+                : { x: 0, y: 1, z: 0 };
+            const shade = 0.5 + 0.5 * Math.abs(dot3(n, lightDir));
+            return { pts2D, avgDepth, shade };
           })
           .sort((a, b) => b.avgDepth - a.avgDepth);
 
         ctx.save();
-        for (const item of sortedNet) {
+        ctx.fillStyle = st.accentHex;
+        for (const f of faceItems) {
           ctx.beginPath();
-          item.pPts.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+          f.pts2D.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
           ctx.closePath();
-          ctx.fillStyle = item.uf.isBase
-            ? 'rgba(16, 185, 129, 0.25)'
-            : isLight
-            ? 'rgba(2, 132, 199, 0.16)'
-            : 'rgba(56, 189, 248, 0.22)';
+          ctx.globalAlpha = (isLight ? 0.10 : 0.12) + f.shade * (isLight ? 0.12 : 0.14);
           ctx.fill();
-          ctx.strokeStyle = item.uf.isBase ? '#10b981' : isLight ? '#0f172a' : '#e2e8f0';
-          ctx.lineWidth = 2;
-          ctx.stroke();
         }
         ctx.restore();
-      } else {
-        // Directional Shaded Solid Faces (Painter's Algorithm)
-        if (showFaces) {
-          const lightDir = norm3({ x: 0.45, y: 0.85, z: 0.55 });
-          const faceItems = scene.faces
-            .map((face) => {
-              const pts3D = face.map((i) => scene.vertices[i].pos);
-              const pts2D = pts3D.map(proj);
-              const avgDepth = pts2D.reduce((s, p) => s + p.depth, 0) / Math.max(1, pts2D.length);
-              const n = pts3D.length >= 3 ? norm3(cross3(sub3(pts3D[1], pts3D[0]), sub3(pts3D[2], pts3D[0]))) : { x: 0, y: 1, z: 0 };
-              const shade = 0.5 + 0.5 * Math.abs(dot3(n, lightDir));
-              return { pts2D, avgDepth, shade };
-            })
-            .sort((a, b) => b.avgDepth - a.avgDepth);
+      }
 
-          ctx.save();
-          for (const f of faceItems) {
-            ctx.beginPath();
-            f.pts2D.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-            ctx.closePath();
-            const alpha = (isLight ? 0.10 : 0.12) + f.shade * (isLight ? 0.12 : 0.14);
-            ctx.fillStyle = accentHex;
-            ctx.globalAlpha = alpha;
-            ctx.fill();
-          }
-          ctx.restore();
-        }
-
-        // Horizontal Cross-Section Plane (Mặt cắt ngang song song đáy)
-        if (snap.showSection && scene.horizontalSection && scene.horizontalSection.length >= 3) {
-          const sec2D = scene.horizontalSection.map(proj);
-          ctx.save();
-          ctx.beginPath();
-          sec2D.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-          ctx.closePath();
-          ctx.fillStyle = 'rgba(245, 158, 11, 0.28)';
-          ctx.fill();
-          ctx.strokeStyle = '#fbbf24';
-          ctx.lineWidth = 2.2;
-          ctx.stroke();
-          ctx.restore();
-        }
-
-        // Dynamic 3-Point Cross-Section
-        if (scene.dynamicSection && scene.dynamicSection.polygon.length >= 3) {
-          const poly2D = scene.dynamicSection.polygon.map(proj);
-          ctx.save();
-          ctx.beginPath();
-          poly2D.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-          ctx.closePath();
-          ctx.fillStyle = 'rgba(16, 185, 129, 0.28)';
-          ctx.fill();
-          ctx.strokeStyle = '#34d399';
-          ctx.lineWidth = 2.4;
-          ctx.stroke();
-          ctx.restore();
-        }
-
-        // Custom Planes (respecting replay step)
-        const maxPlanes =
-          replayStep === null
-            ? snap.customPlanes.length
-            : Math.max(0, replayStep - snap.customPoints.length - snap.customXYZPoints.length - snap.customLines.length);
-
-        for (let i = 0; i < Math.min(snap.customPlanes.length, maxPlanes); i++) {
-          const pl = snap.customPlanes[i];
-          const pts3D = pl.pts.map((n) => scene.pointRegistry[n]).filter(Boolean);
-          if (pts3D.length < 3) continue;
-          const pts2D = pts3D.map(proj);
-          ctx.save();
-          ctx.beginPath();
-          pts2D.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-          ctx.closePath();
-          ctx.fillStyle = pl.color;
-          ctx.globalAlpha = 0.24;
-          ctx.fill();
-          ctx.globalAlpha = 0.85;
-          ctx.strokeStyle = pl.color;
-          ctx.lineWidth = 1.6;
-          ctx.stroke();
-          ctx.restore();
-        }
-
-        // Solid Edges with Exact SGK Hidden-Line Occlusion
+      // Horizontal Cross-Section Plane
+      if (st.snap.showSection && st.scene.horizontalSection && st.scene.horizontalSection.length >= 3) {
+        const sec2D = st.scene.horizontalSection.map(proj);
         ctx.save();
-        for (const e of scene.edges) {
-          const p1 = scene.vertices[e.from].pos;
-          const p2 = scene.vertices[e.to].pos;
-          const a = proj(p1);
-          const b = proj(p2);
-          const hidden =
-            showHiddenDashed && isSegmentOccludedBySolid(p1, p2, camPos, occluderFaces, roundBodyHint);
+        ctx.beginPath();
+        sec2D.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.28)';
+        ctx.fill();
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 2.2;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Dynamic 3-Point Cross-Section
+      if (st.scene.dynamicSection && st.scene.dynamicSection.polygon.length >= 3) {
+        const poly2D = st.scene.dynamicSection.polygon.map(proj);
+        ctx.save();
+        ctx.beginPath();
+        poly2D.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.28)';
+        ctx.fill();
+        ctx.strokeStyle = '#34d399';
+        ctx.lineWidth = 2.4;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Custom Planes (respecting replay step)
+      const maxPlanes =
+        st.replayStep === null
+          ? st.snap.customPlanes.length
+          : Math.max(0, st.replayStep - st.snap.customPoints.length - st.snap.customXYZPoints.length - st.snap.customLines.length);
+
+      for (let i = 0; i < Math.min(st.snap.customPlanes.length, maxPlanes); i++) {
+        const pl = st.snap.customPlanes[i];
+        const pts3D = pl.pts.map((n) => st.scene.pointRegistry[n]).filter(Boolean);
+        if (pts3D.length < 3) continue;
+        const pts2D = pts3D.map(proj);
+        ctx.save();
+        ctx.beginPath();
+        pts2D.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+        ctx.closePath();
+        ctx.fillStyle = pl.color;
+        ctx.globalAlpha = 0.24;
+        ctx.fill();
+        ctx.globalAlpha = 0.85;
+        ctx.strokeStyle = pl.color;
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // 4. Solid Edges with Exact SGK Hidden-Line Occlusion
+      ctx.save();
+      for (const e of st.scene.edges) {
+        const p1 = st.scene.vertices[e.from].pos;
+        const p2 = st.scene.vertices[e.to].pos;
+        const a = proj(p1);
+        const b = proj(p2);
+        const hidden =
+          st.showHiddenDashed && isSegmentOccludedBySolid(p1, p2, camPos, st.occluderFaces, st.roundBodyHint);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        if (hidden) {
+          ctx.setLineDash([6, 5]);
+          ctx.strokeStyle = isLight ? 'rgba(30, 41, 59, 0.45)' : 'rgba(148, 163, 184, 0.56)';
+          ctx.lineWidth = 1.5;
+        } else {
+          ctx.setLineDash([]);
+          ctx.strokeStyle = isLight ? '#0f172a' : '#f1f5f9';
+          ctx.lineWidth = 2.15;
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Altitude Line + Red Right-Angle L Corner Mark
+      if (st.scene.altitude) {
+        const { top, foot, ref } = st.scene.altitude;
+        const aTop = proj(top);
+        const aFoot = proj(foot);
+        ctx.save();
+        ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = '#f43f5e';
+        ctx.lineWidth = 1.85;
+        ctx.beginPath();
+        ctx.moveTo(aTop.x, aTop.y);
+        ctx.lineTo(aFoot.x, aFoot.y);
+        ctx.stroke();
+
+        const lPts = buildRightAngleMark3D(top, foot, ref, 0.34);
+        if (lPts) {
+          const p1 = proj(lPts[0]);
+          const p2 = proj(lPts[1]);
+          const p3 = proj(lPts[2]);
+          ctx.setLineDash([]);
+          ctx.strokeStyle = '#fb7185';
+          ctx.lineWidth = 1.8;
           ctx.beginPath();
-          ctx.moveTo(a.x, a.y);
-          ctx.lineTo(b.x, b.y);
-          if (hidden) {
-            ctx.setLineDash([6, 5]);
-            ctx.strokeStyle = isLight ? 'rgba(30, 41, 59, 0.45)' : 'rgba(148, 163, 184, 0.56)';
-            ctx.lineWidth = 1.5;
-          } else {
-            ctx.setLineDash([]);
-            ctx.strokeStyle = isLight ? '#0f172a' : '#f1f5f9';
-            ctx.lineWidth = 2.15;
-          }
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.lineTo(p3.x, p3.y);
           ctx.stroke();
         }
         ctx.restore();
-
-        // Altitude Line + Red Right-Angle L Corner Mark
-        if (scene.altitude) {
-          const { top, foot, ref } = scene.altitude;
-          const aTop = proj(top);
-          const aFoot = proj(foot);
-          ctx.save();
-          ctx.setLineDash([5, 4]);
-          ctx.strokeStyle = '#f43f5e';
-          ctx.lineWidth = 1.85;
-          ctx.beginPath();
-          ctx.moveTo(aTop.x, aTop.y);
-          ctx.lineTo(aFoot.x, aFoot.y);
-          ctx.stroke();
-
-          // Right-angle L symbol at altitude foot
-          const lPts = buildRightAngleMark3D(top, foot, ref, 0.34);
-          if (lPts) {
-            const p1 = proj(lPts[0]);
-            const p2 = proj(lPts[1]);
-            const p3 = proj(lPts[2]);
-            ctx.setLineDash([]);
-            ctx.strokeStyle = '#fb7185';
-            ctx.lineWidth = 1.8;
-            ctx.beginPath();
-            ctx.moveTo(p1.x, p1.y);
-            ctx.lineTo(p2.x, p2.y);
-            ctx.lineTo(p3.x, p3.y);
-            ctx.stroke();
-          }
-          ctx.restore();
-        }
       }
 
       // 5. Custom Constructed Lines & Vectors (respecting replay step)
       const maxLines =
-        replayStep === null
-          ? snap.customLines.length
-          : Math.max(0, replayStep - snap.customPoints.length - snap.customXYZPoints.length);
+        st.replayStep === null
+          ? st.snap.customLines.length
+          : Math.max(0, st.replayStep - st.snap.customPoints.length - st.snap.customXYZPoints.length);
 
       ctx.save();
-      for (let i = 0; i < Math.min(snap.customLines.length, maxLines); i++) {
-        const cl = snap.customLines[i];
-        const p1 = scene.pointRegistry[cl.p1];
-        const p2 = scene.pointRegistry[cl.p2];
+      for (let i = 0; i < Math.min(st.snap.customLines.length, maxLines); i++) {
+        const cl = st.snap.customLines[i];
+        const p1 = st.scene.pointRegistry[cl.p1];
+        const p2 = st.scene.pointRegistry[cl.p2];
         if (!p1 || !p2) continue;
         const a = proj(p1);
         const b = proj(p2);
@@ -725,9 +659,8 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
         const isForceDash = cl.style === 'dashed' || cl.style === 'vector_dashed';
         const autoDash =
           !isForceDash &&
-          showHiddenDashed &&
-          unfoldRatio < 0.01 &&
-          isSegmentOccludedBySolid(p1, p2, camPos, occluderFaces, roundBodyHint);
+          st.showHiddenDashed &&
+          isSegmentOccludedBySolid(p1, p2, camPos, st.occluderFaces, st.roundBodyHint);
 
         ctx.strokeStyle = cl.color;
         ctx.lineWidth = 2.4;
@@ -751,39 +684,12 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
       }
       ctx.restore();
 
-      // 6. Skew Lines Common Perpendicular H1H2
-      if (skewLinesData && !skewLinesData.isIntersecting) {
-        const h1 = proj(skewLinesData.closestOnLine1);
-        const h2 = proj(skewLinesData.closestOnLine2);
+      // 6. Drag Visual Guides (Pink Constraint Rail + Emerald Magnetic Snap Projection Guides)
+      if (st.dragFeedback) {
         ctx.save();
-        ctx.strokeStyle = '#f43f5e';
-        ctx.lineWidth = 2.8;
-        ctx.setLineDash([4, 3]);
-        ctx.beginPath();
-        ctx.moveTo(h1.x, h1.y);
-        ctx.lineTo(h2.x, h2.y);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle = '#f43f5e';
-        for (const [pt, lbl] of [
-          [h1, 'H₁'],
-          [h2, 'H₂']
-        ] as const) {
-          ctx.beginPath();
-          ctx.arc(pt.x, pt.y, 4.5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.font = '800 12px "Plus Jakarta Sans", sans-serif';
-          ctx.fillText(lbl, pt.x + 7, pt.y - 5);
-        }
-        ctx.restore();
-      }
-
-      // 7. Drag Visual Guides (Pink Constraint Rail + Emerald Magnetic Snap Projection Guides)
-      if (dragFeedback) {
-        ctx.save();
-        if (dragConstraint === 'vertical') {
-          const pBot = proj({ x: dragFeedback.worldPos.x, y: -2.0, z: dragFeedback.worldPos.z });
-          const pTop = proj({ x: dragFeedback.worldPos.x, y: 8.5, z: dragFeedback.worldPos.z });
+        if (st.dragConstraint === 'vertical') {
+          const pBot = proj({ x: st.dragFeedback.worldPos.x, y: -2.0, z: st.dragFeedback.worldPos.z });
+          const pTop = proj({ x: st.dragFeedback.worldPos.x, y: 8.5, z: st.dragFeedback.worldPos.z });
           ctx.strokeStyle = '#ec4899';
           ctx.lineWidth = 2.2;
           ctx.setLineDash([6, 4]);
@@ -791,9 +697,9 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
           ctx.moveTo(pBot.x, pBot.y);
           ctx.lineTo(pTop.x, pTop.y);
           ctx.stroke();
-        } else if (dragConstraint === 'segment' && dragFeedback.rail) {
-          const rA = proj(dragFeedback.rail.fromPos);
-          const rB = proj(dragFeedback.rail.toPos);
+        } else if (st.dragConstraint === 'segment' && st.dragFeedback.rail) {
+          const rA = proj(st.dragFeedback.rail.fromPos);
+          const rB = proj(st.dragFeedback.rail.toPos);
           ctx.strokeStyle = '#ec4899';
           ctx.lineWidth = 3.2;
           ctx.setLineDash([]);
@@ -803,14 +709,14 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
           ctx.stroke();
         }
 
-        if (dragFeedback.isSnapped) {
-          const wp = dragFeedback.worldPos;
+        if (st.dragFeedback.isSnapped) {
+          const wp = st.dragFeedback.worldPos;
           const sp = proj(wp);
-          const footOxy = proj({ x: wp.x, y: originWorld.y, z: wp.z });
-          const footOx = proj({ x: wp.x, y: originWorld.y, z: originWorld.z });
-          const footOy = proj({ x: originWorld.x, y: originWorld.y, z: wp.z });
+          const ow = st.originWorld;
+          const footOxy = proj({ x: wp.x, y: ow.y, z: wp.z });
+          const footOx = proj({ x: wp.x, y: ow.y, z: ow.z });
+          const footOy = proj({ x: ow.x, y: ow.y, z: wp.z });
 
-          // 3 Dashed Emerald Snap Projection Guides
           ctx.strokeStyle = '#10b981';
           ctx.lineWidth = 1.6;
           ctx.setLineDash([4, 4]);
@@ -823,7 +729,6 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
           ctx.lineTo(footOy.x, footOy.y);
           ctx.stroke();
 
-          // Glowing Emerald Snap Ring
           ctx.setLineDash([]);
           ctx.strokeStyle = '#34d399';
           ctx.lineWidth = 2.6;
@@ -834,11 +739,11 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
         ctx.restore();
       }
 
-      // 8. Direct "Chấm điểm trên cạnh" Hover Preview
-      if (mode === 'add_point' && edgePreview) {
-        const a = proj(edgePreview.fromPos);
-        const b = proj(edgePreview.toPos);
-        const hit = proj(edgePreview.worldPos);
+      // 7. Direct "Chấm điểm trên cạnh" Hover Preview
+      if (st.mode === 'add_point' && st.edgePreview) {
+        const a = proj(st.edgePreview.fromPos);
+        const b = proj(st.edgePreview.toPos);
+        const hit = proj(st.edgePreview.worldPos);
         ctx.save();
         ctx.strokeStyle = '#f59e0b';
         ctx.lineWidth = 3.2;
@@ -862,29 +767,30 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
         ctx.restore();
       }
 
-      // 9. Named Vertices & Color-Coded Pill Labels
+      // 8. Named Vertices & Color-Coded Pill Labels
       const customPointNames = new Set([
-        ...snap.customPoints.map((c) => c.name),
-        ...snap.customXYZPoints.map((c) => c.name)
+        ...st.snap.customPoints.map((c) => c.name),
+        ...st.snap.customXYZPoints.map((c) => c.name)
       ]);
       const visibleCustomPts =
-        replayStep === null
+        st.replayStep === null
           ? customPointNames
           : new Set([
-              ...snap.customPoints.slice(0, Math.min(snap.customPoints.length, replayStep)).map((c) => c.name),
-              ...snap.customXYZPoints
-                .slice(0, Math.max(0, replayStep - snap.customPoints.length))
+              ...st.snap.customPoints.slice(0, Math.min(st.snap.customPoints.length, st.replayStep)).map((c) => c.name),
+              ...st.snap.customXYZPoints
+                .slice(0, Math.max(0, st.replayStep - st.snap.customPoints.length))
                 .map((c) => c.name)
             ]);
 
       ctx.save();
-      for (const [name, worldPos] of Object.entries(scene.pointRegistry)) {
+      ctx.font = '800 12px "Plus Jakarta Sans", sans-serif';
+      for (const [name, worldPos] of Object.entries(st.scene.pointRegistry)) {
         if (customPointNames.has(name) && !visibleCustomPts.has(name)) continue;
         const p = proj(worldPos);
-        const isDragging = dragFeedback?.vertexName === name;
-        const isLinked = Boolean(dragFeedback?.linkedVertices.includes(name));
-        const isSelected = selectedFirstPt === name || inspectedVertex === name;
-        const isOrigin = snap.originPoint === name;
+        const isDragging = st.dragFeedback?.vertexName === name;
+        const isLinked = Boolean(st.dragFeedback?.linkedVertices.includes(name));
+        const isSelected = st.selectedFirstPt === name || st.inspectedVertex === name;
+        const isOrigin = st.snap.originPoint === name;
         const isCustom = customPointNames.has(name);
 
         let dotColor = isLight ? '#0284c7' : '#e2e8f0';
@@ -919,10 +825,9 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
           pillBorder = '#fde68a';
         }
 
-        // Glow ring for drag mode or active states
-        if (isDragging || isLinked || isSelected || mode === 'drag') {
+        if (isDragging || isLinked || isSelected || st.mode === 'drag') {
           ctx.beginPath();
-          ctx.arc(p.x, p.y, isDragging ? 11 : mode === 'drag' ? 7.5 : 9, 0, Math.PI * 2);
+          ctx.arc(p.x, p.y, isDragging ? 11 : st.mode === 'drag' ? 7.5 : 9, 0, Math.PI * 2);
           ctx.fillStyle = isDragging
             ? 'rgba(236,72,153,0.28)'
             : isLinked
@@ -941,8 +846,6 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
         ctx.lineWidth = 1.5;
         ctx.stroke();
 
-        // Pill label
-        ctx.font = '800 12px "Plus Jakarta Sans", sans-serif';
         const tw = ctx.measureText(name).width;
         const px = p.x + 8;
         const py = p.y - 18;
@@ -961,66 +864,100 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
       }
       ctx.restore();
     },
-    [
-      camera,
-      themeMode,
-      accentHex,
-      showAxes,
-      originWorld,
-      showCircumSphere,
-      circumSphere,
-      showInSphere,
-      inSphere,
-      scene,
-      unfoldRatio,
-      unfoldedFaces,
-      snap,
-      showFaces,
-      showHiddenDashed,
-      replayStep,
-      skewLinesData,
-      dragFeedback,
-      dragConstraint,
-      mode,
-      edgePreview,
-      selectedFirstPt,
-      inspectedVertex
-    ]
+    []
   );
 
-  // Sync Canvas Size & Repaint
+  const paintCanvasNow = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const targetW = Math.round(rect.width * dpr);
+    const targetH = Math.round(rect.height * dpr);
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawSceneToCtx(ctx, rect.width, rect.height, false);
+  }, [drawSceneToCtx]);
+
+  const scheduleRender = useCallback(() => {
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      paintCanvasNow();
+    });
+  }, [paintCanvasNow]);
+
+  // Attach ResizeObserver ONCE on mount (never churn on orbit/camera changes)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const paint = () => {
-      const rect = canvas.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const targetW = Math.round(rect.width * dpr);
-      const targetH = Math.round(rect.height * dpr);
-      if (canvas.width !== targetW || canvas.height !== targetH) {
-        canvas.width = targetW;
-        canvas.height = targetH;
-      }
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      renderSceneToCanvas(ctx, rect.width, rect.height, false);
-    };
-    paint();
-    const ro = new ResizeObserver(paint);
+    paintCanvasNow();
+    const ro = new ResizeObserver(() => scheduleRender());
     ro.observe(canvas);
-    return () => ro.disconnect();
-  }, [renderSceneToCanvas]);
+    return () => {
+      ro.disconnect();
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, [paintCanvasNow, scheduleRender]);
+
+  // Repaint when React scene/display state changes
+  useEffect(() => {
+    scheduleRender();
+  }, [
+    scheduleRender,
+    themeMode,
+    accentHex,
+    showAxes,
+    originWorld,
+    scene,
+    snap,
+    showFaces,
+    showHiddenDashed,
+    replayStep,
+    dragFeedback,
+    dragConstraint,
+    mode,
+    edgePreview,
+    selectedFirstPt,
+    inspectedVertex
+  ]);
+
+  // Auto-rotate animation (mutates cameraRef directly -> ZERO React re-renders per frame!)
+  useEffect(() => {
+    if (!autoRotate) return;
+    let rafId = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      if (!dragSessionRef.current) {
+        cameraRef.current.theta += dt * 0.42;
+        paintCanvasNow();
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [autoRotate, paintCanvasNow]);
 
   // ===================== HIT TESTING & POINTER INTERACTIONS =====================
   const findNearestVertex = useCallback(
     (sx: number, sy: number, width: number, height: number): string | null => {
       const maxHit = 26 * sensitivity.touchRadius;
+      const cam = cameraRef.current;
       let bestName: string | null = null;
       let bestDist = maxHit;
       for (const [name, worldPos] of Object.entries(scene.pointRegistry)) {
-        const p = projectPoint(worldPos, camera, width, height);
+        const p = projectPoint(worldPos, cam, width, height);
         const d = Math.hypot(sx - p.x, sy - p.y);
         if (d < bestDist) {
           bestDist = d;
@@ -1029,7 +966,7 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
       }
       return bestName;
     },
-    [scene.pointRegistry, camera, sensitivity.touchRadius]
+    [scene.pointRegistry, sensitivity.touchRadius]
   );
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1046,7 +983,7 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
     if (pointersRef.current.size === 2) {
       const pts = Array.from(pointersRef.current.values());
       pinchStartDistRef.current = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      pinchStartRadiusRef.current = camera.radius;
+      pinchStartRadiusRef.current = cameraRef.current.radius;
       dragSessionRef.current = null;
       setDragFeedback(null);
       return;
@@ -1060,7 +997,7 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
         sx,
         sy,
         scene.clickableSegments,
-        camera,
+        cameraRef.current,
         rect.width,
         rect.height,
         28 * sensitivity.touchRadius,
@@ -1168,7 +1105,7 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
         sx,
         sy,
         scene.clickableSegments,
-        camera,
+        cameraRef.current,
         rect.width,
         rect.height,
         28 * sensitivity.touchRadius,
@@ -1181,14 +1118,14 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
       pointersRef.current.set(e.pointerId, { x: sx, y: sy });
     }
 
-    // 2-finger pinch zoom
+    // 2-finger pinch zoom (ZERO React re-render!)
     if (pointersRef.current.size === 2 && pinchStartDistRef.current) {
       const pts = Array.from(pointersRef.current.values());
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
       if (dist > 10) {
         const scale = pinchStartDistRef.current / dist;
-        const nextRadius = Math.max(4.5, Math.min(26, pinchStartRadiusRef.current * Math.pow(scale, sensitivity.zoom)));
-        setCamera((c) => ({ ...c, radius: nextRadius }));
+        cameraRef.current.radius = Math.max(4.5, Math.min(26, pinchStartRadiusRef.current * Math.pow(scale, sensitivity.zoom)));
+        scheduleRender();
       }
       return;
     }
@@ -1204,11 +1141,9 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
 
     if (sess.type === 'orbit') {
       const rotSpeed = 0.0085 * sensitivity.rotation;
-      setCamera((c) => ({
-        ...c,
-        theta: c.theta - dx * rotSpeed,
-        phi: Math.max(0.08, Math.min(Math.PI - 0.08, c.phi - dy * rotSpeed))
-      }));
+      cameraRef.current.theta -= dx * rotSpeed;
+      cameraRef.current.phi = Math.max(0.08, Math.min(Math.PI - 0.08, cameraRef.current.phi - dy * rotSpeed));
+      scheduleRender();
       return;
     }
 
@@ -1217,7 +1152,7 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
       const result = computeConstrainedDrag3D({
         sx,
         sy,
-        cam: camera,
+        cam: cameraRef.current,
         width: rect.width,
         height: rect.height,
         constraint: activeConstraint,
@@ -1334,7 +1269,8 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     const factor = 1 + Math.sign(e.deltaY) * 0.08 * sensitivity.zoom;
-    setCamera((c) => ({ ...c, radius: Math.max(4.5, Math.min(26, c.radius * factor)) }));
+    cameraRef.current.radius = Math.max(4.5, Math.min(26, cameraRef.current.radius * factor));
+    scheduleRender();
   };
 
   // ===================== EXPORTS & SAVING =====================
@@ -1355,7 +1291,7 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
     const ctx = out.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(1.5, 0, 0, 1.5, 0, 0);
-    renderSceneToCanvas(ctx, out.width / 1.5, out.height / 1.5, transparentPng);
+    drawSceneToCtx(ctx, out.width / 1.5, out.height / 1.5, transparentPng);
     out.toBlob((blob) => {
       if (blob) {
         downloadFile(blob, `tooltoan-3d-${snap.shapeKey}.png`);
@@ -1365,7 +1301,7 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
   };
 
   const handleExportSvg = () => {
-    const svg = exportSceneToSvg(scene, snap, camera, accentHex);
+    const svg = exportSceneToSvg(scene, snap, cameraRef.current, accentHex);
     downloadFile(svg, `tooltoan-3d-${snap.shapeKey}.svg`);
     showToast('Đã xuất tệp Vector .SVG');
   };
@@ -1391,12 +1327,6 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
     } catch {
       showToast('Tệp JSON không hợp lệ');
     }
-  };
-
-  const handleCopyShareLink = () => {
-    const url = buildShareUrl3D(snap);
-    navigator.clipboard?.writeText(url).catch(() => {});
-    showToast('Đã sao chép liên kết chia sẻ 3D');
   };
 
   const openInspectorTab = (tab: InspectorTab3D) => {
@@ -1487,7 +1417,13 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
                     type="button"
                     className="studio-popover-item"
                     onClick={() => {
-                      setCamera((c) => ({ ...c, theta: preset.theta, phi: preset.phi, radius: preset.radius }));
+                      cameraRef.current = {
+                        ...cameraRef.current,
+                        theta: preset.theta,
+                        phi: preset.phi,
+                        radius: preset.radius
+                      };
+                      scheduleRender();
                       setCameraMenuOpen(false);
                     }}
                   >
@@ -1499,7 +1435,13 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
                   className="studio-popover-item"
                   style={{ color: accentHex }}
                   onClick={() => {
-                    setCamera(DEFAULT_CAMERA);
+                    cameraRef.current = {
+                      theta: DEFAULT_CAMERA.theta,
+                      phi: DEFAULT_CAMERA.phi,
+                      radius: DEFAULT_CAMERA.radius,
+                      target: { ...DEFAULT_CAMERA.target }
+                    };
+                    scheduleRender();
                     setCameraMenuOpen(false);
                   }}
                 >
@@ -1513,7 +1455,7 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
               type="button"
               className="glass-surface studio-icon-pill glass-press"
               onClick={() => setExportModalOpen(true)}
-              title="Lưu trữ, Chia sẻ & Xuất file"
+              title="Lưu trữ & Xuất file"
               aria-label="Lưu trữ và xuất file"
             >
               <Save size={16} />
@@ -1630,7 +1572,10 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
         <button
           type="button"
           className="studio-rail-btn"
-          onClick={() => setCamera((c) => ({ ...c, radius: Math.max(4.5, c.radius * 0.85) }))}
+          onClick={() => {
+            cameraRef.current.radius = Math.max(4.5, cameraRef.current.radius * 0.85);
+            scheduleRender();
+          }}
           title="Phóng to"
           aria-label="Phóng to"
         >
@@ -1639,7 +1584,10 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
         <button
           type="button"
           className="studio-rail-btn"
-          onClick={() => setCamera((c) => ({ ...c, radius: Math.min(26, c.radius * 1.18) }))}
+          onClick={() => {
+            cameraRef.current.radius = Math.min(26, cameraRef.current.radius * 1.18);
+            scheduleRender();
+          }}
           title="Thu nhỏ"
           aria-label="Thu nhỏ"
         >
@@ -1758,14 +1706,6 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
         onToggleAxes={() => setShowAxes((v) => !v)}
         autoRotate={autoRotate}
         onToggleAutoRotate={() => setAutoRotate((v) => !v)}
-        showCircumSphere={showCircumSphere}
-        onToggleCircumSphere={() => setShowCircumSphere((v) => !v)}
-        showInSphere={showInSphere}
-        onToggleInSphere={() => setShowInSphere((v) => !v)}
-        circumSphere={circumSphere}
-        inSphere={inSphere}
-        unfoldRatio={unfoldRatio}
-        onChangeUnfoldRatio={setUnfoldRatio}
         totalConstructionSteps={totalConstructionSteps}
         replayStep={replayStep}
         isReplaying={isReplaying}
@@ -1785,8 +1725,6 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
         onUpdateSensitivity={onUpdateSensitivity}
         onSelectShape={(key) => {
           commitSnap(() => ({ ...DEFAULT_SNAPSHOT, shapeKey: key }));
-          setUnfoldRatio(0);
-          setSkewOverlay(null);
           setReplayStep(null);
           setIsReplaying(false);
           setInspectedVertex(null);
@@ -1847,8 +1785,6 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
             dynamicSection: null
           }))
         }
-        skewOverlay={skewOverlay}
-        onSetSkewOverlay={setSkewOverlay}
       />
 
       {/* BOTTOM WORKSPACE DOCK + DRAG CONSTRAINT SUB-BAR + MODE STATUS BANNER */}
@@ -2012,7 +1948,6 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
         onExportObj={handleExportObj}
         onExportJson={handleExportJson}
         onImportJson={handleImportJson}
-        onCopyShareLink={handleCopyShareLink}
         savedProjects={savedProjects}
         onSaveProject={(name) => {
           setSavedProjects((prev) => [{ id: `s3d_${Date.now()}`, name, updatedAt: Date.now(), snapshot: snap }, ...prev]);

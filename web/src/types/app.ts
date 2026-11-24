@@ -211,7 +211,7 @@ export const GLASS_PRESETS: {
 export const DEFAULT_APP_SETTINGS: AppSettingsState = {
   themeMode: 'dark',
   liquidGlass: {
-    enabled: true,
+    enabled: false,
     blurRadius: 14,
     vibrancy: 0.72,
     frostGrain: 0.30,

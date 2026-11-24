@@ -41,10 +41,7 @@ import {
   worldToMath
 } from '../engine/geo3d';
 import {
-  SphereResult3D,
   buildShapeThumbnailEdges,
-  computeDihedralAngle,
-  computeSkewLinesDistance,
   formatCoord3D
 } from '../engine/geo3dAdvanced';
 import {
@@ -91,14 +88,6 @@ interface Space3DInspectorProps {
   onToggleAxes: () => void;
   autoRotate: boolean;
   onToggleAutoRotate: () => void;
-  showCircumSphere: boolean;
-  onToggleCircumSphere: () => void;
-  showInSphere: boolean;
-  onToggleInSphere: () => void;
-  circumSphere: SphereResult3D | null;
-  inSphere: SphereResult3D | null;
-  unfoldRatio: number;
-  onChangeUnfoldRatio: (r: number) => void;
 
   // Replay
   totalConstructionSteps: number;
@@ -127,10 +116,6 @@ interface Space3DInspectorProps {
   onSetDynamicSection: (p1: string, p2: string, p3: string) => void;
   onClearDynamicSection: () => void;
   onClearAllCustom: () => void;
-
-  // Skew visualization
-  skewOverlay: { a1: string; a2: string; b1: string; b2: string } | null;
-  onSetSkewOverlay: (v: { a1: string; a2: string; b1: string; b2: string } | null) => void;
 }
 
 export const Space3DInspector: React.FC<Space3DInspectorProps> = (props) => {
@@ -162,14 +147,6 @@ export const Space3DInspector: React.FC<Space3DInspectorProps> = (props) => {
     onToggleAxes,
     autoRotate,
     onToggleAutoRotate,
-    showCircumSphere,
-    onToggleCircumSphere,
-    showInSphere,
-    onToggleInSphere,
-    circumSphere,
-    inSphere,
-    unfoldRatio,
-    onChangeUnfoldRatio,
     totalConstructionSteps,
     replayStep,
     isReplaying,
@@ -191,9 +168,7 @@ export const Space3DInspector: React.FC<Space3DInspectorProps> = (props) => {
     onRemovePlane,
     onSetDynamicSection,
     onClearDynamicSection,
-    onClearAllCustom,
-    skewOverlay,
-    onSetSkewOverlay
+    onClearAllCustom
   } = props;
 
   // Sub-tab inside Oxyz & Formulas
@@ -225,22 +200,13 @@ export const Space3DInspector: React.FC<Space3DInspectorProps> = (props) => {
   const [calcP2, setCalcP2] = useState<string>(allPointNames[1] || 'B');
   const [calcP3, setCalcP3] = useState<string>(allPointNames[2] || 'C');
 
-  const [dihQ1, setDihQ1] = useState<string>(allPointNames[0] || 'S');
-  const [dihQ2, setDihQ2] = useState<string>(allPointNames[1] || 'A');
-  const [dihQ3, setDihQ3] = useState<string>(allPointNames[2] || 'B');
-
-  const [skewA1, setSkewA1] = useState<string>(allPointNames[0] || 'S');
-  const [skewA2, setSkewA2] = useState<string>(allPointNames[1] || 'A');
-  const [skewB1, setSkewB1] = useState<string>(allPointNames[2] || 'B');
-  const [skewB2, setSkewB2] = useState<string>(allPointNames[3] || 'C');
-
   const [xyzName, setXyzName] = useState<string>('');
   const [xyzX, setXyzX] = useState<string>('1');
   const [xyzY, setXyzY] = useState<string>('1');
   const [xyzZ, setXyzZ] = useState<string>('2');
 
   // Verify Mode state
-  const [verifyMetric, setVerifyMetric] = useState<'vol' | 'sDay' | 'sXq' | 'sTp' | 'R' | 'r'>('vol');
+  const [verifyMetric, setVerifyMetric] = useState<'vol' | 'sDay' | 'sXq' | 'sTp'>('vol');
   const [verifyInput, setVerifyInput] = useState<string>('');
   const [verifyResult, setVerifyResult] = useState<{ ok: boolean; expected: number; userVal: number } | null>(null);
 
@@ -282,13 +248,6 @@ export const Space3DInspector: React.FC<Space3DInspectorProps> = (props) => {
   const sCalcP1 = safePt(calcP1, 0);
   const sCalcP2 = safePt(calcP2, 1);
   const sCalcP3 = safePt(calcP3, 2);
-  const sDihQ1 = safePt(dihQ1, 0);
-  const sDihQ2 = safePt(dihQ2, 1);
-  const sDihQ3 = safePt(dihQ3, 2);
-  const sSkewA1 = safePt(skewA1, 0);
-  const sSkewA2 = safePt(skewA2, 1);
-  const sSkewB1 = safePt(skewB1, 2);
-  const sSkewB2 = safePt(skewB2, 3);
 
   const originWorld = scene.pointRegistry[snap.originPoint] || { x: 0, y: 0, z: 0 };
 
@@ -302,26 +261,6 @@ export const Space3DInspector: React.FC<Space3DInspectorProps> = (props) => {
     return analyzeLineAndPlane(a, b, p1, p2, p3, originWorld);
   }, [scene.pointRegistry, sCalcA, sCalcB, sCalcP1, sCalcP2, sCalcP3, originWorld]);
 
-  const dihedralResult = useMemo(() => {
-    const p1 = scene.pointRegistry[sCalcP1];
-    const p2 = scene.pointRegistry[sCalcP2];
-    const p3 = scene.pointRegistry[sCalcP3];
-    const q1 = scene.pointRegistry[sDihQ1];
-    const q2 = scene.pointRegistry[sDihQ2];
-    const q3 = scene.pointRegistry[sDihQ3];
-    if (!p1 || !p2 || !p3 || !q1 || !q2 || !q3) return null;
-    return computeDihedralAngle(p1, p2, p3, q1, q2, q3, originWorld);
-  }, [scene.pointRegistry, sCalcP1, sCalcP2, sCalcP3, sDihQ1, sDihQ2, sDihQ3, originWorld]);
-
-  const skewResult = useMemo(() => {
-    const a1 = scene.pointRegistry[sSkewA1];
-    const a2 = scene.pointRegistry[sSkewA2];
-    const b1 = scene.pointRegistry[sSkewB1];
-    const b2 = scene.pointRegistry[sSkewB2];
-    if (!a1 || !a2 || !b1 || !b2) return null;
-    return computeSkewLinesDistance(a1, a2, b1, b2);
-  }, [scene.pointRegistry, sSkewA1, sSkewA2, sSkewB1, sSkewB2]);
-
   if (!open) return null;
 
   const isRound = Boolean(currentShape.isRound);
@@ -334,8 +273,6 @@ export const Space3DInspector: React.FC<Space3DInspectorProps> = (props) => {
     if (verifyMetric === 'sDay') expected = scene.metrics.sDay;
     else if (verifyMetric === 'sXq') expected = scene.metrics.sXq;
     else if (verifyMetric === 'sTp') expected = scene.metrics.sTp;
-    else if (verifyMetric === 'R') expected = circumSphere?.radius || 0;
-    else if (verifyMetric === 'r') expected = inSphere?.radius || 0;
     const relErr = Math.abs(expected) < 1e-4 ? Math.abs(userVal) : Math.abs(userVal - expected) / Math.abs(expected);
     setVerifyResult({ ok: relErr < 0.025, expected, userVal });
   };
@@ -693,63 +630,6 @@ export const Space3DInspector: React.FC<Space3DInspectorProps> = (props) => {
                 </div>
               )}
             </div>
-
-            {/* Circumscribed & Inscribed Spheres */}
-            <div className="studio-section-card">
-              <div className="studio-section-title">
-                <span>Mặt cầu Ngoại tiếp & Nội tiếp</span>
-              </div>
-              <label className="studio-switch-row">
-                <span>Mặt cầu Ngoại tiếp (R)</span>
-                <input type="checkbox" checked={showCircumSphere} onChange={onToggleCircumSphere} />
-              </label>
-              {showCircumSphere && circumSphere && (
-                <div className="mono" style={{ fontSize: 11.5, color: '#38bdf8' }}>
-                  R = {formatMathNum(circumSphere.radius)} • {circumSphere.formulaHint}
-                </div>
-              )}
-              <label className="studio-switch-row">
-                <span>Mặt cầu Nội tiếp (r)</span>
-                <input type="checkbox" checked={showInSphere} onChange={onToggleInSphere} />
-              </label>
-              {showInSphere && inSphere && (
-                <div className="mono" style={{ fontSize: 11.5, color: '#34d399' }}>
-                  r = {formatMathNum(inSphere.radius)} • {inSphere.formulaHint}
-                </div>
-              )}
-            </div>
-
-            {/* Unfold Polyhedron Net */}
-            {!isRound && (
-              <div className="studio-section-card">
-                <div className="studio-section-title">
-                  <span>Trải phẳng đa diện (Net)</span>
-                  <span className="mono" style={{ color: accentHex }}>{Math.round(unfoldRatio * 100)}%</span>
-                </div>
-                <input
-                  type="range"
-                  className="glass-slider"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={unfoldRatio}
-                  onChange={(e) => onChangeUnfoldRatio(parseFloat(e.target.value))}
-                />
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5 }}>
-                  {[0, 0.5, 1].map((v) => (
-                    <button
-                      key={v}
-                      type="button"
-                      className={`chip-btn ${Math.abs(unfoldRatio - v) < 0.03 ? 'active' : ''}`}
-                      style={{ minHeight: 28, fontSize: 11 }}
-                      onClick={() => onChangeUnfoldRatio(v)}
-                    >
-                      {Math.round(v * 100)}%
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {/* Step-by-Step Construction Replay */}
             {totalConstructionSteps > 0 && (
@@ -1232,78 +1112,6 @@ export const Space3DInspector: React.FC<Space3DInspectorProps> = (props) => {
                   )}
                 </div>
 
-                {/* Dihedral Angle */}
-                <div className="studio-section-card">
-                  <div className="studio-section-title">
-                    <span>Góc nhị diện giữa (P) & (Q)</span>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 5 }}>
-                    {[
-                      [sDihQ1, setDihQ1],
-                      [sDihQ2, setDihQ2],
-                      [sDihQ3, setDihQ3]
-                    ].map(([v, setV], i) => (
-                      <select
-                        key={i}
-                        className="glass-select"
-                        value={v as string}
-                        onChange={(e) => (setV as React.Dispatch<React.SetStateAction<string>>)(e.target.value)}
-                      >
-                        {allPointNames.map((n) => <option key={n} value={n}>(Q): {n}</option>)}
-                      </select>
-                    ))}
-                  </div>
-                  {dihedralResult && (
-                    <div className="mono" style={{ fontSize: 12 }}>
-                      ∠(P, Q) = <strong style={{ color: '#34d399' }}>{dihedralResult.angleDegrees.toFixed(1)}°</strong> (cos φ = {dihedralResult.cosPhi.toFixed(3)})
-                    </div>
-                  )}
-                </div>
-
-                {/* Skew Lines Distance + H1H2 Visual */}
-                <div className="studio-section-card">
-                  <div className="studio-section-title">
-                    <span>Khoảng cách 2 đường chéo nhau</span>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 4 }}>
-                    {[
-                      [sSkewA1, setSkewA1],
-                      [sSkewA2, setSkewA2],
-                      [sSkewB1, setSkewB1],
-                      [sSkewB2, setSkewB2]
-                    ].map(([v, setV], i) => (
-                      <select
-                        key={i}
-                        className="glass-select"
-                        style={{ padding: '7px 6px', fontSize: 12 }}
-                        value={v as string}
-                        onChange={(e) => (setV as React.Dispatch<React.SetStateAction<string>>)(e.target.value)}
-                      >
-                        {allPointNames.map((n) => <option key={n} value={n}>{n}</option>)}
-                      </select>
-                    ))}
-                  </div>
-                  {skewResult && (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                      <div className="mono" style={{ fontSize: 12 }}>
-                        d({sSkewA1}{sSkewA2}, {sSkewB1}{sSkewB2}) = <strong style={{ color: '#f472b6' }}>{formatMathNum(skewResult.distance)}</strong>
-                      </div>
-                      <button
-                        type="button"
-                        className={`chip-btn ${skewOverlay ? 'active' : ''}`}
-                        style={{ minHeight: 28, padding: '2px 9px', fontSize: 11 }}
-                        onClick={() =>
-                          onSetSkewOverlay(
-                            skewOverlay ? null : { a1: sSkewA1, a2: sSkewA2, b1: sSkewB1, b2: sSkewB2 }
-                          )
-                        }
-                      >
-                        {skewOverlay ? 'Ẩn H₁H₂' : 'Vẽ H₁H₂'}
-                      </button>
-                    </div>
-                  )}
-                </div>
-
                 {/* Add XYZ Point */}
                 <div className="studio-section-card">
                   <div className="studio-section-title">
@@ -1404,21 +1212,6 @@ export const Space3DInspector: React.FC<Space3DInspectorProps> = (props) => {
                   </div>
                 </div>
 
-                {/* Spheres Info */}
-                {circumSphere && inSphere && (
-                  <div className="studio-section-card">
-                    <div className="studio-section-title">
-                      <span>Mặt cầu Ngoại tiếp (R) & Nội tiếp (r)</span>
-                    </div>
-                    <div className="mono" style={{ fontSize: 12, color: '#38bdf8' }}>
-                      Ngoại tiếp: R = <strong>{formatMathNum(circumSphere.radius)}</strong> • I{formatCoord3D(circumSphere.centerMath)}
-                    </div>
-                    <div className="mono" style={{ fontSize: 12, color: '#34d399' }}>
-                      Nội tiếp: r = <strong>{formatMathNum(inSphere.radius)}</strong> • I{formatCoord3D(inSphere.centerMath)}
-                    </div>
-                  </div>
-                )}
-
                 {/* Verify Mode */}
                 <div className="studio-section-card">
                   <div className="studio-section-title">
@@ -1438,8 +1231,6 @@ export const Space3DInspector: React.FC<Space3DInspectorProps> = (props) => {
                       <option value="sDay">Diện tích đáy Sđáy</option>
                       <option value="sXq">Diện tích XQ</option>
                       <option value="sTp">Diện tích TP</option>
-                      <option value="R">Bán kính ngoại tiếp R</option>
-                      <option value="r">Bán kính nội tiếp r</option>
                     </select>
                     <input
                       className="glass-input"

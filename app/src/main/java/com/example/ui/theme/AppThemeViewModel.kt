@@ -14,18 +14,25 @@ class ThemePreferences(context: Context) {
     fun load(): AppThemeConfig {
         val modeName = prefs.getString(KEY_MODE, AppThemeMode.DARK.name)
         val mode = AppThemeMode.entries.firstOrNull { it.name == modeName } ?: AppThemeMode.DARK
-        val preset = AppThemePreset.fromId(prefs.getString(KEY_PRESET, AppThemePreset.MIDNIGHT_OBSERVATORY.id))
+        var preset = AppThemePreset.fromId(prefs.getString(KEY_PRESET, AppThemePreset.MIDNIGHT_OBSERVATORY.id))
         val hasCustomAccent = prefs.contains(KEY_ACCENT_ARGB)
         val customAccent = if (hasCustomAccent) prefs.getLong(KEY_ACCENT_ARGB, 0L) else null
-        val defaultGlass = LiquidGlassConfig(enabled = preset.isLiquidGlass)
-        val meetubeMigrated = prefs.getBoolean(KEY_LG_MEETUBE_MIGRATED_V3, false)
-        val liquidGlass = if (!meetubeMigrated) {
-            val enabledNow = prefs.getBoolean(KEY_LG_ENABLED, defaultGlass.enabled)
-            val migrated = LiquidGlassPresetStyle.MEETUBE.config.copy(enabled = enabledNow).sanitized()
+        val defaultGlass = LiquidGlassConfig(enabled = false)
+        val perfOffMigrated = prefs.getBoolean(KEY_LG_PERF_OFF_V4, false)
+        val liquidGlass = if (!perfOffMigrated) {
+            if (preset.isLiquidGlass) {
+                preset = if (preset.isDark) AppThemePreset.MIDNIGHT_OBSERVATORY else AppThemePreset.IVORY_PAPER
+            }
+            val migrated = LiquidGlassPresetStyle.MEETUBE.config.copy(
+                enabled = false,
+                dynamicShimmer = false
+            ).sanitized()
             prefs.edit()
+                .putString(KEY_PRESET, preset.id)
+                .putBoolean(KEY_LG_PERF_OFF_V4, true)
                 .putBoolean(KEY_LG_MEETUBE_MIGRATED_V3, true)
                 .putBoolean(KEY_LG_PERF_MIGRATED_V2, true)
-                .putBoolean(KEY_LG_ENABLED, migrated.enabled)
+                .putBoolean(KEY_LG_ENABLED, false)
                 .putFloat(KEY_LG_BLUR, migrated.blurRadius)
                 .putFloat(KEY_LG_VIBRANCY, migrated.vibrancy)
                 .putFloat(KEY_LG_FROST_GRAIN, migrated.frostGrain)
@@ -36,7 +43,7 @@ class ThemePreferences(context: Context) {
                 .putFloat(KEY_LG_SPECULAR, migrated.specularGlow)
                 .putFloat(KEY_LG_REFRACTION, migrated.refractionTint)
                 .putFloat(KEY_LG_BORDER, migrated.borderIntensity)
-                .putBoolean(KEY_LG_SHIMMER, migrated.dynamicShimmer)
+                .putBoolean(KEY_LG_SHIMMER, false)
                 .putBoolean(KEY_LG_HIGH_CONTRAST, migrated.highContrastText)
                 .apply()
             migrated
@@ -90,6 +97,7 @@ class ThemePreferences(context: Context) {
             putBoolean(KEY_LG_HIGH_CONTRAST, lg.highContrastText)
             putBoolean(KEY_LG_PERF_MIGRATED_V2, true)
             putBoolean(KEY_LG_MEETUBE_MIGRATED_V3, true)
+            putBoolean(KEY_LG_PERF_OFF_V4, true)
             apply()
         }
     }
@@ -113,6 +121,7 @@ class ThemePreferences(context: Context) {
         private const val KEY_LG_HIGH_CONTRAST = "lg_high_contrast"
         private const val KEY_LG_PERF_MIGRATED_V2 = "lg_perf_migrated_v2"
         private const val KEY_LG_MEETUBE_MIGRATED_V3 = "lg_meetube_migrated_v3"
+        private const val KEY_LG_PERF_OFF_V4 = "lg_perf_off_v4"
     }
 }
 

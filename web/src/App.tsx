@@ -23,6 +23,7 @@ import { Geo2DSnapshot } from './engine/geo2d';
 import { parseShareHashFromUrl } from './services/shareUrl';
 
 const SETTINGS_KEY = 'tooltoan_settings_v2';
+const PERF_MIGRATION_KEY = 'tooltoan_lg_perf_off_v4';
 const PROFILES_KEY = 'tooltoan_ai_profiles_v1';
 const PROVIDER_KEY = 'tooltoan_ai_provider_v1';
 const WORKSPACE_KEY = 'tooltoan_last_workspace_v1';
@@ -53,15 +54,27 @@ export const App: React.FC = () => {
   const [settings, setSettings] = useState<AppSettingsState>(() => {
     try {
       const raw = localStorage.getItem(SETTINGS_KEY) || localStorage.getItem('tooltoan_settings_v1');
-      if (!raw) return DEFAULT_APP_SETTINGS;
+      if (!raw) {
+        localStorage.setItem(PERF_MIGRATION_KEY, '1');
+        return DEFAULT_APP_SETTINGS;
+      }
       const parsed = JSON.parse(raw);
-      return {
+      const merged: AppSettingsState = {
         ...DEFAULT_APP_SETTINGS,
         ...parsed,
         liquidGlass: { ...DEFAULT_APP_SETTINGS.liquidGlass, ...(parsed.liquidGlass || {}) },
         sensitivity3D: { ...DEFAULT_APP_SETTINGS.sensitivity3D, ...(parsed.sensitivity3D || {}) },
         sensitivity2D: { ...DEFAULT_APP_SETTINGS.sensitivity2D, ...(parsed.sensitivity2D || {}) }
       };
+      if (!localStorage.getItem(PERF_MIGRATION_KEY)) {
+        localStorage.setItem(PERF_MIGRATION_KEY, '1');
+        merged.liquidGlass = {
+          ...merged.liquidGlass,
+          enabled: false,
+          dynamicShimmer: false
+        };
+      }
+      return merged;
     } catch {
       return DEFAULT_APP_SETTINGS;
     }

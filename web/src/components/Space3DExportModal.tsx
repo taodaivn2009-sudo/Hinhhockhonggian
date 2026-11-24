@@ -1,12 +1,10 @@
 import React, { useRef, useState } from 'react';
 import {
   Box,
-  Check,
   Download,
   FileCode2,
   FolderOpen,
   Image as ImageIcon,
-  Link2,
   Save,
   Trash2,
   Upload,
@@ -32,7 +30,6 @@ interface Space3DExportModalProps {
   onExportObj: () => void;
   onExportJson: () => void;
   onImportJson: (text: string) => void;
-  onCopyShareLink: () => void;
   savedProjects: SavedProject3D[];
   onSaveProject: (name: string) => void;
   onLoadProject: (proj: SavedProject3D) => void;
@@ -50,14 +47,12 @@ export const Space3DExportModal: React.FC<Space3DExportModalProps> = ({
   onExportObj,
   onExportJson,
   onImportJson,
-  onCopyShareLink,
   savedProjects,
   onSaveProject,
   onLoadProject,
   onDeleteProject
 }) => {
   const [slotName, setSlotName] = useState('');
-  const [copiedLink, setCopiedLink] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   if (!open) return null;
@@ -68,19 +63,13 @@ export const Space3DExportModal: React.FC<Space3DExportModalProps> = ({
     setSlotName('');
   };
 
-  const handleCopyLink = () => {
-    onCopyShareLink();
-    setCopiedLink(true);
-    window.setTimeout(() => setCopiedLink(false), 2000);
-  };
-
   return (
     <div className="studio-modal-backdrop" onClick={onClose}>
       <div className="glass-surface studio-modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="studio-inspector-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Save size={17} color="var(--accent)" />
-            <span style={{ fontWeight: 800, fontSize: 15 }}>Lưu trữ, Chia sẻ & Xuất File 3D</span>
+            <span style={{ fontWeight: 800, fontSize: 15 }}>Lưu trữ & Xuất File 3D</span>
           </div>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Đóng">
             <X size={18} />
@@ -88,17 +77,6 @@ export const Space3DExportModal: React.FC<Space3DExportModalProps> = ({
         </div>
 
         <div className="studio-inspector-body scroll-area">
-          {/* 1-Click Share Link */}
-          <div className="studio-section-card">
-            <div className="studio-section-title">
-              <span>Chia sẻ liên kết trực tiếp</span>
-            </div>
-            <button type="button" className="primary-btn glass-press" onClick={handleCopyLink} style={{ width: '100%' }}>
-              {copiedLink ? <Check size={16} /> : <Link2 size={16} />}
-              {copiedLink ? 'Đã sao chép liên kết 3D!' : 'Sao chép link chia sẻ hình này'}
-            </button>
-          </div>
-
           {/* Export Files */}
           <div className="studio-section-card">
             <div className="studio-section-title">
