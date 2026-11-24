@@ -101,6 +101,7 @@ export interface Scene3DSnapshot {
   b: number;
   h: number;
   originPoint: string;
+  vertexOverrides?: Record<string, Vec3>;
   customPoints: CustomEdgePoint3D[];
   customXYZPoints: CustomXYZPoint3D[];
   customLines: CustomLine3D[];
@@ -770,8 +771,12 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
 
 export function build3DSceneFromSnapshot(snap: Scene3DSnapshot): Built3DScene {
   const base = buildBaseShape(snap.shapeKey, snap.a, snap.b, snap.h);
+  const overrides = snap.vertexOverrides || {};
+  const vertices: NamedVertex[] = base.vertices.map((v) =>
+    v.name && overrides[v.name] ? { name: v.name, pos: overrides[v.name] } : v
+  );
   const registry: Record<string, Vec3> = {};
-  for (const v of base.vertices) {
+  for (const v of vertices) {
     if (v.name) registry[v.name] = v.pos;
   }
 
@@ -799,15 +804,15 @@ export function build3DSceneFromSnapshot(snap: Scene3DSnapshot): Built3DScene {
     const p3 = registry[snap.dynamicSection.p3];
     if (p1 && p2 && p3) {
       const edgePairs: [Vec3, Vec3][] = base.edges.map((e) => [
-        base.vertices[e.from].pos,
-        base.vertices[e.to].pos
+        vertices[e.from].pos,
+        vertices[e.to].pos
       ]);
       dynamicSection = computeDynamicCrossSection(p1, p2, p3, edgePairs);
     }
   }
 
   return {
-    vertices: base.vertices,
+    vertices,
     faces: base.faces,
     edges: base.edges,
     pointRegistry: registry,

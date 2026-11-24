@@ -152,87 +152,152 @@ object GeometryRenderer {
             drawGrid(canvas, proj, density, canvasTheme.gridMinorArgb, canvasTheme.gridMajorArgb, scratch)
         }
 
-        // 3. Translucent 3D Surfaces: Polyhedra, Curved Meshes (Cylinder/Cone/Sphere), Sections & Custom Planes
-        val sortedFaces = scratch.sortedFaces
-        sortedFaces.clear()
-        var poolCursor = 0
-        for (face in scene.faces) {
-            val pts = face.points
-            if (pts.isEmpty()) continue
-            val pooled = scratch.obtainProjectedFace(poolCursor)
-            val projected = pooled.pts2d
-            projected.clear()
-            var allVisible = true
-            var depthSum = 0f
-            for (i in pts.indices) {
-                val p2 = proj.project(pts[i])
-                if (!p2.visible) {
-                    allVisible = false
-                    break
+        val unfoldedFaces = if (uiState.unfoldRatio > 0.005f && !snap.shape.isRound) {
+            Geo3DMathHelpers.buildUnfoldedFaces(scene, snap.shape, uiState.unfoldRatio)
+        } else null
+
+        if (unfoldedFaces != null) {
+            drawUnfoldedPolyhedronNet(canvas, proj, unfoldedFaces, density, useDarkInk, scratch)
+        } else {
+            // 3. Translucent 3D Surfaces: Polyhedra, Curved Meshes (Cylinder/Cone/Sphere), Sections & Custom Planes
+            val sortedFaces = scratch.sortedFaces
+            sortedFaces.clear()
+            var poolCursor = 0
+            for (face in scene.faces) {
+                val pts = face.points
+                if (pts.isEmpty()) continue
+                val pooled = scratch.obtainProjectedFace(poolCursor)
+                val projected = pooled.pts2d
+                projected.clear()
+                var allVisible = true
+                var depthSum = 0f
+                for (i in pts.indices) {
+                    val p2 = proj.project(pts[i])
+                    if (!p2.visible) {
+                        allVisible = false
+                        break
+                    }
+                    projected.add(p2)
+                    depthSum += p2.viewDepth
                 }
-                projected.add(p2)
-                depthSum += p2.viewDepth
+                if (allVisible && projected.isNotEmpty()) {
+                    pooled.face = face
+                    pooled.avgDepth = depthSum / projected.size
+                    sortedFaces.add(pooled)
+                    poolCursor++
+                }
             }
-            if (allVisible && projected.isNotEmpty()) {
-                pooled.face = face
-                pooled.avgDepth = depthSum / projected.size
-                sortedFaces.add(pooled)
-                poolCursor++
+            sortedFaces.sortByDescending { it.avgDepth }
+
+            val facePaint = scratch.facePaint
+            val curvedMeshPaint = scratch.curvedMeshPaint
+            val path = scratch.scratchPath
+
+            for (pf in sortedFaces) {
+                val face = pf.face
+                val pts2d = pf.pts2d
+                path.rewind()
+                path.moveTo(pts2d[0].x, pts2d[0].y)
+                for (i in 1 until pts2d.size) path.lineTo(pts2d[i].x, pts2d[i].y)
+                path.close()
+
+                if (face.isSection || face.isCustomPlane) {
+                    facePaint.color = face.fillColorArgb
+                    canvas.drawPath(path, facePaint)
+                } else if (face.isCurvedMesh) {
+                    val viewDir = (camPos - face.center).normalized()
+                    val facing = face.normal.dot(viewDir)
+                    val isFront = facing >= 0f
+                    val effectiveNormal = if (isFront) face.normal else -face.normal
+                    val halfLambert = ((effectiveNormal.dot(lightDir) + 1f) * 0.5f).coerceIn(0f, 1f)
+                    val halfVec = (lightDir + viewDir).normalized()
+                    val spec = if (isFront) max(0f, effectiveNormal.dot(halfVec)).pow(10f) else 0f
+                    val rim = if (isFront) (1f - abs(facing)).pow(2.4f) * 0.22f else 0f
+
+                    val baseAlpha = if (isFront) (44 + halfLambert * 34 + spec * 45 + rim * 38) else (24 + halfLambert * 18)
+                    val aInt = baseAlpha.toInt().coerceIn(20, 128)
+                    val rInt = (74 + halfLambert * 58 + spec * 115 + rim * 40).toInt().coerceIn(0, 255)
+                    val gInt = (84 + halfLambert * 62 + spec * 120 + rim * 55).toInt().coerceIn(0, 255)
+                    val bInt = (186 + halfLambert * 64 + spec * 50 + rim * 30).toInt().coerceIn(0, 255)
+                    curvedMeshPaint.color = Color.argb(aInt, rInt, gInt, bInt)
+                    canvas.drawPath(path, curvedMeshPaint)
+                } else {
+                    val viewDir = (camPos - face.center).normalized()
+                    val isFront = face.normal.dot(viewDir) >= 0f
+                    val ndl = ((face.normal.dot(lightDir) + 1f) * 0.5f).coerceIn(0f, 1f)
+                    val shade = (0.54f + 0.46f * ndl).coerceIn(0.45f, 1f)
+                    val baseA = ((if (isFront) 62f else 36f) * (0.85f + 0.25f * shade)).toInt().coerceIn(24, 92)
+                    val tintR = Color.red(canvasTheme.faceTintArgb)
+                    val tintG = Color.green(canvasTheme.faceTintArgb)
+                    val tintB = Color.blue(canvasTheme.faceTintArgb)
+                    val r = (tintR * shade).toInt().coerceIn(0, 255)
+                    val g = (tintG * shade).toInt().coerceIn(0, 255)
+                    val b = (tintB * shade).toInt().coerceIn(0, 255)
+                    facePaint.color = Color.argb(baseA, r, g, b)
+                    canvas.drawPath(path, facePaint)
+                }
             }
+            sortedFaces.clear()
+
+            // 5. Smart Hidden-Edge Dashing for Solid Edges
+            val solidEdgePaint = scratch.solidEdgePaint.apply {
+                strokeWidth = 1.7f * density
+                color = if (useDarkInk) 0xFF0F172A.toInt() else canvasTheme.edgeSolidArgb
+            }
+            val dashedEdgePaint = scratch.dashedEdgePaint.apply {
+                strokeWidth = 1.35f * density
+                color = if (useDarkInk) 0xFF64748B.toInt() else canvasTheme.edgeDashedArgb
+                pathEffect = scratch.dash75
+            }
+
+            // Pre-resolve custom line endpoint pairs so base edges covered by a custom line/vector aren't double-drawn with misaligned dashes
+            val customLineSegments = if (snap.customLines.isEmpty()) emptyList() else snap.customLines.mapNotNull { ln ->
+                val v1 = scene.pointRegistry[ln.p1]
+                val v2 = scene.pointRegistry[ln.p2]
+                if (v1 != null && v2 != null) v1 to v2 else null
+            }
+
+            for (edge in scene.edges) {
+                if (customLineSegments.any { (c1, c2) ->
+                        (c1.distanceToSq(edge.p1) < 1e-4f && c2.distanceToSq(edge.p2) < 1e-4f) ||
+                            (c1.distanceToSq(edge.p2) < 1e-4f && c2.distanceToSq(edge.p1) < 1e-4f)
+                    }
+                ) continue
+
+                val a = proj.project(edge.p1)
+                val b = proj.project(edge.p2)
+                if (!a.visible || !b.visible) continue
+
+                val isDashed = when (edge.forceStyle) {
+                    EdgeRenderStyle.ALWAYS_SOLID -> false
+                    EdgeRenderStyle.ALWAYS_DASHED -> true
+                    EdgeRenderStyle.SMART -> {
+                        if (!snap.dashed) false
+                        else {
+                            var visible = false
+                            for (i in edge.normals.indices) {
+                                val dirToCam = camPos - edge.centers[i]
+                                if (edge.normals[i].dot(dirToCam) > 0f) {
+                                    visible = true
+                                    break
+                                }
+                            }
+                            !visible
+                        }
+                    }
+                }
+
+                val paint = if (isDashed) dashedEdgePaint else solidEdgePaint
+                val prevColor = paint.color
+                if (edge.colorArgb != null) paint.color = edge.colorArgb
+                canvas.drawLine(a.x, a.y, b.x, b.y, paint)
+                paint.color = prevColor
+            }
+
+            // 5b. Round Body Silhouette Generators (Exact 3D perspective tangent outlines for cylinder/cone/sphere)
+            scene.roundBodyHint?.let { drawRoundBodySilhouettes(canvas, proj, camPos, it, solidEdgePaint, scratch) }
         }
-        sortedFaces.sortByDescending { it.avgDepth }
 
-        val facePaint = scratch.facePaint
-        val curvedMeshPaint = scratch.curvedMeshPaint
-        val path = scratch.scratchPath
-
-        for (pf in sortedFaces) {
-            val face = pf.face
-            val pts2d = pf.pts2d
-            path.rewind()
-            path.moveTo(pts2d[0].x, pts2d[0].y)
-            for (i in 1 until pts2d.size) path.lineTo(pts2d[i].x, pts2d[i].y)
-            path.close()
-
-            if (face.isSection || face.isCustomPlane) {
-                facePaint.color = face.fillColorArgb
-                canvas.drawPath(path, facePaint)
-            } else if (face.isCurvedMesh) {
-                val viewDir = (camPos - face.center).normalized()
-                val facing = face.normal.dot(viewDir)
-                val isFront = facing >= 0f
-                val effectiveNormal = if (isFront) face.normal else -face.normal
-                val halfLambert = ((effectiveNormal.dot(lightDir) + 1f) * 0.5f).coerceIn(0f, 1f)
-                val halfVec = (lightDir + viewDir).normalized()
-                val spec = if (isFront) max(0f, effectiveNormal.dot(halfVec)).pow(10f) else 0f
-                val rim = if (isFront) (1f - abs(facing)).pow(2.4f) * 0.22f else 0f
-
-                val baseAlpha = if (isFront) (44 + halfLambert * 34 + spec * 45 + rim * 38) else (24 + halfLambert * 18)
-                val aInt = baseAlpha.toInt().coerceIn(20, 128)
-                val rInt = (74 + halfLambert * 58 + spec * 115 + rim * 40).toInt().coerceIn(0, 255)
-                val gInt = (84 + halfLambert * 62 + spec * 120 + rim * 55).toInt().coerceIn(0, 255)
-                val bInt = (186 + halfLambert * 64 + spec * 50 + rim * 30).toInt().coerceIn(0, 255)
-                curvedMeshPaint.color = Color.argb(aInt, rInt, gInt, bInt)
-                canvas.drawPath(path, curvedMeshPaint)
-            } else {
-                val viewDir = (camPos - face.center).normalized()
-                val isFront = face.normal.dot(viewDir) >= 0f
-                val ndl = ((face.normal.dot(lightDir) + 1f) * 0.5f).coerceIn(0f, 1f)
-                val shade = (0.54f + 0.46f * ndl).coerceIn(0.45f, 1f)
-                val baseA = ((if (isFront) 62f else 36f) * (0.85f + 0.25f * shade)).toInt().coerceIn(24, 92)
-                val tintR = Color.red(canvasTheme.faceTintArgb)
-                val tintG = Color.green(canvasTheme.faceTintArgb)
-                val tintB = Color.blue(canvasTheme.faceTintArgb)
-                val r = (tintR * shade).toInt().coerceIn(0, 255)
-                val g = (tintG * shade).toInt().coerceIn(0, 255)
-                val b = (tintB * shade).toInt().coerceIn(0, 255)
-                facePaint.color = Color.argb(baseA, r, g, b)
-                canvas.drawPath(path, facePaint)
-            }
-        }
-        sortedFaces.clear()
-
-        // 5. Smart Hidden-Edge Dashing for Solid Edges
         val solidEdgePaint = scratch.solidEdgePaint.apply {
             strokeWidth = 1.7f * density
             color = if (useDarkInk) 0xFF0F172A.toInt() else canvasTheme.edgeSolidArgb
@@ -243,52 +308,33 @@ object GeometryRenderer {
             pathEffect = scratch.dash75
         }
 
-        // Pre-resolve custom line endpoint pairs so base edges covered by a custom line/vector aren't double-drawn with misaligned dashes
-        val customLineSegments = if (snap.customLines.isEmpty()) emptyList() else snap.customLines.mapNotNull { ln ->
-            val v1 = scene.pointRegistry[ln.p1]
-            val v2 = scene.pointRegistry[ln.p2]
-            if (v1 != null && v2 != null) v1 to v2 else null
-        }
-
-        for (edge in scene.edges) {
-            if (customLineSegments.any { (c1, c2) ->
-                    (c1.distanceToSq(edge.p1) < 1e-4f && c2.distanceToSq(edge.p2) < 1e-4f) ||
-                        (c1.distanceToSq(edge.p2) < 1e-4f && c2.distanceToSq(edge.p1) < 1e-4f)
-                }
-            ) continue
-
-            val a = proj.project(edge.p1)
-            val b = proj.project(edge.p2)
-            if (!a.visible || !b.visible) continue
-
-            val isDashed = when (edge.forceStyle) {
-                EdgeRenderStyle.ALWAYS_SOLID -> false
-                EdgeRenderStyle.ALWAYS_DASHED -> true
-                EdgeRenderStyle.SMART -> {
-                    if (!snap.dashed) false
-                    else {
-                        var visible = false
-                        for (i in edge.normals.indices) {
-                            val dirToCam = camPos - edge.centers[i]
-                            if (edge.normals[i].dot(dirToCam) > 0f) {
-                                visible = true
-                                break
-                            }
-                        }
-                        !visible
-                    }
+        // 5c. Circumscribed & Inscribed Spheres (3D wireframe great-circle rings + center badge)
+        if (unfoldedFaces == null && (uiState.showCircumSphere || uiState.showInSphere)) {
+            val originWorld = ShapeBuilder.getOriginWorld(scene.pointRegistry, snap.originPoint)
+            if (uiState.showCircumSphere) {
+                Geo3DMathHelpers.computeCircumSphere(scene, snap, originWorld)?.let { sp ->
+                    drawWireframeSphere(canvas, proj, sp.centerWorld, sp.radius, 0xCC38BDF8.toInt(), "I", density, scratch)
                 }
             }
-
-            val paint = if (isDashed) dashedEdgePaint else solidEdgePaint
-            val prevColor = paint.color
-            if (edge.colorArgb != null) paint.color = edge.colorArgb
-            canvas.drawLine(a.x, a.y, b.x, b.y, paint)
-            paint.color = prevColor
+            if (uiState.showInSphere) {
+                Geo3DMathHelpers.computeInSphere(scene, snap, originWorld)?.let { sp ->
+                    drawWireframeSphere(canvas, proj, sp.centerWorld, sp.radius, 0xCC10B981.toInt(), "Iₙₜ", density, scratch)
+                }
+            }
         }
 
-        // 5b. Round Body Silhouette Generators (Exact 3D perspective tangent outlines for cylinder/cone/sphere)
-        scene.roundBodyHint?.let { drawRoundBodySilhouettes(canvas, proj, camPos, it, solidEdgePaint, scratch) }
+        // 5d. Skew Lines Common Perpendicular Segment (H₁H₂)
+        if (unfoldedFaces == null && uiState.showSkewPerp) {
+            val vA = scene.pointRegistry[uiState.calcPointA]
+            val vB = scene.pointRegistry[uiState.calcPointB]
+            val vC = scene.pointRegistry[uiState.skewPointC]
+            val vD = scene.pointRegistry[uiState.skewPointD]
+            if (vA != null && vB != null && vC != null && vD != null) {
+                Geo3DMathHelpers.computeSkewLinesDistance(vA, vB, vC, vD)?.let { skew ->
+                    drawSkewCommonPerp(canvas, proj, skew, density, scratch)
+                }
+            }
+        }
 
         // 6. Section, Dynamic 3-Point Section & Custom Plane Borders
         scene.sectionBorder?.let { pts ->
@@ -600,6 +646,155 @@ object GeometryRenderer {
         }
         path.close()
         canvas.drawPath(path, paint)
+    }
+
+    private fun drawUnfoldedPolyhedronNet(
+        canvas: Canvas,
+        proj: CameraProjection,
+        faces: List<Geo3DMathHelpers.UnfoldedFace3D>,
+        density: Float,
+        useDarkInk: Boolean,
+        scratch: RenderScratch3D
+    ) {
+        val fillPaint = scratch.facePaint
+        val borderPaint = scratch.strokePaint.apply {
+            strokeWidth = 1.9f * density
+            pathEffect = null
+        }
+        val path = scratch.scratchPath
+        for (face in faces) {
+            val pts = face.points
+            if (pts.size < 3) continue
+            path.rewind()
+            var ok = true
+            for (i in pts.indices) {
+                val p2 = proj.project(pts[i])
+                if (!p2.visible) {
+                    ok = false
+                    break
+                }
+                if (i == 0) path.moveTo(p2.x, p2.y) else path.lineTo(p2.x, p2.y)
+            }
+            if (!ok) continue
+            path.close()
+            fillPaint.color = if (face.isBase) 0x5510B981 else 0x4D38BDF8
+            canvas.drawPath(path, fillPaint)
+            borderPaint.color = when {
+                face.isBase -> 0xFF10B981.toInt()
+                useDarkInk -> 0xFF0369A1.toInt()
+                else -> 0xFF38BDF8.toInt()
+            }
+            canvas.drawPath(path, borderPaint)
+        }
+    }
+
+    private fun drawWireframeSphere(
+        canvas: Canvas,
+        proj: CameraProjection,
+        center: Vec3,
+        radius: Float,
+        colorArgb: Int,
+        centerLabel: String,
+        density: Float,
+        scratch: RenderScratch3D
+    ) {
+        if (radius <= 0.02f) return
+        val ringPaint = scratch.dashedStrokePaint.apply {
+            strokeWidth = 1.45f * density
+            color = colorArgb
+            pathEffect = scratch.dash64
+        }
+        val segs = 48
+        val path = scratch.scratchPath
+        val planes = arrayOf(
+            Vec3(1f, 0f, 0f) to Vec3(0f, 0f, 1f), // XZ equator
+            Vec3(1f, 0f, 0f) to Vec3(0f, 1f, 0f), // XY meridian
+            Vec3(0f, 0f, 1f) to Vec3(0f, 1f, 0f)  // YZ meridian
+        )
+        for ((u, v) in planes) {
+            path.rewind()
+            var started = false
+            for (i in 0..segs) {
+                val t = (i.toFloat() / segs) * (2.0 * PI).toFloat()
+                val pt = center + u * (cos(t) * radius) + v * (sin(t) * radius)
+                val p2 = proj.project(pt)
+                if (p2.visible) {
+                    if (!started) {
+                        path.moveTo(p2.x, p2.y)
+                        started = true
+                    } else {
+                        path.lineTo(p2.x, p2.y)
+                    }
+                } else {
+                    started = false
+                }
+            }
+            if (started) canvas.drawPath(path, ringPaint)
+        }
+        val c2 = proj.project(center)
+        if (c2.visible) {
+            val fill = scratch.fillPaint
+            fill.color = colorArgb or 0xFF000000.toInt()
+            canvas.drawCircle(c2.x, c2.y, 4.5f * density, fill)
+            drawSmallBadge(canvas, c2.x, c2.y - 14f * density, centerLabel, colorArgb or 0xFF000000.toInt(), density, scratch)
+        }
+    }
+
+    private fun drawSkewCommonPerp(
+        canvas: Canvas,
+        proj: CameraProjection,
+        skew: Geo3DMathHelpers.SkewLinesResult3D,
+        density: Float,
+        scratch: RenderScratch3D
+    ) {
+        val h1 = proj.project(skew.closestOnLine1)
+        val h2 = proj.project(skew.closestOnLine2)
+        if (!h1.visible || !h2.visible) return
+        val rose = 0xFFF43F5E.toInt()
+        val linePaint = scratch.strokePaint.apply {
+            strokeWidth = 2.6f * density
+            color = rose
+            strokeCap = Paint.Cap.ROUND
+            pathEffect = null
+        }
+        canvas.drawLine(h1.x, h1.y, h2.x, h2.y, linePaint)
+        val dotPaint = scratch.fillPaint
+        dotPaint.color = rose
+        canvas.drawCircle(h1.x, h1.y, 5f * density, dotPaint)
+        canvas.drawCircle(h2.x, h2.y, 5f * density, dotPaint)
+        drawSmallBadge(canvas, h1.x, h1.y - 14f * density, "H₁", rose, density, scratch)
+        if (skew.distance > 0.05f) {
+            drawSmallBadge(canvas, h2.x, h2.y - 14f * density, "H₂", rose, density, scratch)
+        }
+    }
+
+    private fun drawSmallBadge(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        label: String,
+        borderColor: Int,
+        density: Float,
+        scratch: RenderScratch3D
+    ) {
+        val txtPaint = scratch.vertexTextPaint.apply {
+            textSize = 10.5f * density
+            color = Color.WHITE
+        }
+        val padX = 5f * density
+        val boxH = 18f * density
+        val boxW = max(20f * density, txtPaint.measureText(label) + padX * 2f)
+        val rect = scratch.scratchRect
+        rect.set(cx - boxW / 2f, cy - boxH / 2f, cx + boxW / 2f, cy + boxH / 2f)
+        val bg = scratch.pillBgPaint.apply { color = 0xEA0F172A.toInt() }
+        val border = scratch.pillBorderPaint.apply {
+            strokeWidth = 1.2f * density
+            color = borderColor
+        }
+        canvas.drawRoundRect(rect, 5f * density, 5f * density, bg)
+        canvas.drawRoundRect(rect, 5f * density, 5f * density, border)
+        val fm = txtPaint.fontMetrics
+        canvas.drawText(label, cx, rect.centerY() - (fm.ascent + fm.descent) / 2f, txtPaint)
     }
 
     private fun drawAltitude(

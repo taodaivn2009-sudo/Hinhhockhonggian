@@ -20,6 +20,9 @@
   --lg-rim-bottom: rgba(255, 216, 235, 0.28);
   --lg-gloss-alpha: 0.18;
   --lg-grain-opacity: 0.05;
+  --lg-bevel: 1.4px;
+  --lg-refraction: 0.68;
+  --lg-dispersion: 0.42;
 }
 
 [data-theme='light'] {
@@ -32,6 +35,18 @@
   --lg-rim-top: rgba(255, 255, 255, 0.92);
   --lg-rim-bottom: rgba(148, 163, 184, 0.35);
   --lg-gloss-alpha: 0.34;
+}
+
+[data-contrast='high'] {
+  --text-primary: #ffffff;
+  --text-secondary: #e2e8f0;
+  --lg-bg-alpha: 0.78;
+}
+
+[data-theme='light'][data-contrast='high'] {
+  --text-primary: #020617;
+  --text-secondary: #1e293b;
+  --lg-bg-alpha: 0.90;
 }
 
 * {
@@ -70,16 +85,30 @@ body,
     linear-gradient(180deg, var(--bg-dark) 0%, var(--bg-deepest) 100%);
 }
 
+@keyframes lgShimmerSweep {
+  0% {
+    background-position: 0% 0%;
+  }
+  50% {
+    background-position: 100% 100%;
+  }
+  100% {
+    background-position: 0% 0%;
+  }
+}
+
 /* Liquid Glass Crystal-Frosted Surface */
 .glass-surface {
   position: relative;
   background: color-mix(in srgb, var(--bg-dark) calc(var(--lg-bg-alpha) * 100%), transparent);
   backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
   -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
-  border: 1px solid var(--border-subtle);
+  border: var(--lg-bevel) solid var(--border-subtle);
   box-shadow:
-    inset 0 1px 0 0 var(--lg-rim-top),
-    inset 0 -1px 0 0 var(--lg-rim-bottom),
+    inset 0 var(--lg-bevel) 0 0 var(--lg-rim-top),
+    inset 0 calc(-1 * var(--lg-bevel)) 0 0 var(--lg-rim-bottom),
+    inset 1px 0 0 0 color-mix(in srgb, var(--accent) calc(var(--lg-dispersion) * 45%), transparent),
+    inset -1px 0 0 0 color-mix(in srgb, #f43f5e calc(var(--lg-dispersion) * 35%), transparent),
     0 12px 32px rgba(2, 6, 23, 0.34);
   overflow: hidden;
 }
@@ -90,13 +119,18 @@ body,
   inset: 0;
   pointer-events: none;
   background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, var(--lg-gloss-alpha)) 0%,
-    rgba(255, 255, 255, 0.03) 20%,
+    145deg,
+    rgba(255, 255, 255, calc(var(--lg-gloss-alpha) * (0.65 + var(--lg-refraction) * 0.55))) 0%,
+    rgba(255, 255, 255, 0.03) 24%,
     transparent 58%,
-    rgba(255, 255, 255, calc(var(--lg-gloss-alpha) * 0.45)) 100%
+    rgba(255, 255, 255, calc(var(--lg-gloss-alpha) * 0.48)) 100%
   );
   border-radius: inherit;
+}
+
+[data-shimmer='on'] .glass-surface::before {
+  background-size: 200% 200%;
+  animation: lgShimmerSweep 7s ease-in-out infinite;
 }
 
 .glass-surface::after {
@@ -308,6 +342,21 @@ input[type='range'].glass-slider::-webkit-slider-thumb {
 .floating-nav-btn.active {
   color: var(--text-primary);
   font-weight: 800;
+}
+
+/* Night Reading Filter for PDF pages */
+.pdf-night-filter {
+  filter: invert(0.90) hue-rotate(180deg) contrast(0.95);
+}
+
+/* KaTeX dark/light adjustments */
+.math-markdown .katex {
+  font-size: 1.05em;
+  color: var(--text-primary);
+}
+
+.math-markdown .katex-display {
+  margin: 0.4em 0;
 }
 
 /* Scrollbar styling */

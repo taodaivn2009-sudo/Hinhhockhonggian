@@ -971,4 +971,123 @@ object MathExprParser {
         val exists = list.any { it.type == pt.type && hypot(it.x - pt.x, it.y - pt.y) < max(1e-5, tol) }
         if (!exists) list.add(pt)
     }
+
+    // ================= INTEGRAL, BOUNDED AREA, REVOLUTION VOLUME & VALUE TABLE =================
+
+    data class Integral2DResult(
+        val a: Double,
+        val b: Double,
+        val signedIntegral: Double,
+        val boundedArea: Double,
+        val volumeOx: Double,
+        val sampleXs: DoubleArray,
+        val sampleY1s: DoubleArray,
+        val sampleY2s: DoubleArray
+    )
+
+    data class ValueTableRow2D(
+        val x: Double,
+        val y: Double,
+        val dy: Double
+    )
+
+    fun computeIntegral2D(
+        exprF: Expr,
+        exprG: Expr?,
+        a: Double,
+        b: Double,
+        m: Double = 0.0
+    ): Integral2DResult? {
+        if (!a.isFinite() || !b.isFinite()) return null
+        val lo = min(a, b)
+        val hi = max(a, b)
+        if (hi - lo < 1e-9) {
+            val y1 = exprF.eval(lo, m)
+            val y2 = exprG?.eval(lo, m) ?: 0.0
+            return Integral2DResult(
+                a = a,
+                b = b,
+                signedIntegral = 0.0,
+                boundedArea = 0.0,
+                volumeOx = 0.0,
+                sampleXs = doubleArrayOf(lo),
+                sampleY1s = doubleArrayOf(y1),
+                sampleY2s = doubleArrayOf(y2)
+            )
+        }
+        val sign = if (b >= a) 1.0 else -1.0
+        val n = 360
+        val h = (hi - lo) / n
+        var sumSigned = 0.0
+        var sumArea = 0.0
+        var sumVol = 0.0
+
+        for (i in 0..n) {
+            val x = lo + i * h
+            val y1 = exprF.eval(x, m)
+            val y2 = exprG?.eval(x, m) ?: 0.0
+            if (!y1.isFinite() || !y2.isFinite()) continue
+            val w = when {
+                i == 0 || i == n -> 1.0
+                i % 2 == 1 -> 4.0
+                else -> 2.0
+            }
+            val diff = y1 - y2
+            sumSigned += w * diff
+            sumArea += w * abs(diff)
+            sumVol += w * abs(y1 * y1 - y2 * y2)
+        }
+
+        val scale = h / 3.0
+        val signedVal = sign * sumSigned * scale
+        val areaVal = sumArea * scale
+        val volVal = PI * sumVol * scale
+
+        val samples = 140
+        val xs = DoubleArray(samples + 1)
+        val y1s = DoubleArray(samples + 1)
+        val y2s = DoubleArray(samples + 1)
+        for (i in 0..samples) {
+            val x = lo + (hi - lo) * i / samples
+            xs[i] = x
+            y1s[i] = exprF.eval(x, m)
+            y2s[i] = exprG?.eval(x, m) ?: 0.0
+        }
+
+        return Integral2DResult(
+            a = a,
+            b = b,
+            signedIntegral = signedVal,
+            boundedArea = areaVal,
+            volumeOx = volVal,
+            sampleXs = xs,
+            sampleY1s = y1s,
+            sampleY2s = y2s
+        )
+    }
+
+    fun buildValueTable2D(
+        expr: Expr,
+        start: Double,
+        end: Double,
+        step: Double,
+        m: Double = 0.0,
+        maxRows: Int = 80
+    ): List<ValueTableRow2D> {
+        if (!start.isFinite() || !end.isFinite() || !step.isFinite() || step <= 1e-6) return emptyList()
+        val lo = min(start, end)
+        val hi = max(start, end)
+        val out = ArrayList<ValueTableRow2D>()
+        var x = lo
+        var count = 0
+        while (x <= hi + step * 1e-4 && count < maxRows) {
+            val cleanX = if (abs(x) < 1e-9) 0.0 else x
+            val y = expr.eval(cleanX, m)
+            val dy = expr.derivative(cleanX, max(1e-5, step * 1e-3), m)
+            out.add(ValueTableRow2D(cleanX, y, dy))
+            x += step
+            count++
+        }
+        return out
+    }
 }

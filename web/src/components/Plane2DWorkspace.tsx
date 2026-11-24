@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AreaChart,
   Check,
   Download,
   Eye,
   EyeOff,
+  Link2,
   Maximize2,
   Minimize2,
   Pause,
@@ -14,6 +16,7 @@ import {
   Sigma,
   SlidersHorizontal,
   Table2,
+  TableProperties,
   Trash2,
   Undo2,
   Upload,
@@ -44,20 +47,31 @@ import {
   PRESET_2D_SHAPES,
   QUICK_MATH_KEYS
 } from '../engine/geo2d';
+import {
+  buildValueTable2D,
+  computeIntegral2D,
+  deriveSymbolicExpr
+} from '../engine/geo2dAdvanced';
 import { analyzeVariationTable, VariationTableResult } from '../engine/variationTable';
 import { VariationTableModal } from './VariationTableModal';
-import { AiDrawingPlan } from '../types/app';
+import { buildShareUrl2D } from '../services/shareUrl';
+import { AiDrawingPlan, Sensitivity2D } from '../types/app';
 
 interface Plane2DWorkspaceProps {
   accentHex: string;
   themeMode: 'dark' | 'light';
   isImmersive: boolean;
   onToggleImmersive: () => void;
+  sensitivity: Sensitivity2D;
+  onUpdateSensitivity: (next: Sensitivity2D) => void;
   externalPlan: AiDrawingPlan | null;
   onPlanConsumed: () => void;
+  externalSnapshot: Geo2DSnapshot | null;
+  onExternalSnapshotConsumed: () => void;
 }
 
 type DrawerTab2D = 'functions' | 'presets' | 'objects' | 'settings';
+type VerifyTarget2D = 'fn_val' | 'segment' | 'polygon_area' | 'circle_radius' | 'angle' | 'extrema' | 'integral_area';
 
 const FN_COLORS = ['#38bdf8', '#10b981', '#f43f5e', '#f59e0b', '#a855f7', '#06b6d4'];
 const AUTO_SAVE_2D_KEY = 'tooltoan_2d_autosave_v2';
@@ -87,8 +101,12 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
   themeMode,
   isImmersive,
   onToggleImmersive,
+  sensitivity,
+  onUpdateSensitivity,
   externalPlan,
-  onPlanConsumed
+  onPlanConsumed,
+  externalSnapshot,
+  onExternalSnapshotConsumed
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -112,6 +130,10 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
   const [traceX, setTraceX] = useState<number>(1);
   const [playParamM, setPlayParamM] = useState<boolean>(false);
 
+  // Item 8: Custom m bounds
+  const [mMin, setMMin] = useState<number>(-5);
+  const [mMax, setMMax] = useState<number>(5);
+
   // Display toggles
   const [showAxes, setShowAxes] = useState<boolean>(true);
   const [showGrid, setShowGrid] = useState<boolean>(true);
@@ -121,6 +143,23 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
   const [showKeyPoints, setShowKeyPoints] = useState<boolean>(true);
   const [showAsymptotes, setShowAsymptotes] = useState<boolean>(true);
   const [showTangent, setShowTangent] = useState<boolean>(true);
+
+  // Item 20: Definite Integral, Area & Revolution Volume
+  const [integralEnabled, setIntegralEnabled] = useState<boolean>(false);
+  const [integralFnId, setIntegralFnId] = useState<string>('');
+  const [integralSecondFnId, setIntegralSecondFnId] = useState<string>(''); // '' = Ox (y=0)
+  const [integralAInput, setIntegralAInput] = useState<string>('0');
+  const [integralBInput, setIntegralBInput] = useState<string>('2');
+
+  // Item 20: Casio-style Value Table Modal
+  const [tableModalExpr, setTableModalExpr] = useState<string | null>(null);
+  const [tableStart, setTableStart] = useState<string>('-3');
+  const [tableEnd, setTableEnd] = useState<string>('3');
+  const [tableStep, setTableStep] = useState<string>('0.5');
+
+  // Export options
+  const [pngTransparent, setPngTransparent] = useState<boolean>(true);
+  const [exportFilename, setExportFilename] = useState<string>('');
 
   // Drawer & Variation Table Modal
   const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
@@ -135,10 +174,12 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
   const [ptXInput, setPtXInput] = useState<string>('2');
   const [ptYInput, setPtYInput] = useState<string>('1');
 
-  // Verify 2D state
+  // Item 9: Full Verify 2D Mode
+  const [verifyTarget, setVerifyTarget] = useState<VerifyTarget2D>('fn_val');
   const [verifyX, setVerifyX] = useState<string>('1');
   const [verifyAns, setVerifyAns] = useState<string>('');
   const [verifyMsg, setVerifyMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [revealVerifyAns, setRevealVerifyAns] = useState<boolean>(false);
 
   // Camera
   const [view, setView] = useState<{ cx: number; cy: number; scale: number }>({
@@ -190,29 +231,74 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
     setPtNameInput(next2DPointName(snapshot.points));
   }, [snapshot]);
 
-  // Consume external AI 2D plan
+  // Keyboard shortcuts (Ctrl+Z, Ctrl+Y, Space play/pause m)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
+      if (typing) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
+        e.preventDefault();
+        handleRedo();
+      } else if (e.code === 'Space') {
+        e.preventDefault();
+        setPlayParamM((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  });
+
+  // Consume Share URL snapshot
+  useEffect(() => {
+    if (!externalSnapshot) return;
+    commit(() => ({ ...DEFAULT_2D_SNAPSHOT, ...externalSnapshot }));
+    setToast('Đã mở bài vẽ 2D từ liên kết chia sẻ!');
+    onExternalSnapshotConsumed();
+  }, [externalSnapshot, onExternalSnapshotConsumed]);
+
+  // Consume external AI 2D plan (including integral2d!)
   useEffect(() => {
     if (!externalPlan || externalPlan.target !== 'plane2d') return;
+    const now = Date.now();
+    const exprs = externalPlan.expressions2d ? [...externalPlan.expressions2d] : [];
+    if (externalPlan.integral2d) {
+      if (exprs.length === 0) exprs.push(externalPlan.integral2d.expr);
+      if (externalPlan.integral2d.secondExpr && !exprs.includes(externalPlan.integral2d.secondExpr)) {
+        exprs.push(externalPlan.integral2d.secondExpr);
+      }
+    }
+    const createdFns: GraphFunctionItem[] = exprs.map((expr, i) => ({
+      id: `ai-${now}-${i}`,
+      label: `f${i + 1}(x)`,
+      expression: expr,
+      color: FN_COLORS[i % FN_COLORS.length],
+      visible: true,
+      showDerivative: false
+    }));
+
     commit((prev) => {
-      const nextFns: GraphFunctionItem[] =
-        externalPlan.expressions2d && externalPlan.expressions2d.length > 0
-          ? externalPlan.expressions2d.map((expr, i) => ({
-              id: `ai-${Date.now()}-${i}`,
-              label: `f${i + 1}(x)`,
-              expression: expr,
-              color: FN_COLORS[i % FN_COLORS.length],
-              visible: true,
-              showDerivative: false
-            }))
-          : prev.functions;
       const preset = externalPlan.preset2d ? buildPreset2DGeometry(externalPlan.preset2d) : null;
       return {
         ...prev,
-        functions: nextFns,
+        functions: createdFns.length > 0 ? createdFns : prev.functions,
         points: preset ? preset.points : prev.points,
         objects: preset ? preset.objects : prev.objects
       };
     });
+
+    if (externalPlan.integral2d) {
+      setIntegralEnabled(true);
+      setIntegralAInput(String(externalPlan.integral2d.a));
+      setIntegralBInput(String(externalPlan.integral2d.b));
+      if (createdFns[0]) setIntegralFnId(createdFns[0].id);
+      if (externalPlan.integral2d.secondExpr && createdFns[1]) setIntegralSecondFnId(createdFns[1].id);
+      else setIntegralSecondFnId('');
+    }
+
     setToast(`Đã vẽ từ AI: ${externalPlan.title}`);
     onPlanConsumed();
   }, [externalPlan, onPlanConsumed]);
@@ -223,25 +309,27 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
     return () => window.clearTimeout(t);
   }, [toast]);
 
-  // Parameter m animation loop
+  // Parameter m animation loop (respecting custom mMin / mMax)
   useEffect(() => {
     if (!playParamM) return;
     let dir = 1;
+    const lo = Math.min(mMin, mMax - 0.5);
+    const hi = Math.max(mMax, lo + 0.5);
     const interval = window.setInterval(() => {
       setSnapshot((prev) => {
-        let nextM = +(prev.paramM + dir * 0.08).toFixed(2);
-        if (nextM >= 5) {
-          nextM = 5;
+        let nextM = +(prev.paramM + dir * ((hi - lo) / 120)).toFixed(2);
+        if (nextM >= hi) {
+          nextM = hi;
           dir = -1;
-        } else if (nextM <= -5) {
-          nextM = -5;
+        } else if (nextM <= lo) {
+          nextM = lo;
           dir = 1;
         }
         return { ...prev, paramM: nextM };
       });
     }, 55);
     return () => window.clearInterval(interval);
-  }, [playParamM]);
+  }, [playParamM, mMin, mMax]);
 
   const pointMap = useMemo(() => {
     const map = new Map<string, Geo2DPoint>();
@@ -251,6 +339,94 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
 
   const primaryFn = snapshot.functions.find((f) => f.visible && f.expression.trim().length > 0);
   const activeToolInfo = GEO2D_TOOLS.find((t) => t.id === activeTool) || GEO2D_TOOLS[0];
+
+  // Item 20: Integral computation
+  const integralFn = useMemo(
+    () => snapshot.functions.find((f) => f.id === integralFnId) || primaryFn || null,
+    [snapshot.functions, integralFnId, primaryFn]
+  );
+  const integralSecondFn = useMemo(
+    () => (integralSecondFnId ? snapshot.functions.find((f) => f.id === integralSecondFnId) || null : null),
+    [snapshot.functions, integralSecondFnId]
+  );
+  const integralResult = useMemo(() => {
+    if (!integralEnabled || !integralFn || !integralFn.expression.trim()) return null;
+    const a = evaluateVerifyAnswer(integralAInput);
+    const b = evaluateVerifyAnswer(integralBInput);
+    if (a === null || b === null) return null;
+    return computeIntegral2D(
+      integralFn.expression,
+      integralSecondFn && integralSecondFn.id !== integralFn.id ? integralSecondFn.expression : null,
+      a,
+      b,
+      snapshot.paramM
+    );
+  }, [integralEnabled, integralFn, integralSecondFn, integralAInput, integralBInput, snapshot.paramM]);
+
+  // Item 20: Casio-style Value Table rows
+  const valueTableRows = useMemo(() => {
+    if (!tableModalExpr) return [];
+    const s = parseFloat(tableStart.replace(',', '.'));
+    const e = parseFloat(tableEnd.replace(',', '.'));
+    const st = parseFloat(tableStep.replace(',', '.'));
+    if (!Number.isFinite(s) || !Number.isFinite(e) || !Number.isFinite(st) || st <= 0) return [];
+    return buildValueTable2D(tableModalExpr, s, e, st, snapshot.paramM);
+  }, [tableModalExpr, tableStart, tableEnd, tableStep, snapshot.paramM]);
+
+  // Item 9: Full 2D Verify expected value
+  const verifyExpectedInfo = useMemo<{ value: number | null; unit: string; hint: string }>(() => {
+    if (verifyTarget === 'fn_val') {
+      if (!primaryFn) return { value: null, unit: '', hint: 'Cần có ít nhất 1 hàm số đang bật.' };
+      const x0 = evaluateVerifyAnswer(verifyX);
+      if (x0 === null) return { value: null, unit: '', hint: 'Nhập x₀ hợp lệ.' };
+      const y = evaluateMathExpr(primaryFn.expression, x0, snapshot.paramM);
+      return Number.isFinite(y)
+        ? { value: y, unit: '', hint: `f(${format2DNum(x0)})` }
+        : { value: null, unit: '', hint: 'Hàm không xác định tại x₀.' };
+    }
+    if (verifyTarget === 'segment') {
+      const seg = [...snapshot.objects].reverse().find((o) => o.kind === 'segment');
+      if (!seg || seg.kind !== 'segment') return { value: null, unit: '', hint: 'Hãy vẽ ít nhất 1 đoạn thẳng trên Oxy.' };
+      const a = pointMap.get(seg.p1Id);
+      const b = pointMap.get(seg.p2Id);
+      if (!a || !b) return { value: null, unit: '', hint: 'Đoạn thẳng thiếu đỉnh.' };
+      return { value: Math.hypot(b.x - a.x, b.y - a.y), unit: '', hint: `Độ dài ${a.name}${b.name}` };
+    }
+    if (verifyTarget === 'polygon_area') {
+      const poly = [...snapshot.objects].reverse().find((o) => o.kind === 'polygon');
+      if (!poly || poly.kind !== 'polygon') return { value: null, unit: '', hint: 'Hãy vẽ hoặc tải 1 đa giác mẫu.' };
+      const pts = poly.pointIds.map((id) => pointMap.get(id)).filter((p): p is Geo2DPoint => Boolean(p));
+      const { area } = polygonAreaPerimeter2D(pts);
+      return { value: area, unit: '', hint: `Diện tích ${pts.map((p) => p.name).join('')}` };
+    }
+    if (verifyTarget === 'circle_radius') {
+      const cir = [...snapshot.objects].reverse().find((o) => o.kind === 'circle');
+      if (!cir || cir.kind !== 'circle') return { value: null, unit: '', hint: 'Hãy vẽ hoặc tải 1 đường tròn.' };
+      const c = pointMap.get(cir.centerId);
+      const e = cir.edgePointId ? pointMap.get(cir.edgePointId) : null;
+      const r = c && e ? Math.hypot(e.x - c.x, e.y - c.y) : cir.fixedRadius || 0;
+      return { value: r, unit: '', hint: `Bán kính R đường tròn tâm ${c?.name || 'I'}` };
+    }
+    if (verifyTarget === 'angle') {
+      const ang = [...snapshot.objects].reverse().find((o) => o.kind === 'angle');
+      if (!ang || ang.kind !== 'angle') return { value: null, unit: '°', hint: 'Hãy dùng công cụ Đo góc chọn 3 điểm.' };
+      const a = pointMap.get(ang.pAId);
+      const v = pointMap.get(ang.vertexId);
+      const c = pointMap.get(ang.pCId);
+      if (!a || !v || !c) return { value: null, unit: '°', hint: 'Thiếu đỉnh góc.' };
+      return { value: angleDegrees2D(a, v, c), unit: '°', hint: `Góc ∠${a.name}${v.name}${c.name}` };
+    }
+    if (verifyTarget === 'extrema') {
+      if (!primaryFn) return { value: null, unit: '', hint: 'Cần có 1 hàm số đang bật.' };
+      const kps = detectKeyPoints(primaryFn.expression, snapshot.paramM, -10, 10, primaryFn.color);
+      const ext = kps.find((k) => k.kind === 'max' || k.kind === 'min');
+      if (!ext) return { value: null, unit: '', hint: 'Không tìm thấy cực trị trong [-10; 10].' };
+      return { value: ext.y, unit: '', hint: `Giá trị cực trị tại x ≈ ${format2DNum(ext.x)}` };
+    }
+    // integral_area
+    if (!integralResult) return { value: null, unit: '', hint: 'Hãy bật Tích phân xác định trước.' };
+    return { value: integralResult.boundedArea, unit: '', hint: `Diện tích hình phẳng S trên [${format2DNum(integralResult.a)}; ${format2DNum(integralResult.b)}]` };
+  }, [verifyTarget, primaryFn, verifyX, snapshot, pointMap, integralResult]);
 
   // Render full 2D canvas
   useEffect(() => {
@@ -329,6 +505,35 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
           if (Math.abs(gy) < step * 0.1) continue;
           ctx.fillText(format2DNum(gy), Math.min(w - 32, Math.max(8, ox + 6)), toSY(gy) - 4);
         }
+      }
+
+      // Item 20: Shaded Definite Integral Region
+      if (integralResult && integralResult.samples.length >= 2) {
+        const samps = integralResult.samples;
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(toSX(samps[0].x), toSY(samps[0].yTop));
+        for (let i = 1; i < samps.length; i++) {
+          ctx.lineTo(toSX(samps[i].x), toSY(samps[i].yTop));
+        }
+        for (let i = samps.length - 1; i >= 0; i--) {
+          ctx.lineTo(toSX(samps[i].x), toSY(samps[i].yBot));
+        }
+        ctx.closePath();
+        ctx.fillStyle = `${accentHex}38`;
+        ctx.fill();
+
+        // Dashed vertical limit lines x = a and x = b
+        ctx.strokeStyle = accentHex;
+        ctx.lineWidth = 1.6;
+        ctx.setLineDash([5, 4]);
+        for (const lim of [samps[0], samps[samps.length - 1]]) {
+          ctx.beginPath();
+          ctx.moveTo(toSX(lim.x), toSY(lim.yBot));
+          ctx.lineTo(toSX(lim.x), toSY(lim.yTop));
+          ctx.stroke();
+        }
+        ctx.restore();
       }
 
       // Drawn 2D Objects
@@ -457,7 +662,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
       const sampleCount = Math.min(900, Math.max(360, Math.round(w)));
 
       for (const fn of visibleFns) {
-        // Asymptotes
         if (showAsymptotes && fn.visible) {
           const asyms = detectAsymptotes(fn.expression, snapshot.paramM, xMin, xMax, '#fbbf24');
           ctx.save();
@@ -483,7 +687,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
           ctx.restore();
         }
 
-        // Main curve y = f(x)
         if (fn.visible) {
           ctx.save();
           ctx.strokeStyle = fn.color;
@@ -513,7 +716,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
           ctx.restore();
         }
 
-        // Derivative curve y = f'(x)
         if (fn.showDerivative) {
           ctx.save();
           ctx.strokeStyle = fn.color;
@@ -545,7 +747,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
           ctx.restore();
         }
 
-        // Key points
         if (showKeyPoints && fn.visible) {
           const pts = detectKeyPoints(fn.expression, snapshot.paramM, xMin, xMax, fn.color);
           for (const kp of pts) {
@@ -567,7 +768,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
         }
       }
 
-      // Intersections between visible functions
       if (showKeyPoints && visibleFns.length >= 2) {
         for (let i = 0; i < visibleFns.length; i++) {
           for (let j = i + 1; j < visibleFns.length; j++) {
@@ -653,7 +853,9 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
     showAsymptotes,
     showTangent,
     themeMode,
-    primaryFn
+    primaryFn,
+    integralResult,
+    accentHex
   ]);
 
   // Coordinate helpers
@@ -667,7 +869,7 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
   };
 
   const findHitPoint = (wx: number, wy: number): Geo2DPoint | null => {
-    const hitTol = 18 / view.scale;
+    const hitTol = (18 * sensitivity.touchRadius) / view.scale;
     let best: Geo2DPoint | null = null;
     let bestD = hitTol;
     for (const pt of snapshot.points) {
@@ -694,7 +896,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
       return;
     }
 
-    // Tools that select or create points
     let targetId = existing?.id;
     let newlyCreatedPt: Geo2DPoint | null = null;
     if (!targetId) {
@@ -734,7 +935,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
       return;
     }
 
-    // Complete 2-point or 3-point tool
     const newObj: Geo2DObject | null =
       activeTool === 'segment'
         ? { id: `seg_${Date.now()}`, kind: 'segment', p1Id: nextPending[0], p2Id: nextPending[1], color: '#f8fafc' }
@@ -802,7 +1002,8 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
       const pts = Array.from(pointersRef.current.values());
       const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
       if (dragRef.current.pinchDist && dist > 10) {
-        const factor = dist / dragRef.current.pinchDist;
+        const rawFactor = dist / dragRef.current.pinchDist;
+        const factor = 1 + (rawFactor - 1) * sensitivity.zoom;
         setView((prev) => ({ ...prev, scale: Math.min(260, Math.max(12, prev.scale * factor)) }));
       }
       dragRef.current.pinchDist = dist;
@@ -829,8 +1030,8 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
     }
 
     if (dragRef.current.mode === 'pan') {
-      const dx = e.clientX - dragRef.current.x;
-      const dy = e.clientY - dragRef.current.y;
+      const dx = (e.clientX - dragRef.current.x) * sensitivity.pan;
+      const dy = (e.clientY - dragRef.current.y) * sensitivity.pan;
       dragRef.current.x = e.clientX;
       dragRef.current.y = e.clientY;
       setView((prev) => ({ ...prev, cx: prev.cx - dx / prev.scale, cy: prev.cy + dy / prev.scale }));
@@ -847,7 +1048,8 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
   };
 
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    const factor = e.deltaY > 0 ? 0.9 : 1.11;
+    const stepFactor = 1 + 0.1 * sensitivity.zoom;
+    const factor = e.deltaY > 0 ? 1 / stepFactor : stepFactor;
     setView((prev) => ({ ...prev, scale: Math.min(260, Math.max(12, prev.scale * factor)) }));
   };
 
@@ -870,12 +1072,29 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
     }));
   };
 
+  const getBaseFilename = () => exportFilename.trim().replace(/[^a-zA-Z0-9_-]/g, '_') || 'tooltoan-2d-oxy';
+
   const exportPng = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    let dataUrl: string;
+    if (pngTransparent) {
+      dataUrl = canvas.toDataURL('image/png');
+    } else {
+      const off = document.createElement('canvas');
+      off.width = canvas.width;
+      off.height = canvas.height;
+      const octx = off.getContext('2d');
+      if (octx) {
+        octx.fillStyle = themeMode === 'light' ? '#f0f6ff' : '#060d1c';
+        octx.fillRect(0, 0, off.width, off.height);
+        octx.drawImage(canvas, 0, 0);
+      }
+      dataUrl = off.toDataURL('image/png');
+    }
     const a = document.createElement('a');
-    a.href = canvas.toDataURL('image/png');
-    a.download = 'tooltoan-2d-oxy.png';
+    a.href = dataUrl;
+    a.download = `${getBaseFilename()}.png`;
     a.click();
   };
 
@@ -884,9 +1103,19 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'tooltoan-2d-oxy.json';
+    a.download = `${getBaseFilename()}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleCopyShareLink = async () => {
+    try {
+      const url = buildShareUrl2D(snapshot);
+      await navigator.clipboard.writeText(url);
+      setToast('Đã sao chép liên kết chia sẻ đồ thị 2D!');
+    } catch {
+      setToast('Không thể sao chép liên kết.');
+    }
   };
 
   const importJson = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -977,7 +1206,7 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
               disabled={undoStack.length === 0}
               className="icon-btn glass-press"
               style={{ width: 34, height: 34, opacity: undoStack.length ? 1 : 0.35 }}
-              title="Hoàn tác"
+              title="Hoàn tác (Ctrl+Z)"
             >
               <Undo2 size={15} />
             </button>
@@ -987,7 +1216,7 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
               disabled={redoStack.length === 0}
               className="icon-btn glass-press"
               style={{ width: 34, height: 34, opacity: redoStack.length ? 1 : 0.35 }}
-              title="Làm lại"
+              title="Làm lại (Ctrl+Y)"
             >
               <Redo2 size={15} />
             </button>
@@ -999,6 +1228,15 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
               title="Về gốc tọa độ"
             >
               <RotateCcw size={15} />
+            </button>
+            <button
+              type="button"
+              onClick={handleCopyShareLink}
+              className="icon-btn glass-press"
+              style={{ width: 34, height: 34 }}
+              title="Sao chép link chia sẻ đồ thị 2D"
+            >
+              <Link2 size={15} />
             </button>
             <button
               type="button"
@@ -1014,7 +1252,7 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
               onClick={onToggleImmersive}
               className="icon-btn glass-press"
               style={{ width: 34, height: 34 }}
-              title="Toàn màn hình"
+              title="Toàn màn hình (F)"
             >
               <Maximize2 size={15} />
             </button>
@@ -1034,7 +1272,7 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
         </button>
       )}
 
-      {/* Bottom 10-Tool Strip + Parameter m (Play/Pause) + Trace Readout */}
+      {/* Bottom 10-Tool Strip + Parameter m (Custom bounds + Play/Pause) + Trace / Integral Readout */}
       {!isImmersive && (
         <div
           style={{
@@ -1049,7 +1287,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
             zIndex: 14
           }}
         >
-          {/* Parameter m & Trace Row */}
           <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
             <div
               className="glass-surface"
@@ -1060,7 +1297,7 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
                 className="icon-btn"
                 style={{ width: 26, height: 26 }}
                 onClick={() => setPlayParamM((v) => !v)}
-                title="Chạy tự động tham số m"
+                title="Chạy tự động tham số m (Space)"
               >
                 {playParamM ? <Pause size={13} color={accentHex} /> : <Play size={13} />}
               </button>
@@ -1071,13 +1308,24 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
                 type="range"
                 className="glass-slider"
                 style={{ width: 105 }}
-                min={-5}
-                max={5}
+                min={mMin}
+                max={mMax}
                 step={0.1}
-                value={snapshot.paramM}
+                value={Math.min(mMax, Math.max(mMin, snapshot.paramM))}
                 onChange={(e) => setSnapshot((p) => ({ ...p, paramM: parseFloat(e.target.value) }))}
               />
             </div>
+
+            {integralResult && (
+              <div
+                className="glass-surface mono"
+                style={{ pointerEvents: 'auto', padding: '5px 11px', borderRadius: 999, fontSize: 11, display: 'inline-flex', gap: 8 }}
+              >
+                <span style={{ color: accentHex }}>∫={integralResult.signedIntegral.toFixed(2)}</span>
+                <span style={{ color: '#10b981' }}>S={integralResult.boundedArea.toFixed(2)}</span>
+                <span style={{ color: '#fbbf24' }}>V={integralResult.revolutionVolume.toFixed(2)}</span>
+              </div>
+            )}
 
             {activeTool === 'trace' && primaryFn && Number.isFinite(traceY) && (
               <div
@@ -1091,7 +1339,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
             )}
           </div>
 
-          {/* 10 Interactive Geometry Tools Bar */}
           <div
             className="glass-surface"
             style={{
@@ -1150,7 +1397,7 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
             top: 62,
             right: 10,
             bottom: 162,
-            width: 'min(385px, calc(100vw - 20px))',
+            width: 'min(390px, calc(100vw - 20px))',
             borderRadius: 22,
             display: 'flex',
             flexDirection: 'column',
@@ -1191,7 +1438,7 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
           </div>
 
           <div className="scroll-area" style={{ flex: 1, padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {/* TAB 1: FUNCTIONS + KEYPAD + 31 TEMPLATES + VARIATION TABLE */}
+            {/* TAB 1: FUNCTIONS + SYMBOLIC f'(x) + INTEGRAL + VALUE TABLE + 31 TEMPLATES */}
             {activeTab === 'functions' && (
               <>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1224,7 +1471,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
                     </button>
                   </div>
 
-                  {/* Quick Math Symbol Keypad */}
                   <div style={{ display: 'flex', gap: 4, overflowX: 'auto', paddingBottom: 2 }}>
                     {QUICK_MATH_KEYS.map((k) => (
                       <button
@@ -1240,111 +1486,213 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
                   </div>
                 </div>
 
-                {/* Active Functions with Derivative & BBT Button */}
+                {/* Active Functions with Symbolic f'(x) (Item 7), BBT & Casio Value Table (Item 20) */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div style={{ fontSize: 11.5, fontWeight: 800, color: 'var(--text-secondary)' }}>
                     Danh sách hàm số ({snapshot.functions.length})
                   </div>
-                  {snapshot.functions.map((fn) => (
-                    <div
-                      key={fn.id}
-                      style={{
-                        padding: 9,
-                        borderRadius: 14,
-                        border: `1px solid ${fn.color}66`,
-                        background: 'rgba(148,163,184,0.08)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 7
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const nextCol = FN_COLORS[(FN_COLORS.indexOf(fn.color) + 1) % FN_COLORS.length];
-                            commit((p) => ({
-                              ...p,
-                              functions: p.functions.map((item) => (item.id === fn.id ? { ...item, color: nextCol } : item))
-                            }));
-                          }}
-                          style={{ width: 16, height: 16, borderRadius: '50%', background: fn.color, border: '1.5px solid #fff', cursor: 'pointer', flexShrink: 0 }}
-                          title="Đổi màu"
-                        />
-                        <input
-                          type="text"
-                          className="glass-input mono"
-                          style={{ padding: '6px 8px', fontSize: 12 }}
-                          value={fn.expression}
-                          onChange={(e) =>
-                            commit(
-                              (p) => ({
-                                ...p,
-                                functions: p.functions.map((item) => (item.id === fn.id ? { ...item, expression: e.target.value } : item))
-                              }),
-                              false
-                            )
-                          }
-                        />
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 5 }}>
-                        <div style={{ display: 'flex', gap: 5 }}>
+                  {snapshot.functions.map((fn) => {
+                    const symbolicDeriv = deriveSymbolicExpr(fn.expression);
+                    return (
+                      <div
+                        key={fn.id}
+                        style={{
+                          padding: 9,
+                          borderRadius: 14,
+                          border: `1px solid ${fn.color}66`,
+                          background: 'rgba(148,163,184,0.08)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 6
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <button
                             type="button"
-                            className={`chip-btn${fn.showDerivative ? ' active' : ''}`}
-                            style={{ minHeight: 26, padding: '2px 8px', fontSize: 10.5 }}
-                            onClick={() =>
+                            onClick={() => {
+                              const nextCol = FN_COLORS[(FN_COLORS.indexOf(fn.color) + 1) % FN_COLORS.length];
                               commit((p) => ({
                                 ...p,
-                                functions: p.functions.map((item) => (item.id === fn.id ? { ...item, showDerivative: !item.showDerivative } : item))
-                              }))
-                            }
-                          >
-                            f&apos;(x)
-                          </button>
-                          <button
-                            type="button"
-                            className="chip-btn active"
-                            style={{ minHeight: 26, padding: '2px 8px', fontSize: 10.5 }}
-                            onClick={() => {
-                              const res = analyzeVariationTable(fn.expression, snapshot.paramM);
-                              if (res) setVariationData(res);
-                              else setToast('Không thể phân tích bảng biến thiên cho biểu thức này.');
+                                functions: p.functions.map((item) => (item.id === fn.id ? { ...item, color: nextCol } : item))
+                              }));
                             }}
-                          >
-                            <Table2 size={12} />
-                            <span>Bảng biến thiên</span>
-                          </button>
+                            style={{ width: 16, height: 16, borderRadius: '50%', background: fn.color, border: '1.5px solid #fff', cursor: 'pointer', flexShrink: 0 }}
+                            title="Đổi màu"
+                          />
+                          <input
+                            type="text"
+                            className="glass-input mono"
+                            style={{ padding: '6px 8px', fontSize: 12 }}
+                            value={fn.expression}
+                            onChange={(e) =>
+                              commit(
+                                (p) => ({
+                                  ...p,
+                                  functions: p.functions.map((item) => (item.id === fn.id ? { ...item, expression: e.target.value } : item))
+                                }),
+                                false
+                              )
+                            }
+                          />
                         </div>
 
-                        <div style={{ display: 'flex', gap: 3 }}>
-                          <button
-                            type="button"
-                            className="icon-btn"
-                            style={{ width: 28, height: 28 }}
-                            onClick={() =>
-                              commit((p) => ({
-                                ...p,
-                                functions: p.functions.map((item) => (item.id === fn.id ? { ...item, visible: !item.visible } : item))
-                              }))
-                            }
+                        {/* Item 7: Symbolic Derivative Formula */}
+                        {symbolicDeriv && (
+                          <div
+                            className="mono"
+                            style={{
+                              fontSize: 11,
+                              color: '#fbbf24',
+                              padding: '4px 8px',
+                              borderRadius: 8,
+                              background: 'rgba(2,6,23,0.34)',
+                              overflowX: 'auto',
+                              whiteSpace: 'nowrap'
+                            }}
                           >
-                            {fn.visible ? <Eye size={14} /> : <EyeOff size={14} />}
-                          </button>
-                          <button
-                            type="button"
-                            className="icon-btn"
-                            style={{ width: 28, height: 28 }}
-                            onClick={() =>
-                              commit((p) => ({ ...p, functions: p.functions.filter((item) => item.id !== fn.id) }))
-                            }
-                          >
-                            <Trash2 size={14} color="#f43f5e" />
-                          </button>
+                            f&apos;(x) = {symbolicDeriv}
+                          </div>
+                        )}
+
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 5 }}>
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className={`chip-btn${fn.showDerivative ? ' active' : ''}`}
+                              style={{ minHeight: 26, padding: '2px 8px', fontSize: 10.5 }}
+                              onClick={() =>
+                                commit((p) => ({
+                                  ...p,
+                                  functions: p.functions.map((item) => (item.id === fn.id ? { ...item, showDerivative: !item.showDerivative } : item))
+                                }))
+                              }
+                            >
+                              Vẽ f&apos;(x)
+                            </button>
+                            <button
+                              type="button"
+                              className="chip-btn active"
+                              style={{ minHeight: 26, padding: '2px 8px', fontSize: 10.5 }}
+                              onClick={() => {
+                                const res = analyzeVariationTable(fn.expression, snapshot.paramM);
+                                if (res) setVariationData(res);
+                                else setToast('Không thể phân tích bảng biến thiên cho biểu thức này.');
+                              }}
+                            >
+                              <Table2 size={12} />
+                              <span>BBT</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="chip-btn"
+                              style={{ minHeight: 26, padding: '2px 8px', fontSize: 10.5 }}
+                              onClick={() => setTableModalExpr(fn.expression)}
+                            >
+                              <TableProperties size={12} />
+                              <span>Bảng giá trị</span>
+                            </button>
+                          </div>
+
+                          <div style={{ display: 'flex', gap: 3 }}>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              style={{ width: 28, height: 28 }}
+                              onClick={() =>
+                                commit((p) => ({
+                                  ...p,
+                                  functions: p.functions.map((item) => (item.id === fn.id ? { ...item, visible: !item.visible } : item))
+                                }))
+                              }
+                            >
+                              {fn.visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                            </button>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              style={{ width: 28, height: 28 }}
+                              onClick={() =>
+                                commit((p) => ({ ...p, functions: p.functions.filter((item) => item.id !== fn.id) }))
+                              }
+                            >
+                              <Trash2 size={14} color="#f43f5e" />
+                            </button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
+                </div>
+
+                {/* Item 20: Definite Integral, Area & Volume of Revolution */}
+                <div style={{ padding: 11, borderRadius: 15, border: '1px solid rgba(56,189,248,0.45)', background: 'rgba(56,189,248,0.08)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 11.5, fontWeight: 800, color: accentHex, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <AreaChart size={13} />
+                      <span>TÍCH PHÂN, DIỆN TÍCH & THỂ TÍCH KHỐI TRÒN XOAY</span>
+                    </span>
+                    <button
+                      type="button"
+                      className={`chip-btn${integralEnabled ? ' active' : ''}`}
+                      style={{ minHeight: 26, padding: '2px 8px', fontSize: 10.5 }}
+                      onClick={() => setIntegralEnabled((v) => !v)}
+                    >
+                      {integralEnabled ? 'Đang bật' : 'Bật'}
+                    </button>
+                  </div>
+                  {integralEnabled && (
+                    <>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                        <select
+                          className="glass-select"
+                          style={{ padding: '6px', fontSize: 11.5 }}
+                          value={integralFn?.id || ''}
+                          onChange={(e) => setIntegralFnId(e.target.value)}
+                        >
+                          {snapshot.functions.map((f) => (
+                            <option key={f.id} value={f.id} style={{ color: '#0f172a' }}>f: {f.expression}</option>
+                          ))}
+                        </select>
+                        <select
+                          className="glass-select"
+                          style={{ padding: '6px', fontSize: 11.5 }}
+                          value={integralSecondFnId}
+                          onChange={(e) => setIntegralSecondFnId(e.target.value)}
+                        >
+                          <option value="" style={{ color: '#0f172a' }}>Trục Ox (y = 0)</option>
+                          {snapshot.functions.map((f) => (
+                            <option key={f.id} value={f.id} style={{ color: '#0f172a' }}>g: {f.expression}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                        <label style={{ fontSize: 11, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                          <span>Cận dưới a</span>
+                          <input className="glass-input mono" style={{ padding: '6px 8px', fontSize: 12 }} value={integralAInput} onChange={(e) => setIntegralAInput(e.target.value)} />
+                        </label>
+                        <label style={{ fontSize: 11, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                          <span>Cận trên b</span>
+                          <input className="glass-input mono" style={{ padding: '6px 8px', fontSize: 12 }} value={integralBInput} onChange={(e) => setIntegralBInput(e.target.value)} />
+                        </label>
+                      </div>
+                      {integralResult && (
+                        <div className="mono" style={{ fontSize: 11.5, padding: 9, borderRadius: 11, background: 'rgba(2,6,23,0.44)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', color: accentHex }}>
+                            <span>∫(f - g)dx:</span>
+                            <b>{integralResult.signedIntegral.toFixed(4)}</b>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#10b981' }}>
+                            <span>Diện tích S = ∫|f - g|dx:</span>
+                            <b>{integralResult.boundedArea.toFixed(4)}</b>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#fbbf24' }}>
+                            <span>V tròn xoay (Ox):</span>
+                            <b>{integralResult.revolutionVolume.toFixed(4)} ({(integralResult.revolutionVolume / Math.PI).toFixed(3)}π)</b>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
 
                 {/* 31-Template Categorized Library */}
@@ -1450,7 +1798,7 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
               </>
             )}
 
-            {/* TAB 3: OBJECTS, MEASUREMENTS & VERIFY 2D */}
+            {/* TAB 3: OBJECTS, MEASUREMENTS & FULL VERIFY 2D (Item 9) */}
             {activeTab === 'objects' && (
               <>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1542,51 +1890,96 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
                   </div>
                 )}
 
-                {/* Verify Mode 2D */}
-                {primaryFn && (
-                  <div style={{ padding: 11, borderRadius: 15, border: '1px solid rgba(16,185,129,0.55)', background: 'rgba(16,185,129,0.09)', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <div style={{ fontSize: 11.5, fontWeight: 800, color: '#10b981' }}>KIỂM TRA ĐÁP ÁN HÀM SỐ f(x)</div>
-                    <div className="mono" style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
-                      Kiểm tra giá trị y = {primaryFn.expression} tại x₀:
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '0.7fr 1.3fr auto', gap: 6 }}>
-                      <input className="glass-input mono" style={{ padding: '7px', fontSize: 12 }} value={verifyX} onChange={(e) => setVerifyX(e.target.value)} placeholder="x₀" />
-                      <input className="glass-input mono" style={{ padding: '7px', fontSize: 12 }} value={verifyAns} onChange={(e) => setVerifyAns(e.target.value)} placeholder="Nhập kết quả..." />
+                {/* Item 9: Full 7-target Verify Mode 2D */}
+                <div style={{ padding: 11, borderRadius: 15, border: '1px solid rgba(16,185,129,0.55)', background: 'rgba(16,185,129,0.09)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 800, color: '#10b981' }}>KIỂM TRA ĐÁP ÁN 2D TOÀN DIỆN</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                    {[
+                      { id: 'fn_val' as const, label: 'f(x₀)' },
+                      { id: 'extrema' as const, label: 'Cực trị' },
+                      { id: 'integral_area' as const, label: 'S tích phân' },
+                      { id: 'segment' as const, label: 'Độ dài đoạn' },
+                      { id: 'polygon_area' as const, label: 'S đa giác' },
+                      { id: 'circle_radius' as const, label: 'Bán kính R' },
+                      { id: 'angle' as const, label: 'Số đo góc' }
+                    ].map((t) => (
                       <button
+                        key={t.id}
                         type="button"
-                        className="primary-btn"
-                        style={{ minHeight: 34, padding: '0 10px', background: '#10b981' }}
+                        className={`chip-btn${verifyTarget === t.id ? ' active' : ''}`}
+                        style={{ minHeight: 26, padding: '2px 8px', fontSize: 10.5 }}
                         onClick={() => {
-                          const x0 = evaluateVerifyAnswer(verifyX);
-                          const ans = evaluateVerifyAnswer(verifyAns);
-                          if (x0 === null || ans === null) {
-                            setVerifyMsg({ ok: false, text: 'Vui lòng nhập số hoặc biểu thức hợp lệ.' });
-                            return;
-                          }
-                          const expected = evaluateMathExpr(primaryFn.expression, x0, snapshot.paramM);
-                          if (!Number.isFinite(expected)) {
-                            setVerifyMsg({ ok: false, text: 'Hàm không xác định tại x₀ này.' });
-                          } else if (isVerifyAnswerCorrect(expected, ans)) {
-                            setVerifyMsg({ ok: true, text: `Chính xác! f(${format2DNum(x0)}) = ${expected.toFixed(2)}.` });
-                          } else {
-                            setVerifyMsg({ ok: false, text: `Chưa đúng! Gợi ý: đáp án ${ans > expected ? 'nhỏ hơn' : 'lớn hơn'} số bạn nhập.` });
-                          }
+                          setVerifyTarget(t.id);
+                          setVerifyMsg(null);
+                          setRevealVerifyAns(false);
                         }}
                       >
-                        <Check size={14} />
+                        {t.label}
                       </button>
-                    </div>
-                    {verifyMsg && (
-                      <div style={{ fontSize: 11.5, fontWeight: 700, color: verifyMsg.ok ? '#10b981' : '#f43f5e' }}>
-                        {verifyMsg.text}
-                      </div>
-                    )}
+                    ))}
                   </div>
-                )}
+
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{verifyExpectedInfo.hint}</div>
+
+                  {verifyExpectedInfo.value !== null && (
+                    <>
+                      <div style={{ display: 'grid', gridTemplateColumns: verifyTarget === 'fn_val' ? '0.65fr 1.35fr auto' : '1fr auto', gap: 6 }}>
+                        {verifyTarget === 'fn_val' && (
+                          <input className="glass-input mono" style={{ padding: '7px', fontSize: 12 }} value={verifyX} onChange={(e) => setVerifyX(e.target.value)} placeholder="x₀" />
+                        )}
+                        <input
+                          className="glass-input mono"
+                          style={{ padding: '7px', fontSize: 12 }}
+                          value={verifyAns}
+                          onChange={(e) => {
+                            setVerifyAns(e.target.value);
+                            setVerifyMsg(null);
+                          }}
+                          placeholder="Nhập số hoặc biểu thức..."
+                        />
+                        <button
+                          type="button"
+                          className="primary-btn"
+                          style={{ minHeight: 34, padding: '0 10px', background: '#10b981' }}
+                          onClick={() => {
+                            const ans = evaluateVerifyAnswer(verifyAns);
+                            if (ans === null) {
+                              setVerifyMsg({ ok: false, text: 'Biểu thức không hợp lệ.' });
+                              return;
+                            }
+                            const exp = verifyExpectedInfo.value!;
+                            if (isVerifyAnswerCorrect(exp, ans)) {
+                              setVerifyMsg({ ok: true, text: `Chính xác! Kết quả khớp (${exp.toFixed(2)}${verifyExpectedInfo.unit}).` });
+                            } else {
+                              setVerifyMsg({ ok: false, text: `Chưa đúng — đáp án ${ans > exp ? 'nhỏ hơn' : 'lớn hơn'} số bạn nhập.` });
+                            }
+                          }}
+                        >
+                          <Check size={14} />
+                        </button>
+                      </div>
+                      {verifyMsg && (
+                        <div style={{ fontSize: 11.5, fontWeight: 700, color: verifyMsg.ok ? '#10b981' : '#f43f5e' }}>
+                          {verifyMsg.text}
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        className="chip-btn"
+                        style={{ alignSelf: 'flex-start', minHeight: 26, fontSize: 10.5 }}
+                        onClick={() => setRevealVerifyAns((v) => !v)}
+                      >
+                        {revealVerifyAns
+                          ? `Đáp án chuẩn: ${verifyExpectedInfo.value.toFixed(3)}${verifyExpectedInfo.unit}`
+                          : 'Xem đáp án chuẩn'}
+                      </button>
+                    </>
+                  )}
+                </div>
               </>
             )}
 
-            {/* TAB 4: OXY DISPLAY SETTINGS & EXPORT/IMPORT */}
+            {/* TAB 4: OXY DISPLAY, CUSTOM m BOUNDS, 2D SENSITIVITY & EXPORT/SHARE */}
             {activeTab === 'settings' && (
               <>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -1612,9 +2005,82 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
                   ))}
                 </div>
 
+                {/* Item 8: Custom Parameter m bounds */}
+                <div style={{ padding: 10, borderRadius: 14, border: '1px solid var(--border-subtle)', background: 'rgba(148,163,184,0.08)', display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 800, color: accentHex }}>MIỀN GIÁ TRỊ THAM SỐ m</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                    <label style={{ fontSize: 11, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <span>m nhỏ nhất (m_min)</span>
+                      <input
+                        type="number"
+                        className="glass-input mono"
+                        style={{ padding: '6px 8px', fontSize: 12 }}
+                        value={mMin}
+                        onChange={(e) => setMMin(parseFloat(e.target.value) || -5)}
+                      />
+                    </label>
+                    <label style={{ fontSize: 11, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <span>m lớn nhất (m_max)</span>
+                      <input
+                        type="number"
+                        className="glass-input mono"
+                        style={{ padding: '6px 8px', fontSize: 12 }}
+                        value={mMax}
+                        onChange={(e) => setMMax(parseFloat(e.target.value) || 5)}
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                {/* Item 8: 2D Sensitivity Sliders */}
+                <div style={{ padding: 10, borderRadius: 14, border: '1px solid var(--border-subtle)', background: 'rgba(148,163,184,0.08)', display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 800, color: '#10b981' }}>ĐỘ NHẠY TƯƠNG TÁC OXY</div>
+                  {[
+                    { key: 'pan' as const, label: 'Độ nhạy kéo (Pan)', min: 0.4, max: 2.0 },
+                    { key: 'zoom' as const, label: 'Độ nhạy phóng to/thu nhỏ', min: 0.4, max: 2.0 },
+                    { key: 'touchRadius' as const, label: 'Bán kính bắt điểm', min: 0.6, max: 2.0 }
+                  ].map((s) => (
+                    <label key={s.key} style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>{s.label}</span>
+                        <b className="mono">{sensitivity[s.key].toFixed(2)}×</b>
+                      </div>
+                      <input
+                        type="range"
+                        className="glass-slider"
+                        min={s.min}
+                        max={s.max}
+                        step={0.05}
+                        value={sensitivity[s.key]}
+                        onChange={(e) => onUpdateSensitivity({ ...sensitivity, [s.key]: parseFloat(e.target.value) })}
+                      />
+                    </label>
+                  ))}
+                </div>
+
                 <hr style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', margin: 0 }} />
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  <button type="button" className="primary-btn" style={{ minHeight: 38, fontSize: 12.5 }} onClick={handleCopyShareLink}>
+                    <Link2 size={14} />
+                    <span>Sao chép Link chia sẻ 2D</span>
+                  </button>
+                  <input
+                    type="text"
+                    className="glass-input"
+                    style={{ padding: '7px 9px', fontSize: 12 }}
+                    placeholder="Tên file xuất (mặc định: tooltoan-2d-oxy)"
+                    value={exportFilename}
+                    onChange={(e) => setExportFilename(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className={`chip-btn${pngTransparent ? ' active' : ''}`}
+                    style={{ minHeight: 30, fontSize: 11 }}
+                    onClick={() => setPngTransparent((v) => !v)}
+                  >
+                    {pngTransparent ? '✓ PNG nền trong suốt' : 'PNG có nền hiện tại'}
+                  </button>
                   <button type="button" className="chip-btn glass-press" onClick={exportPng}>
                     <Download size={14} />
                     <span>Tải ảnh mặt phẳng Oxy (.PNG)</span>
@@ -1642,6 +2108,101 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
         accentHex={accentHex}
         onClose={() => setVariationData(null)}
       />
+
+      {/* Item 20: Casio-style Value Table Modal (x, f(x), f'(x)) */}
+      {tableModalExpr && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(2, 6, 23, 0.65)',
+            backdropFilter: 'blur(6px)',
+            zIndex: 60,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16
+          }}
+          onClick={() => setTableModalExpr(null)}
+        >
+          <div
+            className="glass-surface"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 'min(480px, 100%)',
+              maxHeight: '82vh',
+              borderRadius: 22,
+              padding: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 800 }}>Bảng Giá Trị (MODE TABLE)</div>
+                <div className="mono" style={{ fontSize: 11.5, color: accentHex }}>
+                  y = {tableModalExpr} (m = {snapshot.paramM.toFixed(1)})
+                </div>
+              </div>
+              <button type="button" className="icon-btn" style={{ width: 30, height: 30 }} onClick={() => setTableModalExpr(null)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+              <label style={{ fontSize: 11, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <span>Start</span>
+                <input className="glass-input mono" style={{ padding: '6px 8px', fontSize: 12 }} value={tableStart} onChange={(e) => setTableStart(e.target.value)} />
+              </label>
+              <label style={{ fontSize: 11, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <span>End</span>
+                <input className="glass-input mono" style={{ padding: '6px 8px', fontSize: 12 }} value={tableEnd} onChange={(e) => setTableEnd(e.target.value)} />
+              </label>
+              <label style={{ fontSize: 11, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <span>Step</span>
+                <input className="glass-input mono" style={{ padding: '6px 8px', fontSize: 12 }} value={tableStep} onChange={(e) => setTableStep(e.target.value)} />
+              </label>
+            </div>
+
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+              Chạm vào 1 dòng bất kỳ để nhảy thẳng tới điểm đó trên đồ thị Oxy.
+            </div>
+
+            <div className="scroll-area" style={{ flex: 1, borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'rgba(2,6,23,0.4)' }}>
+              <table className="mono" style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', textAlign: 'center' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-subtle)', position: 'sticky', top: 0, background: 'rgba(15,23,42,0.92)' }}>
+                    <th style={{ padding: '7px 6px' }}>x</th>
+                    <th style={{ padding: '7px 6px', color: accentHex }}>f(x)</th>
+                    <th style={{ padding: '7px 6px', color: '#fbbf24' }}>f&apos;(x)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {valueTableRows.map((row) => (
+                    <tr
+                      key={row.x}
+                      onClick={() => {
+                        if (Number.isFinite(row.y)) {
+                          setView((v) => ({ ...v, cx: row.x, cy: row.y }));
+                          setActiveTool('trace');
+                          setTraceX(row.x);
+                          setTableModalExpr(null);
+                        }
+                      }}
+                      style={{ borderBottom: '1px solid rgba(148,163,184,0.12)', cursor: 'pointer' }}
+                    >
+                      <td style={{ padding: '6px' }}>{format2DNum(row.x)}</td>
+                      <td style={{ padding: '6px', fontWeight: 700 }}>{Number.isFinite(row.y) ? row.y.toFixed(4) : 'Không XĐ'}</td>
+                      <td style={{ padding: '6px', color: '#fbbf24' }}>{Number.isFinite(row.dy) ? row.dy.toFixed(4) : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

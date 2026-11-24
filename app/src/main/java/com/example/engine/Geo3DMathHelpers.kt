@@ -457,4 +457,439 @@ object Geo3DMathHelpers {
             }
         }
     }
+
+    // ================= ADVANCED 3D ANALYSIS (SPHERES, DIHEDRAL, SKEW LINES, UNFOLDING) =================
+
+    data class SphereResult3D(
+        val isCircumscribed: Boolean,
+        val centerWorld: Vec3,
+        val centerMath: Vec3,
+        val radius: Float,
+        val surfaceArea: Float,
+        val volume: Float,
+        val formulaHint: String
+    )
+
+    data class DihedralAngleResult3D(
+        val angleDegrees: Float,
+        val plane1Eq: String,
+        val plane2Eq: String,
+        val cosPhi: Float
+    )
+
+    data class SkewLinesResult3D(
+        val distance: Float,
+        val isParallel: Boolean,
+        val isIntersecting: Boolean,
+        val closestOnLine1: Vec3,
+        val closestOnLine2: Vec3
+    )
+
+    data class UnfoldedFace3D(
+        val points: List<Vec3>,
+        val isBase: Boolean
+    )
+
+    fun computeCircumSphere(
+        scene: BuiltScene,
+        snap: GeometrySnapshot,
+        originWorld: Vec3
+    ): SphereResult3D? {
+        val safeA = max(0.5f, snap.a)
+        val safeB = max(0.5f, snap.b)
+        val safeH = max(0.5f, snap.h)
+        val sqrt2 = sqrt(2f)
+        val sqrt3 = sqrt(3f)
+
+        var center: Vec3
+        var radius: Float
+        var formulaHint: String
+
+        when (snap.shape) {
+            ShapeType.SPHERE -> {
+                val hint = scene.roundBodyHint as? RoundBodyHint.Sphere
+                val r = hint?.radius ?: (safeA * 0.5f)
+                center = hint?.center ?: Vec3(0f, r, 0f)
+                radius = r
+                formulaHint = "Mặt cầu tâm O, bán kính R"
+            }
+            ShapeType.CUBE -> {
+                center = Vec3(0f, safeA * 0.5f, 0f)
+                radius = safeA * sqrt3 * 0.5f
+                formulaHint = "R = a√3 / 2"
+            }
+            ShapeType.BOX -> {
+                center = Vec3(0f, safeH * 0.5f, 0f)
+                radius = 0.5f * sqrt(safeA * safeA + safeB * safeB + safeH * safeH)
+                formulaHint = "R = ½√(a² + b² + h²)"
+            }
+            ShapeType.TETRA_ORTHO -> {
+                val pO = scene.pointRegistry["O"] ?: Vec3.ZERO
+                val pA = scene.pointRegistry["A"] ?: Vec3(safeA, 0f, 0f)
+                val pB = scene.pointRegistry["B"] ?: Vec3(0f, 0f, safeB)
+                val pC = scene.pointRegistry["C"] ?: Vec3(0f, safeH, 0f)
+                center = Vec3((pO.x + pA.x) * 0.5f, (pO.y + pC.y) * 0.5f, (pO.z + pB.z) * 0.5f)
+                radius = center.distanceTo(pO)
+                formulaHint = "R = ½√(OA² + OB² + OC²)"
+            }
+            ShapeType.OCTAHEDRON -> {
+                val r = safeA / sqrt2
+                center = Vec3(0f, r, 0f)
+                radius = r
+                formulaHint = "R = a√2 / 2"
+            }
+            ShapeType.PYRAMID3 -> {
+                val rBase = safeA / sqrt3
+                val rVal = (safeH * safeH + rBase * rBase) / (2f * safeH)
+                center = Vec3(0f, safeH - rVal, 0f)
+                radius = rVal
+                formulaHint = "R = (h² + R_đáy²) / (2h)"
+            }
+            ShapeType.PYRAMID3_SA -> {
+                val rBase = safeA / sqrt3
+                val cBase = scene.pointRegistry["O"] ?: Vec3.ZERO
+                center = Vec3(cBase.x, safeH * 0.5f, cBase.z)
+                radius = kotlin.math.hypot(rBase, safeH * 0.5f)
+                formulaHint = "R = √(R_đáy² + (SA/2)²)"
+            }
+            ShapeType.PYRAMID4 -> {
+                val rBase = safeA / sqrt2
+                val rVal = (safeH * safeH + rBase * rBase) / (2f * safeH)
+                center = Vec3(0f, safeH - rVal, 0f)
+                radius = rVal
+                formulaHint = "R = (h² + (a√2/2)²) / (2h)"
+            }
+            ShapeType.PYRAMID4_SA -> {
+                val rBase = safeA / sqrt2
+                val cBase = scene.pointRegistry["O"] ?: Vec3.ZERO
+                center = Vec3(cBase.x, safeH * 0.5f, cBase.z)
+                radius = kotlin.math.hypot(rBase, safeH * 0.5f)
+                formulaHint = "R = ½√(SA² + AC²)"
+            }
+            ShapeType.PRISM3, ShapeType.PRISM3_OBLIQUE -> {
+                val pts = scene.pointRegistry.values
+                if (pts.isEmpty()) return null
+                var sum = Vec3.ZERO
+                pts.forEach { sum += it }
+                center = sum / pts.size.toFloat()
+                radius = pts.maxOf { it.distanceTo(center) }
+                formulaHint = "R = √(R_đáy² + (h/2)²)"
+            }
+            ShapeType.PRISM6 -> {
+                center = Vec3(0f, safeH * 0.5f, 0f)
+                radius = kotlin.math.hypot(safeA, safeH * 0.5f)
+                formulaHint = "R = √(a² + (h/2)²)"
+            }
+            ShapeType.CYLINDER -> {
+                val hint = scene.roundBodyHint as? RoundBodyHint.Cylinder
+                val r = hint?.radius ?: (safeA * 0.5f)
+                val cy = hint?.let { (it.centerBottom.y + it.centerTop.y) * 0.5f } ?: (safeH * 0.5f)
+                center = Vec3(0f, cy, 0f)
+                radius = kotlin.math.hypot(r, safeH * 0.5f)
+                formulaHint = "R_mc = √(R_đáy² + (h/2)²)"
+            }
+            ShapeType.CONE -> {
+                val hint = scene.roundBodyHint as? RoundBodyHint.Cone
+                val r = hint?.radius ?: (safeA * 0.5f)
+                val rVal = (safeH * safeH + r * r) / (2f * safeH)
+                center = Vec3(0f, safeH - rVal, 0f)
+                radius = rVal
+                formulaHint = "R_mc = l² / (2h)"
+            }
+            else -> {
+                val pts = scene.pointRegistry.values
+                if (pts.isEmpty()) return null
+                var sum = Vec3.ZERO
+                pts.forEach { sum += it }
+                center = sum / pts.size.toFloat()
+                radius = pts.maxOf { it.distanceTo(center) }
+                formulaHint = "Mặt cầu ngoại tiếp gần đúng qua các đỉnh"
+            }
+        }
+
+        val piF = kotlin.math.PI.toFloat()
+        return SphereResult3D(
+            isCircumscribed = true,
+            centerWorld = center,
+            centerMath = ShapeBuilder.worldToMath(center, originWorld),
+            radius = radius,
+            surfaceArea = 4f * piF * radius * radius,
+            volume = (4f / 3f) * piF * radius * radius * radius,
+            formulaHint = formulaHint
+        )
+    }
+
+    fun computeInSphere(
+        scene: BuiltScene,
+        snap: GeometrySnapshot,
+        originWorld: Vec3
+    ): SphereResult3D? {
+        val safeA = max(0.5f, snap.a)
+        val safeB = max(0.5f, snap.b)
+        val safeH = max(0.5f, snap.h)
+        val sqrt2 = sqrt(2f)
+        val sqrt3 = sqrt(3f)
+
+        val center: Vec3
+        val radius: Float
+        val formulaHint: String
+
+        when (snap.shape) {
+            ShapeType.SPHERE -> {
+                val hint = scene.roundBodyHint as? RoundBodyHint.Sphere
+                val r = hint?.radius ?: (safeA * 0.5f)
+                center = hint?.center ?: Vec3(0f, r, 0f)
+                radius = r
+                formulaHint = "Mặt cầu nội tiếp trùng chính nó"
+            }
+            ShapeType.CUBE -> {
+                radius = safeA * 0.5f
+                center = Vec3(0f, radius, 0f)
+                formulaHint = "r = a / 2"
+            }
+            ShapeType.BOX -> {
+                radius = minOf(safeA, safeB, safeH) * 0.5f
+                center = Vec3(0f, safeH * 0.5f, 0f)
+                formulaHint = "r = min(a, b, h) / 2"
+            }
+            ShapeType.OCTAHEDRON -> {
+                radius = safeA * sqrt(6f) / 6f
+                center = Vec3(0f, safeA / sqrt2, 0f)
+                formulaHint = "r = a√6 / 6"
+            }
+            ShapeType.CYLINDER -> {
+                val hint = scene.roundBodyHint as? RoundBodyHint.Cylinder
+                val r = hint?.radius ?: (safeA * 0.5f)
+                radius = minOf(r, safeH * 0.5f)
+                center = Vec3(0f, safeH * 0.5f, 0f)
+                formulaHint = "r = min(R_đáy, h/2)"
+            }
+            ShapeType.CONE -> {
+                val hint = scene.roundBodyHint as? RoundBodyHint.Cone
+                val r = hint?.radius ?: (safeA * 0.5f)
+                val l = kotlin.math.hypot(r, safeH)
+                radius = (r * safeH) / (r + l)
+                center = Vec3(0f, radius, 0f)
+                formulaHint = "r = (R·h) / (R + l)"
+            }
+            ShapeType.PRISM3, ShapeType.PRISM3_OBLIQUE -> {
+                val rInBase = safeA / (2f * sqrt3)
+                radius = minOf(rInBase, safeH * 0.5f)
+                val pts = scene.pointRegistry.values
+                val avgX = if (pts.isNotEmpty()) pts.map { it.x }.average().toFloat() else 0f
+                val avgZ = if (pts.isNotEmpty()) pts.map { it.z }.average().toFloat() else 0f
+                center = Vec3(avgX, safeH * 0.5f, avgZ)
+                formulaHint = "r = min(r_đáy, h/2)"
+            }
+            ShapeType.PRISM6 -> {
+                val rInBase = safeA * sqrt3 * 0.5f
+                radius = minOf(rInBase, safeH * 0.5f)
+                center = Vec3(0f, safeH * 0.5f, 0f)
+                formulaHint = "r = min(a√3/2, h/2)"
+            }
+            else -> {
+                val sTp = scene.metrics.sTp
+                if (sTp < 1e-4f) return null
+                radius = (3f * scene.metrics.vol) / sTp
+                center = when (snap.shape) {
+                    ShapeType.TETRA_ORTHO -> {
+                        val pO = scene.pointRegistry["O"] ?: Vec3.ZERO
+                        Vec3(pO.x + radius, pO.y + radius, pO.z + radius)
+                    }
+                    ShapeType.PYRAMID3, ShapeType.PYRAMID4 -> Vec3(0f, radius, 0f)
+                    else -> {
+                        val basePts = scene.pointRegistry.values.filter { abs(it.y) < 1e-3f }
+                        val bx = if (basePts.isNotEmpty()) basePts.map { it.x }.average().toFloat() else 0f
+                        val bz = if (basePts.isNotEmpty()) basePts.map { it.z }.average().toFloat() else 0f
+                        Vec3(bx, radius, bz)
+                    }
+                }
+                formulaHint = "r = 3V / S_tp"
+            }
+        }
+
+        val piF = kotlin.math.PI.toFloat()
+        return SphereResult3D(
+            isCircumscribed = false,
+            centerWorld = center,
+            centerMath = ShapeBuilder.worldToMath(center, originWorld),
+            radius = radius,
+            surfaceArea = 4f * piF * radius * radius,
+            volume = (4f / 3f) * piF * radius * radius * radius,
+            formulaHint = formulaHint
+        )
+    }
+
+    fun computeDihedralAngle(
+        p1: Vec3,
+        p2: Vec3,
+        p3: Vec3,
+        q1: Vec3,
+        q2: Vec3,
+        q3: Vec3,
+        originWorld: Vec3
+    ): DihedralAngleResult3D? {
+        val n1 = (p2 - p1).cross(p3 - p1)
+        val n2 = (q2 - q1).cross(q3 - q1)
+        val l1 = n1.length()
+        val l2 = n2.length()
+        if (l1 < 1e-4f || l2 < 1e-4f) return null
+
+        val cosPhi = (abs(n1.dot(n2)) / (l1 * l2)).coerceIn(0f, 1f)
+        val angleDeg = Math.toDegrees(kotlin.math.acos(cosPhi.toDouble())).toFloat()
+        val p1Eq = formatPlaneEquation(
+            ShapeBuilder.worldToMath(p1, originWorld),
+            ShapeBuilder.worldToMath(p2, originWorld),
+            ShapeBuilder.worldToMath(p3, originWorld)
+        )
+        val p2Eq = formatPlaneEquation(
+            ShapeBuilder.worldToMath(q1, originWorld),
+            ShapeBuilder.worldToMath(q2, originWorld),
+            ShapeBuilder.worldToMath(q3, originWorld)
+        )
+        return DihedralAngleResult3D(angleDeg, p1Eq, p2Eq, cosPhi)
+    }
+
+    fun computeSkewLinesDistance(a1: Vec3, a2: Vec3, b1: Vec3, b2: Vec3): SkewLinesResult3D? {
+        val u = a2 - a1
+        val v = b2 - b1
+        val w0 = a1 - b1
+        val a = u.dot(u)
+        val b = u.dot(v)
+        val c = v.dot(v)
+        if (a < 1e-6f || c < 1e-6f) return null
+
+        val d = u.dot(w0)
+        val e = v.dot(w0)
+        val denom = a * c - b * b
+
+        if (abs(denom) < 1e-5f) {
+            val s = -d / a
+            val h1 = a1 + u * s
+            val dist = h1.distanceTo(b1)
+            return SkewLinesResult3D(
+                distance = dist,
+                isParallel = true,
+                isIntersecting = dist < 1e-3f,
+                closestOnLine1 = h1,
+                closestOnLine2 = b1
+            )
+        }
+
+        val sc = (b * e - c * d) / denom
+        val tc = (a * e - b * d) / denom
+        val h1 = a1 + u * sc
+        val h2 = b1 + v * tc
+        val dist = h1.distanceTo(h2)
+        return SkewLinesResult3D(
+            distance = dist,
+            isParallel = false,
+            isIntersecting = dist < 1e-3f,
+            closestOnLine1 = h1,
+            closestOnLine2 = h2
+        )
+    }
+
+    private fun rotateAroundAxis(pt: Vec3, origin: Vec3, axisUnit: Vec3, angleRad: Float): Vec3 {
+        val p = pt - origin
+        val cosA = kotlin.math.cos(angleRad)
+        val sinA = kotlin.math.sin(angleRad)
+        val kDotP = axisUnit.dot(p)
+        val kCrossP = axisUnit.cross(p)
+        return origin + Vec3(
+            x = p.x * cosA + kCrossP.x * sinA + axisUnit.x * kDotP * (1f - cosA),
+            y = p.y * cosA + kCrossP.y * sinA + axisUnit.y * kDotP * (1f - cosA),
+            z = p.z * cosA + kCrossP.z * sinA + axisUnit.z * kDotP * (1f - cosA)
+        )
+    }
+
+    fun buildUnfoldedFaces(
+        scene: BuiltScene,
+        shape: ShapeType,
+        unfoldRatio: Float
+    ): List<UnfoldedFace3D>? {
+        if (shape.isRound) return null
+        val t = unfoldRatio.coerceIn(0f, 1f)
+        if (t <= 0.002f) return null
+        val occluders = scene.occluderFaces
+        if (occluders.isEmpty()) return null
+
+        var baseIdx = 0
+        var minY = Float.POSITIVE_INFINITY
+        occluders.forEachIndexed { idx, f ->
+            if (f.center.y < minY) {
+                minY = f.center.y
+                baseIdx = idx
+            }
+        }
+        val baseFace = occluders[baseIdx]
+        val baseNormal = baseFace.normal
+        val result = ArrayList<UnfoldedFace3D>(occluders.size)
+        result.add(UnfoldedFace3D(baseFace.points, isBase = true))
+
+        fun findSharedEdge(fA: List<Vec3>, fB: List<Vec3>): Pair<Vec3, Vec3>? {
+            val shared = ArrayList<Vec3>(2)
+            for (p in fA) {
+                if (fB.any { it.distanceTo(p) < 1e-3f }) shared.add(p)
+            }
+            return if (shared.size >= 2) shared[0] to shared[1] else null
+        }
+
+        var firstSideOrig: RenderFace? = null
+        var firstSideHinge: Pair<Vec3, Vec3>? = null
+        var firstSideAngle = 0f
+        var firstSideAxis = Vec3(1f, 0f, 0f)
+        val remaining = ArrayList<RenderFace>()
+
+        for (i in occluders.indices) {
+            if (i == baseIdx) continue
+            val face = occluders[i]
+            val hinge = findSharedEdge(baseFace.points, face.points)
+            if (hinge == null) {
+                remaining.add(face)
+                continue
+            }
+            val (h0, h1) = hinge
+            val axis = (h1 - h0).normalized()
+            val cosAngle = face.normal.dot(baseNormal).coerceIn(-1f, 1f)
+            val fullAngle = kotlin.math.acos(cosAngle.toDouble()).toFloat()
+            val testPos = rotateAroundAxis(face.center, h0, axis, fullAngle * 0.25f)
+            val testNeg = rotateAroundAxis(face.center, h0, axis, -fullAngle * 0.25f)
+            val sign = if (testPos.distanceTo(baseFace.center) >= testNeg.distanceTo(baseFace.center)) 1f else -1f
+            val angle = sign * fullAngle * t
+            val unfoldedPts = face.points.map { rotateAroundAxis(it, h0, axis, angle) }
+            result.add(UnfoldedFace3D(unfoldedPts, isBase = false))
+
+            if (firstSideOrig == null) {
+                firstSideOrig = face
+                firstSideHinge = hinge
+                firstSideAngle = angle
+                firstSideAxis = axis
+            }
+        }
+
+        for (remFace in remaining) {
+            val sideOrig = firstSideOrig
+            val sideHinge = firstSideHinge
+            if (sideOrig != null && sideHinge != null) {
+                val topHinge = findSharedEdge(sideOrig.points, remFace.points)
+                if (topHinge != null) {
+                    val (th0, th1) = topHinge
+                    val tAxis = (th1 - th0).normalized()
+                    val cosA = remFace.normal.dot(sideOrig.normal).coerceIn(-1f, 1f)
+                    val fullA = kotlin.math.acos(cosA.toDouble()).toFloat()
+                    val testP = rotateAroundAxis(remFace.center, th0, tAxis, fullA * 0.25f)
+                    val testN = rotateAroundAxis(remFace.center, th0, tAxis, -fullA * 0.25f)
+                    val sgn = if (testP.distanceTo(sideOrig.center) >= testN.distanceTo(sideOrig.center)) 1f else -1f
+                    val step1 = remFace.points.map { rotateAroundAxis(it, th0, tAxis, sgn * fullA * t) }
+                    val step2 = step1.map { rotateAroundAxis(it, sideHinge.first, firstSideAxis, firstSideAngle) }
+                    result.add(UnfoldedFace3D(step2, isBase = false))
+                    continue
+                }
+            }
+            result.add(UnfoldedFace3D(remFace.points, isBase = false))
+        }
+
+        return result
+    }
 }

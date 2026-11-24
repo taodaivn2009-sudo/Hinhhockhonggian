@@ -305,7 +305,13 @@ data class Geo2DUiState(
     val replayPlaying: Boolean = false,
     val replayStepLabel: String = "",
     val verifyHideAnswers: Boolean = false,
-    val exportTransparentBg: Boolean = false
+    val exportTransparentBg: Boolean = false,
+    val integralEnabled: Boolean = false,
+    val integralFnId: String? = null,
+    val integralSecondFnId: String? = null,
+    val integralA: Double = 0.0,
+    val integralB: Double = 2.0,
+    val valueTableFnId: String? = null
 )
 
 object Geo2DMathHelpers {

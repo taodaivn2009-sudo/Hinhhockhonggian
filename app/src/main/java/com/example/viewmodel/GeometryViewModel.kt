@@ -152,7 +152,12 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
             calcPointB = if (st.calcPointB in scene.pointRegistry) st.calcPointB else keys.getOrElse(1) { keys.firstOrNull() ?: "A" },
             calcPlaneP1 = if (st.calcPlaneP1 in scene.pointRegistry) st.calcPlaneP1 else keys.getOrElse(1) { keys.firstOrNull() ?: "A" },
             calcPlaneP2 = if (st.calcPlaneP2 in scene.pointRegistry) st.calcPlaneP2 else keys.getOrElse(2) { keys.firstOrNull() ?: "B" },
-            calcPlaneP3 = if (st.calcPlaneP3 in scene.pointRegistry) st.calcPlaneP3 else keys.getOrElse(3) { keys.firstOrNull() ?: "C" }
+            calcPlaneP3 = if (st.calcPlaneP3 in scene.pointRegistry) st.calcPlaneP3 else keys.getOrElse(3) { keys.firstOrNull() ?: "C" },
+            calcPlaneQ1 = if (st.calcPlaneQ1 in scene.pointRegistry) st.calcPlaneQ1 else keys.getOrElse(0) { "S" },
+            calcPlaneQ2 = if (st.calcPlaneQ2 in scene.pointRegistry) st.calcPlaneQ2 else keys.getOrElse(1) { keys.firstOrNull() ?: "A" },
+            calcPlaneQ3 = if (st.calcPlaneQ3 in scene.pointRegistry) st.calcPlaneQ3 else keys.getOrElse(2) { keys.firstOrNull() ?: "B" },
+            skewPointC = if (st.skewPointC in scene.pointRegistry) st.skewPointC else keys.getOrElse(2) { keys.firstOrNull() ?: "B" },
+            skewPointD = if (st.skewPointD in scene.pointRegistry) st.skewPointD else keys.getOrElse(3) { keys.firstOrNull() ?: "C" }
         )
     }
 
@@ -390,6 +395,30 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(calcPlaneP1 = p1, calcPlaneP2 = p2, calcPlaneP3 = p3) }
     }
 
+    fun setCalcPlaneQPoints(q1: String, q2: String, q3: String) {
+        _uiState.update { it.copy(calcPlaneQ1 = q1, calcPlaneQ2 = q2, calcPlaneQ3 = q3) }
+    }
+
+    fun setSkewLinePoints(c: String, d: String) {
+        _uiState.update { it.copy(skewPointC = c, skewPointD = d) }
+    }
+
+    fun toggleSkewPerp(show: Boolean) {
+        _uiState.update { it.copy(showSkewPerp = show) }
+    }
+
+    fun toggleCircumSphere(show: Boolean) {
+        _uiState.update { it.copy(showCircumSphere = show) }
+    }
+
+    fun toggleInSphere(show: Boolean) {
+        _uiState.update { it.copy(showInSphere = show) }
+    }
+
+    fun updateUnfoldRatio(ratio: Float) {
+        _uiState.update { it.copy(unfoldRatio = ratio.coerceIn(0f, 1f)) }
+    }
+
     fun toggleVerifyHideAnswers() {
         _uiState.update { it.copy(verifyHideAnswers = !it.verifyHideAnswers) }
     }
@@ -570,6 +599,7 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
             st.copy(
                 selectedFirstPoint = null,
                 linkedPartners = emptySet(),
+                unfoldRatio = 0f,
                 openCategories = st.openCategories + shape.category
             )
         }
@@ -1413,6 +1443,10 @@ class GeometryViewModel(application: Application) : AndroidViewModel(application
                 linkedPartners = emptySet(),
                 canUndo = false,
                 canRedo = false,
+                showCircumSphere = false,
+                showInSphere = false,
+                unfoldRatio = 0f,
+                showSkewPerp = false,
                 openCategories = setOf(ShapeCategory.PYRAMID)
             )
         }

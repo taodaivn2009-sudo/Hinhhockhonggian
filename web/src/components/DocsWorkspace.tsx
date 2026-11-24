@@ -1,547 +1,649 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import * as pdfjsLib from 'pdfjs-dist';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bookmark,
-  BookmarkCheck,
+  BookOpen,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  FileUp,
-  ListTree,
+  ChevronUp,
+  Link2,
+  Maximize2,
+  Minimize2,
+  Moon,
   Search,
   Sparkles,
+  Sun,
+  Upload,
   ZoomIn,
-  ZoomOut,
-  X
+  ZoomOut
 } from 'lucide-react';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import {
-  GradeId,
-  normalizeVietnamese,
-  PDF_CURRICULUM_TOPICS,
-  PDF_DEFAULT_URL,
-  PDF_TOTAL_PAGES
+  PDF_BOOK_SUBTITLE,
+  PDF_BOOK_TITLE,
+  PDF_GRADES,
+  PDF_TOC_TOPICS,
+  PDF_TOTAL_PAGES,
+  PdfGradeId,
+  searchPdfTopics,
+  sectionLabelForPage
 } from '../data/pdfToc';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url
-).toString();
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+
+const BOOKMARKS_KEY = 'tooltoan_pdf_bookmarks_v1';
+const PDF_URL_KEY = 'tooltoan_pdf_custom_url_v1';
+const LAST_PAGE_KEY = 'tooltoan_pdf_last_page_v1';
+const LAST_TAB_KEY = 'tooltoan_pdf_last_tab_v1';
+const NIGHT_FILTER_KEY = 'tooltoan_pdf_night_filter_v1';
+
+type DocsTab = PdfGradeId | 'bookmarks';
 
 interface DocsWorkspaceProps {
   accentHex: string;
+  externalPage: number | null;
+  onExternalPageConsumed: () => void;
   onAskAiAboutPage: (prompt: string) => void;
 }
 
-const BOOKMARKS_KEY = 'tooltoan_pdf_bookmarks_v1';
-const CUSTOM_URL_KEY = 'tooltoan_pdf_custom_url_v1';
-
-export const DocsWorkspace: React.FC<DocsWorkspaceProps> = ({ accentHex, onAskAiAboutPage }) => {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const renderTaskRef = useRef<pdfjsLib.RenderTask | null>(null);
-
+export const DocsWorkspace: React.FC<DocsWorkspaceProps> = ({
+  accentHex,
+  externalPage,
+  onExternalPageConsumed,
+  onAskAiAboutPage
+}) => {
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
-  const [pdfSourceUrl, setPdfSourceUrl] = useState<string>(
-    () => localStorage.getItem(CUSTOM_URL_KEY) || PDF_DEFAULT_URL
-  );
-  const [customUrlInput, setCustomUrlInput] = useState<string>(
-    () => localStorage.getItem(CUSTOM_URL_KEY) || ''
-  );
-  const [totalPages, setTotalPages] = useState<number>(PDF_TOTAL_PAGES);
-  const [pageNum, setPageNum] = useState<number>(18);
-  const [pageInput, setPageInput] = useState<string>('18');
+  const [numPages, setNumPages] = useState<number>(PDF_TOTAL_PAGES);
+  const [currentPage, setCurrentPage] = useState<number>(() => {
+    const saved = parseInt(localStorage.getItem(LAST_PAGE_KEY) || '1', 10);
+    return Number.isFinite(saved) && saved >= 1 && saved <= PDF_TOTAL_PAGES ? saved : 1;
+  });
   const [zoom, setZoom] = useState<number>(1.2);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const [tocOpen, setTocOpen] = useState<boolean>(false);
-  const [selectedGrade, setSelectedGrade] = useState<GradeId | 'all'>('all');
+  const [loading, setLoading] = useState<boolean>(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [tocOpen, setTocOpen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth >= 900 : true);
+  const [activeTab, setActiveTab] = useState<DocsTab>(() => {
+    const saved = localStorage.getItem(LAST_TAB_KEY) as DocsTab | null;
+    if (saved && ['grade_10', 'grade_11', 'grade_12', 'bookmarks'].includes(saved)) return saved;
+    return 'grade_12';
+  });
+  const [expandedTopics, setExpandedTopics] = useState<Record<string, boolean>>({});
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [nightFilter, setNightFilter] = useState<boolean>(() => localStorage.getItem(NIGHT_FILTER_KEY) === '1');
+  const [immersiveReader, setImmersiveReader] = useState<boolean>(false);
   const [bookmarks, setBookmarks] = useState<number[]>(() => {
     try {
       const raw = localStorage.getItem(BOOKMARKS_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.filter((n: unknown): n is number => typeof n === 'number') : [];
+      return raw ? JSON.parse(raw) : [];
     } catch {
       return [];
     }
   });
+  const [customUrl, setCustomUrl] = useState<string>(() => {
+    return localStorage.getItem(PDF_URL_KEY) || import.meta.env.VITE_PDF_URL || '/docs/toan_10_11_12_dpad.pdf';
+  });
+  const [urlInput, setUrlInput] = useState<string>(customUrl);
+  const [jumpInput, setJumpInput] = useState<string>(String(currentPage));
 
-  // Persist bookmarks
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const renderTaskRef = useRef<pdfjsLib.RenderTask | null>(null);
+
   useEffect(() => {
     localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
   }, [bookmarks]);
 
-  // Load PDF document from URL or blob URL
   useEffect(() => {
-    let cancelled = false;
+    localStorage.setItem(LAST_PAGE_KEY, String(currentPage));
+    setJumpInput(String(currentPage));
+  }, [currentPage]);
+
+  useEffect(() => {
+    localStorage.setItem(LAST_TAB_KEY, activeTab);
+  }, [activeTab]);
+
+  useEffect(() => {
+    localStorage.setItem(NIGHT_FILTER_KEY, nightFilter ? '1' : '0');
+  }, [nightFilter]);
+
+  // Handle direct PDF page jumps from AI citations
+  useEffect(() => {
+    if (externalPage && externalPage >= 1 && externalPage <= PDF_TOTAL_PAGES) {
+      setCurrentPage(externalPage);
+      onExternalPageConsumed();
+    }
+  }, [externalPage, onExternalPageConsumed]);
+
+  const loadPdfFromUrl = useCallback(async (url: string) => {
+    if (!url.trim()) return;
     setLoading(true);
-    setLoadError(null);
+    setErrorMsg(null);
+    try {
+      const task = pdfjsLib.getDocument({ url, cMapPacked: true });
+      const doc = await task.promise;
+      setPdfDoc(doc);
+      setNumPages(doc.numPages);
+      setCurrentPage((p) => Math.max(1, Math.min(doc.numPages, p)));
+    } catch {
+      setPdfDoc(null);
+      setErrorMsg(
+        'Chưa tải được file PDF trực tuyến (do PDF 29.5 MB vượt giới hạn 25 MB Cloudflare Pages). ' +
+          'Bạn vẫn có thể tra cứu toàn bộ 59 chuyên đề bên trái, tải file PDF từ máy lên, hoặc dán link Cloudflare R2.'
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-    const loadingTask = pdfjsLib.getDocument({
-      url: pdfSourceUrl,
-      disableAutoFetch: true,
-      disableStream: false
-    });
+  useEffect(() => {
+    loadPdfFromUrl(customUrl);
+  }, [customUrl, loadPdfFromUrl]);
 
-    loadingTask.promise
-      .then((doc) => {
-        if (cancelled) {
-          doc.destroy();
-          return;
-        }
-        setPdfDoc(doc);
-        setTotalPages(doc.numPages);
-        setPageNum((prev) => Math.min(Math.max(1, prev), doc.numPages));
-        setLoading(false);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setPdfDoc(null);
-        setLoading(false);
-        setLoadError(
-          'Không tìm thấy tệp PDF mặc định trên máy chủ (có thể tệp > 25 MB nên cần host trên Cloudflare R2). Bạn có thể mở file PDF từ máy hoặc dán link R2 bên dưới.'
-        );
-      });
-
-    return () => {
-      cancelled = true;
-      loadingTask.destroy().catch(() => undefined);
-    };
-  }, [pdfSourceUrl]);
-
-  // Render active PDF page onto canvas
   useEffect(() => {
     if (!pdfDoc || !canvasRef.current) return;
     let cancelled = false;
-
-    const renderPage = async () => {
+    (async () => {
       try {
-        if (renderTaskRef.current) {
-          renderTaskRef.current.cancel();
-          renderTaskRef.current = null;
-        }
-        const page = await pdfDoc.getPage(pageNum);
-        if (cancelled) return;
-
+        const page = await pdfDoc.getPage(Math.max(1, Math.min(pdfDoc.numPages, currentPage)));
+        if (cancelled || !canvasRef.current) return;
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const viewport = page.getViewport({ scale: zoom * dpr });
         const canvas = canvasRef.current;
-        if (!canvas) return;
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        canvas.style.width = `${viewport.width / dpr}px`;
+        canvas.style.height = `${viewport.height / dpr}px`;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
-
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const viewport = page.getViewport({ scale: zoom });
-        canvas.width = Math.floor(viewport.width * dpr);
-        canvas.height = Math.floor(viewport.height * dpr);
-        canvas.style.width = `${Math.floor(viewport.width)}px`;
-        canvas.style.height = `${Math.floor(viewport.height)}px`;
-
-        const task = page.render({
-          canvasContext: ctx,
-          viewport,
-          transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined
-        });
+        if (renderTaskRef.current) {
+          try {
+            renderTaskRef.current.cancel();
+          } catch {
+            // ignore
+          }
+        }
+        const task = page.render({ canvasContext: ctx, viewport });
         renderTaskRef.current = task;
         await task.promise;
       } catch {
-        // Ignore cancelled render task when switching pages quickly
+        // ignore cancelled render
       }
-    };
-
-    renderPage();
-    setPageInput(String(pageNum));
-
+    })();
     return () => {
       cancelled = true;
-      if (renderTaskRef.current) {
-        renderTaskRef.current.cancel();
-        renderTaskRef.current = null;
-      }
     };
-  }, [pdfDoc, pageNum, zoom]);
+  }, [pdfDoc, currentPage, zoom]);
 
-  const currentTopic = useMemo(
-    () => PDF_CURRICULUM_TOPICS.find((t) => pageNum >= t.startPage && pageNum <= t.endPage) || null,
-    [pageNum]
-  );
-
-  const filteredTopics = useMemo(() => {
-    const q = normalizeVietnamese(searchQuery.trim());
-    return PDF_CURRICULUM_TOPICS.filter((topic) => {
-      if (selectedGrade !== 'all' && topic.grade !== selectedGrade) return false;
-      if (!q) return true;
-      const hay = normalizeVietnamese(`${topic.indexLabel} ${topic.title} ${topic.summary}`);
-      return hay.includes(q);
-    });
-  }, [selectedGrade, searchQuery]);
-
-  const isBookmarked = bookmarks.includes(pageNum);
+  const handleLocalFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+      setPdfDoc(doc);
+      setNumPages(doc.numPages);
+      setCurrentPage((p) => Math.max(1, Math.min(doc.numPages, p)));
+    } catch {
+      setErrorMsg('Không đọc được file PDF đã chọn.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const toggleBookmark = () => {
     setBookmarks((prev) =>
-      prev.includes(pageNum) ? prev.filter((p) => p !== pageNum) : [...prev, pageNum].sort((a, b) => a - b)
+      prev.includes(currentPage) ? prev.filter((p) => p !== currentPage) : [...prev, currentPage].sort((a, b) => a - b)
     );
   };
 
-  const jumpToPage = (target: number) => {
-    const clamped = Math.min(Math.max(1, target), totalPages);
-    setPageNum(clamped);
-    setPageInput(String(clamped));
+  const goToPage = (p: number) => {
+    const clamped = Math.max(1, Math.min(numPages, Math.round(p)));
+    setCurrentPage(clamped);
+    if (window.innerWidth < 900) setTocOpen(false);
   };
 
-  const handleLocalFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const blobUrl = URL.createObjectURL(file);
-    setPdfSourceUrl(blobUrl);
-    e.target.value = '';
-  };
-
-  const handleApplyCustomUrl = (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleaned = customUrlInput.trim();
-    if (!cleaned) return;
-    localStorage.setItem(CUSTOM_URL_KEY, cleaned);
-    setPdfSourceUrl(cleaned);
-  };
-
-  const handleAskAi = () => {
-    const topicHint = currentTopic
-      ? `chuyên đề "${currentTopic.title}" (${currentTopic.indexLabel})`
-      : 'nội dung Toán THPT';
-    onAskAiAboutPage(
-      `Tôi đang học trang ${pageNum} thuộc ${topicHint} trong Sổ tay Toán 10-11-12. Hãy tóm tắt các công thức trọng tâm, dạng bài thường gặp và cho 1 ví dụ minh họa có lời giải chi tiết.`
-    );
-  };
+  const searchHits = useMemo(() => searchPdfTopics(searchQuery), [searchQuery]);
+  const visibleGradeTopics = useMemo(
+    () => (activeTab === 'bookmarks' ? [] : PDF_TOC_TOPICS.filter((t) => t.grade === activeTab)),
+    [activeTab]
+  );
+  const currentSection = useMemo(() => sectionLabelForPage(currentPage), [currentPage]);
+  const isBookmarked = bookmarks.includes(currentPage);
 
   return (
-    <div
-      style={{
-        position: 'relative',
-        width: '100%',
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        padding: '12px 12px 86px 12px',
-        gap: 10
-      }}
-    >
+    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', paddingBottom: immersiveReader ? 0 : 76 }}>
       {/* Top Toolbar */}
-      <header
-        className="glass-surface"
-        style={{
-          borderRadius: 20,
-          padding: '8px 12px',
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 8,
-          zIndex: 10
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button
-            type="button"
-            onClick={() => setTocOpen((v) => !v)}
-            className={`chip-btn glass-press${tocOpen ? ' active' : ''}`}
-          >
-            <ListTree size={15} />
-            <span>Mục lục 10–11–12</span>
+      {!immersiveReader && (
+        <div
+          className="glass-surface"
+          style={{
+            margin: '10px 12px 0',
+            borderRadius: 18,
+            padding: '8px 12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+            zIndex: 10
+          }}
+        >
+          <button className={`chip-btn glass-press ${tocOpen ? 'active' : ''}`} onClick={() => setTocOpen((v) => !v)}>
+            <BookOpen size={15} /> Mục lục (59)
           </button>
 
+          <div style={{ flex: 1, minWidth: 160 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {currentSection}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+              {PDF_BOOK_SUBTITLE}
+            </div>
+          </div>
+
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <button
-              type="button"
-              className="icon-btn glass-press"
-              onClick={() => jumpToPage(pageNum - 1)}
-              disabled={pageNum <= 1}
-              aria-label="Trang trước"
-            >
-              <ChevronLeft size={17} />
+            <button className="icon-btn" title="Trang trước" onClick={() => goToPage(currentPage - 1)}>
+              <ChevronLeft size={16} />
             </button>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                const parsed = parseInt(pageInput, 10);
-                if (!Number.isNaN(parsed)) jumpToPage(parsed);
+                const p = parseInt(jumpInput, 10);
+                if (Number.isFinite(p)) goToPage(p);
               }}
               style={{ display: 'flex', alignItems: 'center', gap: 4 }}
             >
               <input
-                type="text"
                 className="glass-input mono"
-                style={{ width: 54, padding: '5px 8px', textAlign: 'center', fontSize: 12 }}
-                value={pageInput}
-                onChange={(e) => setPageInput(e.target.value)}
-                aria-label="Số trang"
+                value={jumpInput}
+                onChange={(e) => setJumpInput(e.target.value)}
+                style={{ width: 56, padding: '5px 8px', textAlign: 'center', fontSize: 12 }}
               />
-              <span className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                / {totalPages}
-              </span>
+              <span className="mono" style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>/{numPages}</span>
             </form>
-            <button
-              type="button"
-              className="icon-btn glass-press"
-              onClick={() => jumpToPage(pageNum + 1)}
-              disabled={pageNum >= totalPages}
-              aria-label="Trang sau"
-            >
-              <ChevronRight size={17} />
+            <button className="icon-btn" title="Trang sau" onClick={() => goToPage(currentPage + 1)}>
+              <ChevronRight size={16} />
             </button>
           </div>
-        </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <button
-            type="button"
-            className="icon-btn glass-press"
-            onClick={() => setZoom((z) => Math.max(0.6, +(z - 0.15).toFixed(2)))}
-            title="Thu nhỏ"
-            aria-label="Thu nhỏ"
-          >
+          <button className="icon-btn" title="Thu nhỏ" onClick={() => setZoom((z) => Math.max(0.6, +(z - 0.15).toFixed(2)))}>
             <ZoomOut size={16} />
           </button>
-          <span className="mono desktop-only" style={{ fontSize: 11.5, minWidth: 42, textAlign: 'center' }}>
-            {Math.round(zoom * 100)}%
-          </span>
-          <button
-            type="button"
-            className="icon-btn glass-press"
-            onClick={() => setZoom((z) => Math.min(2.6, +(z + 0.15).toFixed(2)))}
-            title="Phóng to"
-            aria-label="Phóng to"
-          >
+          <span className="mono desktop-only" style={{ fontSize: 11.5 }}>{Math.round(zoom * 100)}%</span>
+          <button className="icon-btn" title="Phóng to" onClick={() => setZoom((z) => Math.min(2.6, +(z + 0.15).toFixed(2)))}>
             <ZoomIn size={16} />
           </button>
 
           <button
-            type="button"
-            className="icon-btn glass-press"
-            onClick={toggleBookmark}
-            title={isBookmarked ? 'Bỏ đánh dấu trang' : 'Đánh dấu trang này'}
-            aria-label="Đánh dấu trang"
+            className={`icon-btn ${nightFilter ? 'active' : ''}`}
+            style={{ color: nightFilter ? '#fbbf24' : 'var(--text-primary)' }}
+            title="Chế độ Đọc Ban Đêm (Đảo màu dịu mắt)"
+            onClick={() => setNightFilter((v) => !v)}
           >
-            {isBookmarked ? <BookmarkCheck size={17} color="#f59e0b" /> : <Bookmark size={17} />}
+            {nightFilter ? <Sun size={16} /> : <Moon size={16} />}
           </button>
 
           <button
-            type="button"
-            className="icon-btn glass-press"
-            onClick={() => fileInputRef.current?.click()}
-            title="Mở tệp PDF từ máy"
-            aria-label="Mở tệp PDF từ máy"
+            className="icon-btn"
+            style={{ color: isBookmarked ? '#f59e0b' : 'var(--text-primary)' }}
+            title="Đánh dấu trang này"
+            onClick={toggleBookmark}
           >
-            <FileUp size={16} />
+            <Bookmark size={16} fill={isBookmarked ? '#f59e0b' : 'none'} />
           </button>
-          <input ref={fileInputRef} type="file" accept="application/pdf" style={{ display: 'none' }} onChange={handleLocalFile} />
 
-          <button type="button" className="primary-btn glass-press" style={{ minHeight: 36, padding: '6px 12px', fontSize: 12 }} onClick={handleAskAi}>
-            <Sparkles size={14} />
-            <span>Hỏi AI trang {pageNum}</span>
+          <button
+            className="icon-btn"
+            title="Đọc toàn màn hình"
+            onClick={() => setImmersiveReader(true)}
+          >
+            <Maximize2 size={16} />
           </button>
-        </div>
-      </header>
 
-      {/* Current Topic Context Pill */}
-      {currentTopic && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '0 4px',
-            fontSize: 12,
-            color: 'var(--text-secondary)'
-          }}
-        >
-          <span>
-            <b style={{ color: accentHex }}>{currentTopic.indexLabel}:</b> {currentTopic.title}
-          </span>
-          <span className="mono desktop-only">
-            Tr. {currentTopic.startPage}–{currentTopic.endPage}
-          </span>
+          <button
+            className="chip-btn active glass-press"
+            onClick={() =>
+              onAskAiAboutPage(
+                `Hãy giải thích ngắn gọn, dễ hiểu kèm ví dụ minh họa cho phần kiến thức tại trang ${currentPage} (${currentSection}) trong tài liệu Toán THPT.`
+              )
+            }
+          >
+            <Sparkles size={14} /> Hỏi AI trang {currentPage}
+          </button>
         </div>
       )}
 
-      {/* Main Reader Container */}
-      <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', gap: 10 }}>
-        {/* TOC Side Panel (Overlay on mobile, split pane when opened) */}
-        {tocOpen && (
+      {/* Main Content */}
+      <div style={{ flex: 1, display: 'flex', gap: 12, padding: immersiveReader ? 0 : '10px 12px 0', overflow: 'hidden', position: 'relative' }}>
+        {/* Left TOC Sidebar (All 59 Hierarchical Topics) */}
+        {tocOpen && !immersiveReader && (
           <aside
             className="glass-surface scroll-area"
             style={{
-              width: 'min(330px, 100%)',
-              borderRadius: 20,
-              padding: 14,
+              width: 340,
+              maxWidth: '88vw',
+              borderRadius: 18,
+              padding: 12,
               display: 'flex',
               flexDirection: 'column',
               gap: 10,
-              flexShrink: 0,
-              zIndex: 12
+              flexShrink: 0
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 13.5, fontWeight: 800 }}>Mục lục Toán 10–11–12</span>
-              <button type="button" className="icon-btn" style={{ width: 28, height: 28 }} onClick={() => setTocOpen(false)}>
-                <X size={15} />
-              </button>
-            </div>
+            <div style={{ fontSize: 13.5, fontWeight: 800 }}>{PDF_BOOK_TITLE}</div>
 
+            {/* Search */}
             <div style={{ position: 'relative' }}>
-              <Search
-                size={14}
-                style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }}
-              />
+              <Search size={14} style={{ position: 'absolute', left: 10, top: 12, color: 'var(--text-secondary)' }} />
               <input
-                type="text"
                 className="glass-input"
-                style={{ paddingLeft: 32, fontSize: 12 }}
-                placeholder="Tìm không dấu (vd: tich phan, oxyz)..."
+                placeholder="Tìm 59 chuyên đề (vd: tich phan, thiet dien...)"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                style={{ paddingLeft: 32, fontSize: 12.5 }}
               />
             </div>
 
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {[
-                { id: 'all' as const, label: 'Tất cả' },
-                { id: 'grade_10' as const, label: 'Lớp 10' },
-                { id: 'grade_11' as const, label: 'Lớp 11' },
-                { id: 'grade_12' as const, label: 'Lớp 12' }
-              ].map((g) => (
+            {/* Grade Tabs */}
+            {!searchQuery.trim() && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
+                {PDF_GRADES.map((g) => (
+                  <button
+                    key={g.id}
+                    className={`chip-btn ${activeTab === g.id ? 'active' : ''}`}
+                    style={{ padding: '4px 6px', fontSize: 11.5 }}
+                    onClick={() => setActiveTab(g.id)}
+                  >
+                    {g.shortLabel}
+                  </button>
+                ))}
                 <button
-                  key={g.id}
-                  type="button"
-                  className={`chip-btn${selectedGrade === g.id ? ' active' : ''}`}
-                  style={{ minHeight: 28, padding: '3px 10px', fontSize: 11 }}
-                  onClick={() => setSelectedGrade(g.id)}
+                  className={`chip-btn ${activeTab === 'bookmarks' ? 'active' : ''}`}
+                  style={{ padding: '4px 6px', fontSize: 11.5 }}
+                  onClick={() => setActiveTab('bookmarks')}
                 >
-                  {g.label}
+                  Lưu ({bookmarks.length})
                 </button>
-              ))}
-            </div>
-
-            {bookmarks.length > 0 && (
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#f59e0b', marginBottom: 4 }}>
-                  Trang đã đánh dấu ({bookmarks.length})
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                  {bookmarks.map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      className="chip-btn"
-                      style={{ minHeight: 26, padding: '2px 9px', fontSize: 11 }}
-                      onClick={() => jumpToPage(p)}
-                    >
-                      Tr. {p}
-                    </button>
-                  ))}
-                </div>
               </div>
             )}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {filteredTopics.map((topic) => {
-                const isActive = pageNum >= topic.startPage && pageNum <= topic.endPage;
-                return (
+            {/* Search Results */}
+            {searchQuery.trim() ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+                  Tìm thấy {searchHits.length} mục khớp
+                </div>
+                {searchHits.map((hit, idx) => (
                   <button
-                    key={topic.id}
-                    type="button"
-                    onClick={() => {
-                      jumpToPage(topic.startPage);
-                      if (window.innerWidth < 760) setTocOpen(false);
-                    }}
-                    className="glass-press"
+                    key={`${hit.topic.id}_${idx}`}
+                    onClick={() => goToPage(hit.targetPage)}
                     style={{
                       textAlign: 'left',
-                      padding: '9px 11px',
-                      borderRadius: 14,
-                      cursor: 'pointer',
-                      border: `1px solid ${isActive ? accentHex : 'var(--border-subtle)'}`,
-                      background: isActive ? `${accentHex}22` : 'rgba(148,163,184,0.08)',
-                      color: 'var(--text-primary)'
+                      padding: '9px 10px',
+                      borderRadius: 12,
+                      border: `1px solid ${hit.topic.accentHex}44`,
+                      background: 'rgba(148,163,184,0.08)',
+                      color: 'var(--text-primary)',
+                      cursor: 'pointer'
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: accentHex, fontWeight: 700 }}>
-                      <span>{topic.indexLabel}</span>
-                      <span className="mono">Tr. {topic.startPage}–{topic.endPage}</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 700 }}>{hit.topic.title}</span>
+                      <span className="mono" style={{ fontSize: 11, color: hit.topic.accentHex }}>Tr. {hit.targetPage}</span>
                     </div>
-                    <div style={{ fontSize: 12.5, fontWeight: 700, marginTop: 2 }}>{topic.title}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>{topic.summary}</div>
+                    {hit.matchedSubTopic && (
+                      <div style={{ fontSize: 11.5, color: accentHex, marginTop: 2 }}>↳ {hit.matchedSubTopic.title}</div>
+                    )}
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 3 }}>{hit.topic.summary}</div>
                   </button>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            ) : activeTab === 'bookmarks' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {bookmarks.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', padding: 12, textAlign: 'center' }}>
+                    Chưa đánh dấu trang nào. Nhấn biểu tượng Bookmark ở thanh trên để lưu trang quan trọng.
+                  </div>
+                ) : (
+                  bookmarks.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => goToPage(p)}
+                      style={{
+                        textAlign: 'left',
+                        padding: '9px 10px',
+                        borderRadius: 12,
+                        border: '1px solid var(--border-subtle)',
+                        background: currentPage === p ? `${accentHex}22` : 'rgba(148,163,184,0.08)',
+                        color: 'var(--text-primary)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <span style={{ fontSize: 12.5, fontWeight: 700 }}>{sectionLabelForPage(p)}</span>
+                      <span className="mono" style={{ fontSize: 11.5, color: '#f59e0b' }}>Tr. {p}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                {visibleGradeTopics.map((topic) => {
+                  const isCurrent = currentPage >= topic.startPage && currentPage <= topic.endPage;
+                  const isExpanded = !!expandedTopics[topic.id];
+                  return (
+                    <div
+                      key={topic.id}
+                      style={{
+                        borderRadius: 12,
+                        border: `1px solid ${isCurrent ? topic.accentHex : 'var(--border-subtle)'}`,
+                        background: isCurrent ? `${topic.accentHex}18` : 'rgba(148,163,184,0.06)',
+                        overflow: 'hidden'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', padding: '8px 10px', gap: 6 }}>
+                        <button
+                          onClick={() => goToPage(topic.startPage)}
+                          style={{
+                            flex: 1,
+                            textAlign: 'left',
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-primary)',
+                            cursor: 'pointer',
+                            padding: 0
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 10.5, fontWeight: 700, color: topic.accentHex }}>
+                              {topic.indexLabel}
+                            </span>
+                            <span className="mono" style={{ fontSize: 10.5, color: 'var(--text-secondary)' }}>
+                              Tr. {topic.startPage}{topic.endPage > topic.startPage ? `–${topic.endPage}` : ''}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 12.5, fontWeight: 700, marginTop: 2 }}>{topic.title}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2, lineHeight: 1.4 }}>
+                            {topic.summary}
+                          </div>
+                        </button>
+                        {topic.subTopics.length > 0 && (
+                          <button
+                            className="icon-btn"
+                            style={{ width: 28, height: 28 }}
+                            title="Mở mục con"
+                            onClick={() => setExpandedTopics((prev) => ({ ...prev, [topic.id]: !prev[topic.id] }))}
+                          >
+                            {isExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                          </button>
+                        )}
+                      </div>
+                      {isExpanded && topic.subTopics.length > 0 && (
+                        <div style={{ borderTop: '1px solid var(--border-subtle)', padding: '4px 8px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {topic.subTopics.map((sub, i) => (
+                            <button
+                              key={i}
+                              onClick={() => goToPage(sub.page)}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '5px 8px',
+                                borderRadius: 8,
+                                border: 'none',
+                                background: currentPage === sub.page ? `${topic.accentHex}28` : 'transparent',
+                                color: 'var(--text-primary)',
+                                cursor: 'pointer',
+                                fontSize: 11.5,
+                                textAlign: 'left'
+                              }}
+                            >
+                              <span>↳ {sub.title}</span>
+                              <span className="mono" style={{ color: topic.accentHex, fontSize: 11 }}>Tr. {sub.page}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </aside>
         )}
 
-        {/* PDF Canvas Viewport */}
-        <div
-          className="glass-surface scroll-area"
+        {/* Right PDF Canvas Viewport */}
+        <section
+          className="glass-surface"
           style={{
             flex: 1,
-            borderRadius: 22,
-            padding: 16,
+            borderRadius: immersiveReader ? 0 : 18,
             display: 'flex',
             flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: pdfDoc ? 'flex-start' : 'center'
+            overflow: 'hidden',
+            position: 'relative'
           }}
         >
-          {loading && <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Đang tải tài liệu PDF...</div>}
+          {immersiveReader && (
+            <button
+              className="chip-btn active glass-press"
+              style={{ position: 'absolute', top: 14, right: 14, zIndex: 20 }}
+              onClick={() => setImmersiveReader(false)}
+            >
+              <Minimize2 size={14} /> Thoát toàn màn hình · Tr. {currentPage}/{numPages}
+            </button>
+          )}
 
-          {!loading && loadError && (
+          <div
+            className="scroll-area"
+            onClick={() => {
+              if (pdfDoc) setImmersiveReader((v) => !v);
+            }}
+            style={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: pdfDoc ? 'flex-start' : 'center',
+              padding: immersiveReader ? 10 : 18,
+              cursor: pdfDoc ? 'pointer' : 'default'
+            }}
+          >
+            {loading && (
+              <div style={{ padding: 24, fontSize: 13, color: 'var(--text-secondary)' }}>
+                Đang tải Sổ tay Toán học PDF...
+              </div>
+            )}
+
+            {pdfDoc ? (
+              <canvas
+                ref={canvasRef}
+                className={nightFilter ? 'pdf-night-filter' : undefined}
+                style={{
+                  borderRadius: 10,
+                  boxShadow: '0 12px 34px rgba(0,0,0,0.45)',
+                  background: '#ffffff',
+                  maxWidth: '100%'
+                }}
+              />
+            ) : (
+              !loading && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ maxWidth: 460, width: '100%', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 12 }}
+                >
+                  <BookOpen size={42} style={{ margin: '0 auto', color: accentHex }} />
+                  <div style={{ fontSize: 16, fontWeight: 800 }}>{PDF_BOOK_TITLE}</div>
+                  {errorMsg && (
+                    <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{errorMsg}</div>
+                  )}
+
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="application/pdf"
+                    style={{ display: 'none' }}
+                    onChange={handleLocalFile}
+                  />
+                  <button className="primary-btn glass-press" onClick={() => fileInputRef.current?.click()}>
+                    <Upload size={16} /> Mở file PDF từ máy (toan_10_11_12_dpad.pdf)
+                  </button>
+
+                  <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                    <input
+                      className="glass-input"
+                      placeholder="Hoặc dán link PDF Cloudflare R2 (https://...)"
+                      value={urlInput}
+                      onChange={(e) => setUrlInput(e.target.value)}
+                    />
+                    <button
+                      className="chip-btn active"
+                      onClick={() => {
+                        localStorage.setItem(PDF_URL_KEY, urlInput.trim());
+                        setCustomUrl(urlInput.trim());
+                      }}
+                    >
+                      <Link2 size={14} /> Tải
+                    </button>
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+
+          {/* Fast Page Scrubber Bar */}
+          {!immersiveReader && (
             <div
               style={{
-                maxWidth: 460,
-                textAlign: 'center',
+                borderTop: '1px solid var(--border-subtle)',
+                padding: '8px 14px',
                 display: 'flex',
-                flexDirection: 'column',
-                gap: 12,
-                padding: 16
+                alignItems: 'center',
+                gap: 10,
+                background: 'rgba(2,6,23,0.22)'
               }}
             >
-              <div style={{ fontSize: 15, fontWeight: 800 }}>Sổ tay Toán 10–11–12</div>
-              <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{loadError}</div>
-
-              <button
-                type="button"
-                className="primary-btn glass-press"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <FileUp size={16} />
-                <span>Mở file PDF trực tiếp từ thiết bị</span>
-              </button>
-
-              <form onSubmit={handleApplyCustomUrl} style={{ display: 'flex', gap: 6 }}>
-                <input
-                  type="url"
-                  className="glass-input"
-                  placeholder="Hoặc dán link PDF (Cloudflare R2 / CDN)..."
-                  value={customUrlInput}
-                  onChange={(e) => setCustomUrlInput(e.target.value)}
-                />
-                <button type="submit" className="chip-btn active">
-                  Tải
-                </button>
-              </form>
+              <span className="mono" style={{ fontSize: 11.5, color: accentHex, minWidth: 52 }}>
+                Tr. {currentPage}
+              </span>
+              <input
+                type="range"
+                className="glass-slider"
+                min={1}
+                max={numPages}
+                value={currentPage}
+                onChange={(e) => setCurrentPage(parseInt(e.target.value, 10))}
+              />
+              <span className="mono" style={{ fontSize: 11.5, color: 'var(--text-secondary)', minWidth: 38, textAlign: 'right' }}>
+                {numPages}
+              </span>
             </div>
           )}
-
-          {!loading && pdfDoc && (
-            <canvas
-              ref={canvasRef}
-              style={{
-                borderRadius: 12,
-                boxShadow: '0 10px 30px rgba(0, 0, 0, 0.32)',
-                background: '#ffffff',
-                maxWidth: '100%'
-              }}
-            />
-          )}
-        </div>
+        </section>
       </div>
     </div>
   );

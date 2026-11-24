@@ -395,6 +395,58 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(variationTargetFnId = null) }
     }
 
+    // ================= INTEGRAL / AREA / VOLUME & VALUE TABLE (2D ADVANCED) =================
+    fun toggleIntegral(enabled: Boolean) {
+        _uiState.update { st ->
+            val firstId = st.integralFnId?.takeIf { id -> st.snapshot.functions.any { it.id == id } }
+                ?: st.snapshot.functions.firstOrNull()?.id
+            st.copy(
+                integralEnabled = enabled && firstId != null,
+                integralFnId = firstId
+            )
+        }
+    }
+
+    fun setIntegralTargets(fnId: String?, secondFnId: String?) {
+        _uiState.update { st ->
+            st.copy(
+                integralFnId = fnId,
+                integralSecondFnId = secondFnId?.takeIf { it != fnId }
+            )
+        }
+    }
+
+    fun setIntegralBounds(a: Double, b: Double) {
+        if (!a.isFinite() || !b.isFinite()) return
+        _uiState.update { it.copy(integralA = a, integralB = b) }
+    }
+
+    fun openValueTable(fnId: String) {
+        _uiState.update { it.copy(valueTableFnId = fnId) }
+    }
+
+    fun closeValueTable() {
+        _uiState.update { it.copy(valueTableFnId = null) }
+    }
+
+    fun jumpToPointAndTrace(x: Double, y: Double) {
+        if (!x.isFinite()) return
+        _uiState.update { st ->
+            val targetY = if (y.isFinite()) y.coerceIn(-1e6, 1e6) else st.snapshot.camera.centerY
+            val updatedSnap = st.snapshot.copy(
+                camera = st.snapshot.camera.copy(centerX = x, centerY = targetY)
+            )
+            st.copy(
+                snapshot = updatedSnap,
+                activeTool = Geo2DTool.TRACE_GRAPH,
+                traceX = x,
+                traceResults = evaluateTrace(updatedSnap, x),
+                valueTableFnId = null
+            )
+        }
+        showToast("Đã nhảy tới x = ${Geo2DMathHelpers.formatNum(x)}")
+    }
+
     // ================= CONSTRUCTION REPLAY (2D STEP-BY-STEP) =================
     private fun buildReplaySteps(full: Geo2DSnapshot): List<Pair<String, Geo2DSnapshot>> {
         val steps = ArrayList<Pair<String, Geo2DSnapshot>>()
@@ -866,6 +918,16 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
         updateSnapshot(recordHistory = true) { s ->
             s.copy(functions = s.functions.filterNot { it.id == id })
         }
+        _uiState.update { st ->
+            val remaining = st.snapshot.functions
+            st.copy(
+                integralFnId = if (st.integralFnId == id) remaining.firstOrNull()?.id else st.integralFnId,
+                integralSecondFnId = if (st.integralSecondFnId == id) null else st.integralSecondFnId,
+                integralEnabled = if (remaining.isEmpty()) false else st.integralEnabled,
+                valueTableFnId = if (st.valueTableFnId == id) null else st.valueTableFnId,
+                variationTargetFnId = if (st.variationTargetFnId == id) null else st.variationTargetFnId
+            )
+        }
     }
 
     // ================= MANUAL COORDS, CIRCLES, & 2D PRESETS =================
@@ -1099,6 +1161,10 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
                     saveModalOpen = false,
                     pendingPointIds = emptyList(),
                     variationTargetFnId = null,
+                    valueTableFnId = null,
+                    integralEnabled = false,
+                    integralFnId = loaded.functions.firstOrNull()?.id,
+                    integralSecondFnId = null,
                     traceX = null,
                     traceResults = emptyList(),
                     canUndo = undoStack.isNotEmpty(),

@@ -503,6 +503,119 @@ fun CoordsPane(
             }
         }
 
+        // 3b. Dihedral Angle between Plane (P) & Plane (Q)
+        SettingBox(
+            title = "3b. Góc nhị diện giữa 2 Mặt phẳng (P) & (Q)",
+            titleColor = CyanAccent,
+            borderColor = CyanAccent.copy(alpha = 0.45f)
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.fillMaxWidth()) {
+                CompactDropdown("Q1", uiState.calcPlaneQ1, pointOptions, { viewModel.setCalcPlaneQPoints(it, uiState.calcPlaneQ2, uiState.calcPlaneQ3) }, Modifier.weight(1f))
+                CompactDropdown("Q2", uiState.calcPlaneQ2, pointOptions, { viewModel.setCalcPlaneQPoints(uiState.calcPlaneQ1, it, uiState.calcPlaneQ3) }, Modifier.weight(1f))
+                CompactDropdown("Q3", uiState.calcPlaneQ3, pointOptions, { viewModel.setCalcPlaneQPoints(uiState.calcPlaneQ1, uiState.calcPlaneQ2, it) }, Modifier.weight(1f))
+            }
+
+            val vp1 = reg[uiState.calcPlaneP1]
+            val vp2 = reg[uiState.calcPlaneP2]
+            val vp3 = reg[uiState.calcPlaneP3]
+            val vq1 = reg[uiState.calcPlaneQ1]
+            val vq2 = reg[uiState.calcPlaneQ2]
+            val vq3 = reg[uiState.calcPlaneQ3]
+            val planePName = "(${uiState.calcPlaneP1}${uiState.calcPlaneP2}${uiState.calcPlaneP3})"
+            val planeQName = "(${uiState.calcPlaneQ1}${uiState.calcPlaneQ2}${uiState.calcPlaneQ3})"
+            val dihedral = if (vp1 != null && vp2 != null && vp3 != null && vq1 != null && vq2 != null && vq3 != null) {
+                Geo3DMathHelpers.computeDihedralAngle(vp1, vp2, vp3, vq1, vq2, vq3, originWorld)
+            } else null
+
+            if (dihedral == null) {
+                Text(
+                    "Chọn 3 điểm không thẳng hàng cho cả (P) và (Q) để đo góc nhị diện.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AmberAccent
+                )
+            } else {
+                val hide = uiState.verifyHideAnswers
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(SlateDeepest)
+                        .border(1.dp, SlateSurface, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 9.dp, vertical = 7.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    CalcResultRow("PT $planeQName:", dihedral.plane2Eq, IndigoSoft)
+                    CalcResultRow("cos φ:", if (hide) "???" else String.format(Locale.US, "%.4f", dihedral.cosPhi), CyanAccent)
+                    CalcResultRow(
+                        "Góc ($planePName, $planeQName):",
+                        if (hide) "???°" else Geo3DMathHelpers.formatDeg(dihedral.angleDegrees),
+                        AmberAccent
+                    )
+                }
+            }
+        }
+
+        // 3c. Skew Lines Shortest Distance & Common Perpendicular H₁H₂
+        SettingBox(
+            title = "3c. Khoảng cách 2 đường chéo nhau",
+            titleColor = RoseLight,
+            borderColor = RoseAccent.copy(alpha = 0.45f)
+        ) {
+            Text(
+                text = "Đường 1 đang lấy từ cặp điểm mục 2 (${uiState.calcPointA}${uiState.calcPointB}). Chọn đường 2 bên dưới:",
+                style = MaterialTheme.typography.bodySmall,
+                color = SlateTextSecondary,
+                fontSize = 10.5.sp
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                CompactDropdown("Điểm C", uiState.skewPointC, pointOptions, { viewModel.setSkewLinePoints(it, uiState.skewPointD) }, Modifier.weight(1f))
+                CompactDropdown("Điểm D", uiState.skewPointD, pointOptions, { viewModel.setSkewLinePoints(uiState.skewPointC, it) }, Modifier.weight(1f))
+            }
+
+            val vA = reg[uiState.calcPointA]
+            val vB = reg[uiState.calcPointB]
+            val vC = reg[uiState.skewPointC]
+            val vD = reg[uiState.skewPointD]
+            val skew = if (vA != null && vB != null && vC != null && vD != null) {
+                Geo3DMathHelpers.computeSkewLinesDistance(vA, vB, vC, vD)
+            } else null
+
+            if (skew == null) {
+                Text(
+                    "Chọn 2 cặp điểm phân biệt cho 2 đường thẳng.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AmberAccent
+                )
+            } else {
+                val hide = uiState.verifyHideAnswers
+                val statusLabel = when {
+                    skew.isParallel && skew.isIntersecting -> "Trùng nhau"
+                    skew.isParallel -> "Song song"
+                    skew.isIntersecting -> "Cắt nhau"
+                    else -> "Chéo nhau"
+                }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(SlateDeepest)
+                        .border(1.dp, SlateSurface, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 9.dp, vertical = 7.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    CalcResultRow("Vị trí tương đối:", statusLabel, IndigoSoft)
+                    CalcResultRow(
+                        "d(${uiState.calcPointA}${uiState.calcPointB}, ${uiState.skewPointC}${uiState.skewPointD}):",
+                        if (hide) "???" else String.format(Locale.US, "%.3f", skew.distance),
+                        RoseLight
+                    )
+                }
+                SettingCheckRow("Vẽ đoạn vuông góc chung H₁H₂", uiState.showSkewPerp) {
+                    viewModel.toggleSkewPerp(it)
+                }
+            }
+        }
+
         // 4. Coordinates Table
         SettingBox(title = "4. Bảng tọa độ các điểm", titleColor = EmeraldLight) {
             Column(

@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -22,7 +23,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.data.WebShareUrlEncoder
+import com.example.engine.Geo3DMathHelpers
 import com.example.engine.GeometryUiState
+import com.example.engine.ShapeBuilder
 import com.example.ui.VerifyModeCard3D
 import com.example.ui.theme.*
 import com.example.viewmodel.GeometryViewModel
@@ -68,6 +72,27 @@ fun FormulasPane(
         Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
             StatCard("DT toàn phần (Stp)", f2(m.sTp), CyanAccent, Modifier.weight(1f))
             StatCard("Thể tích thực (V)", f2(m.vol), AmberAccent, Modifier.weight(1f))
+        }
+
+        // Circumscribed & Inscribed Sphere Radii Row
+        val originWorld = ShapeBuilder.getOriginWorld(uiState.scene.pointRegistry, uiState.snapshot.originPoint)
+        val circumSp = Geo3DMathHelpers.computeCircumSphere(uiState.scene, uiState.snapshot, originWorld)
+        val inSp = Geo3DMathHelpers.computeInSphere(uiState.scene, uiState.snapshot, originWorld)
+        if (circumSp != null || inSp != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
+                StatCard(
+                    "R cầu ngoại tiếp",
+                    circumSp?.let { f2(it.radius) } ?: "—",
+                    IndigoSoft,
+                    Modifier.weight(1f)
+                )
+                StatCard(
+                    "r cầu nội tiếp",
+                    inSp?.let { f2(it.radius) } ?: "—",
+                    EmeraldLight,
+                    Modifier.weight(1f)
+                )
+            }
         }
 
         // Live Dimensions Breakdown
@@ -137,6 +162,7 @@ fun SaveExportModal(
     onImportJsonClick: () -> Unit
 ) {
     if (!uiState.saveModalOpen) return
+    val context = LocalContext.current
     val hasPinnedFolder = !uiState.exportFolderUri.isNullOrBlank()
 
     Dialog(
@@ -367,6 +393,38 @@ fun SaveExportModal(
                         onPrimaryClick = { onExportJsonClick(false) },
                         onPickOtherClick = { onExportJsonClick(true) }
                     )
+                    Button(
+                        onClick = {
+                            WebShareUrlEncoder.share3D(context, uiState.snapshot)
+                            viewModel.showToast("Đang mở chia sẻ link Web 3D...")
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 52.dp)
+                            .testTag("share_web_link_3d_btn")
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Chia sẻ Link Web 3D (tooltoan.pages.dev)",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Tạo URL mở trực tiếp đúng hình 3D này trên trình duyệt web",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontSize = 10.5.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
                 }
 
                 // Section 3: In-App Quick Slots & Import External File

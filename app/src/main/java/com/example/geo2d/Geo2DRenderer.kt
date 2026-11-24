@@ -200,6 +200,11 @@ object Geo2DRenderer {
             drawAxes(canvas, width, height, density, cam, xMin, xMax, yMin, yMax, majorStep, useDarkInk, scratch)
         }
 
+        // 3b. Definite Integral / Bounded Area Shaded Region (drawn under function curves)
+        if (uiState.integralEnabled && snap.functions.isNotEmpty()) {
+            drawIntegralOverlay(canvas, width, height, density, cam, uiState, scratch)
+        }
+
         // 4. Compile (LRU-cached) & Draw Arbitrary Mathematical Function Graphs y = f(x, m) and optional Derivative y = f'(x, m)
         val compiledFunctions = ArrayList<Triple<GraphFunction, MathExprParser.Expr, MathExprParser.Expr?>>(snap.functions.size)
         val xSpan = max(1e-9, xMax - xMin)
@@ -1389,6 +1394,114 @@ object Geo2DRenderer {
             transparentBackground = transparentBackground
         )
         return bitmap
+    }
+
+    private fun drawIntegralOverlay(
+        canvas: Canvas,
+        width: Float,
+        height: Float,
+        density: Float,
+        cam: Geo2DCamera,
+        uiState: Geo2DUiState,
+        scratch: RenderScratch
+    ) {
+        val snap = uiState.snapshot
+        val fnF = uiState.integralFnId?.let { id -> snap.functions.firstOrNull { it.id == id } }
+            ?: snap.functions.firstOrNull() ?: return
+        val fnG = uiState.integralSecondFnId?.takeIf { it != fnF.id }
+            ?.let { id -> snap.functions.firstOrNull { it.id == id } }
+
+        val parsedF = MathExprParser.parse(fnF.expression) as? MathExprParser.ParseResult.Ok ?: return
+        val parsedG = fnG?.let { MathExprParser.parse(it.expression) } as? MathExprParser.ParseResult.Ok
+
+        val res = MathExprParser.computeIntegral2D(
+            exprF = parsedF.expr,
+            exprG = parsedG?.expr,
+            a = uiState.integralA,
+            b = uiState.integralB,
+            m = snap.paramM
+        ) ?: return
+
+        val halfW = width * 0.5
+        val halfH = height * 0.5
+        val xs = res.sampleXs
+        val y1s = res.sampleY1s
+        val y2s = res.sampleY2s
+        if (xs.size < 2) return
+
+        val clampYLo = -height * 3f
+        val clampYHi = height * 4f
+
+        val fillPath = scratch.scratchPath
+        fillPath.rewind()
+        var validCount = 0
+        val validIndices = IntArray(xs.size)
+        for (i in xs.indices) {
+            if (y1s[i].isFinite() && y2s[i].isFinite()) {
+                validIndices[validCount++] = i
+            }
+        }
+        if (validCount >= 2) {
+            val firstIdx = validIndices[0]
+            val sx0 = worldToScreenX(xs[firstIdx], cam, halfW)
+            val sy0 = worldToScreenY(y1s[firstIdx], cam, halfH).coerceIn(clampYLo, clampYHi)
+            fillPath.moveTo(sx0, sy0)
+            for (k in 1 until validCount) {
+                val idx = validIndices[k]
+                val sx = worldToScreenX(xs[idx], cam, halfW)
+                val sy = worldToScreenY(y1s[idx], cam, halfH).coerceIn(clampYLo, clampYHi)
+                fillPath.lineTo(sx, sy)
+            }
+            for (k in validCount - 1 downTo 0) {
+                val idx = validIndices[k]
+                val sx = worldToScreenX(xs[idx], cam, halfW)
+                val sy = worldToScreenY(y2s[idx], cam, halfH).coerceIn(clampYLo, clampYHi)
+                fillPath.lineTo(sx, sy)
+            }
+            fillPath.close()
+
+            val fillPaint = scratch.fillPaint
+            fillPaint.color = 0x4438BDF8
+            canvas.drawPath(fillPath, fillPaint)
+        }
+
+        // Draw vertical dashed limit lines at x = a and x = b with small badges on Ox
+        val boundPaint = scratch.dashedStrokePaint.apply {
+            strokeWidth = 1.6f * density
+            color = 0xD9FBBF24.toInt()
+            pathEffect = scratch.dash65
+        }
+        val axisY = worldToScreenY(0.0, cam, halfH).coerceIn(28f * density, height - 28f * density)
+        val txtPaint = scratch.badgeTextPaint.apply {
+            textSize = 10.5f * density
+            color = 0xFFFBBF24.toInt()
+        }
+        val bgPaint = scratch.badgeBgPaint
+        val borderPaint = scratch.badgeBorderPaint.apply {
+            strokeWidth = 1.1f * density
+            color = 0xFFFBBF24.toInt()
+        }
+        val rect = scratch.scratchRect
+
+        fun drawBound(xVal: Double, tag: String) {
+            val sx = worldToScreenX(xVal, cam, halfW)
+            if (sx < -40f || sx > width + 40f) return
+            canvas.drawLine(sx, 0f, sx, height, boundPaint)
+            val label = "$tag=${Geo2DMathHelpers.formatNum(xVal)}"
+            val wBox = max(36f * density, txtPaint.measureText(label) + 12f * density)
+            val hBox = 18f * density
+            val cy = axisY + 18f * density
+            rect.set(sx - wBox * 0.5f, cy - hBox * 0.5f, sx + wBox * 0.5f, cy + hBox * 0.5f)
+            canvas.drawRoundRect(rect, 5f * density, 5f * density, bgPaint)
+            canvas.drawRoundRect(rect, 5f * density, 5f * density, borderPaint)
+            val fm = txtPaint.fontMetrics
+            canvas.drawText(label, sx, rect.centerY() - (fm.ascent + fm.descent) * 0.5f, txtPaint)
+        }
+
+        drawBound(uiState.integralA, "a")
+        if (abs(uiState.integralB - uiState.integralA) > 1e-6) {
+            drawBound(uiState.integralB, "b")
+        }
     }
 
     private fun parseColor(hex: String, fallback: Int): Int {

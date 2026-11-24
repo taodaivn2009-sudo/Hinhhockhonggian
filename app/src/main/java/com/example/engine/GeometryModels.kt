@@ -306,5 +306,14 @@ data class GeometryUiState(
     val replayPlaying: Boolean = false,
     val replayStepLabel: String = "",
     val verifyHideAnswers: Boolean = false,
-    val exportTransparentBg: Boolean = false
+    val exportTransparentBg: Boolean = false,
+    val showCircumSphere: Boolean = false,
+    val showInSphere: Boolean = false,
+    val unfoldRatio: Float = 0f,
+    val calcPlaneQ1: String = "S",
+    val calcPlaneQ2: String = "A",
+    val calcPlaneQ3: String = "B",
+    val skewPointC: String = "B",
+    val skewPointD: String = "C",
+    val showSkewPerp: Boolean = false
 )
