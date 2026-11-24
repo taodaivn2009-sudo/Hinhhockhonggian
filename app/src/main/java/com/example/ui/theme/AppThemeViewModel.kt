@@ -22,6 +22,7 @@ class ThemePreferences(context: Context) {
             enabled = prefs.getBoolean(KEY_LG_ENABLED, defaultGlass.enabled),
             blurRadius = prefs.getFloat(KEY_LG_BLUR, defaultGlass.blurRadius),
             refraction = prefs.getFloat(KEY_LG_LENS_REFRACTION, defaultGlass.refraction),
+            bevelThickness = prefs.getFloat(KEY_LG_BEVEL_THICKNESS, defaultGlass.bevelThickness),
             chromaticDispersion = prefs.getFloat(KEY_LG_DISPERSION, defaultGlass.chromaticDispersion),
             translucency = prefs.getFloat(KEY_LG_TRANSLUCENCY, defaultGlass.translucency),
             specularGlow = prefs.getFloat(KEY_LG_SPECULAR, defaultGlass.specularGlow),
@@ -51,6 +52,7 @@ class ThemePreferences(context: Context) {
             putBoolean(KEY_LG_ENABLED, lg.enabled)
             putFloat(KEY_LG_BLUR, lg.blurRadius)
             putFloat(KEY_LG_LENS_REFRACTION, lg.refraction)
+            putFloat(KEY_LG_BEVEL_THICKNESS, lg.bevelThickness)
             putFloat(KEY_LG_DISPERSION, lg.chromaticDispersion)
             putFloat(KEY_LG_TRANSLUCENCY, lg.translucency)
             putFloat(KEY_LG_SPECULAR, lg.specularGlow)
@@ -69,6 +71,7 @@ class ThemePreferences(context: Context) {
         private const val KEY_LG_ENABLED = "lg_enabled"
         private const val KEY_LG_BLUR = "lg_blur_radius"
         private const val KEY_LG_LENS_REFRACTION = "lg_lens_refraction"
+        private const val KEY_LG_BEVEL_THICKNESS = "lg_bevel_thickness"
         private const val KEY_LG_DISPERSION = "lg_chromatic_dispersion"
         private const val KEY_LG_TRANSLUCENCY = "lg_translucency"
         private const val KEY_LG_SPECULAR = "lg_specular"
@@ -139,6 +142,7 @@ class AppThemeViewModel(application: Application) : AndroidViewModel(application
     fun updateLiquidGlass(
         blurRadius: Float? = null,
         refraction: Float? = null,
+        bevelThickness: Float? = null,
         chromaticDispersion: Float? = null,
         translucency: Float? = null,
         specularGlow: Float? = null,
@@ -154,6 +158,7 @@ class AppThemeViewModel(application: Application) : AndroidViewModel(application
                     enabled = true,
                     blurRadius = blurRadius ?: lg.blurRadius,
                     refraction = refraction ?: lg.refraction,
+                    bevelThickness = bevelThickness ?: lg.bevelThickness,
                     chromaticDispersion = chromaticDispersion ?: lg.chromaticDispersion,
                     translucency = translucency ?: lg.translucency,
                     specularGlow = specularGlow ?: lg.specularGlow,

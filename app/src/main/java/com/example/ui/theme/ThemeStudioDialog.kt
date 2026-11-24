@@ -301,6 +301,7 @@ fun LiquidGlassSettingsSection(
     onApplyPresetStyle: (LiquidGlassPresetStyle) -> Unit,
     onUpdateBlurRadius: (Float) -> Unit,
     onUpdateRefraction: (Float) -> Unit,
+    onUpdateBevelThickness: (Float) -> Unit,
     onUpdateChromaticDispersion: (Float) -> Unit,
     onUpdateTranslucency: (Float) -> Unit,
     onUpdateSpecularGlow: (Float) -> Unit,
@@ -354,13 +355,11 @@ fun LiquidGlassSettingsSection(
                     fontSize = 11.sp
                 )
             }
-            Switch(
+            LiquidGlassSwitch(
                 checked = config.enabled,
                 onCheckedChange = onToggleEnabled,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = CyanAccent
-                )
+                checkedTrackColor = CyanAccent,
+                forceCrystalStyle = true
             )
         }
 
@@ -381,13 +380,15 @@ fun LiquidGlassSettingsSection(
                         LiquidGlassPresetStyle.entries.forEach { style ->
                             val isActive = abs(config.blurRadius - style.config.blurRadius) < 1.5f &&
                                 abs(config.refraction - style.config.refraction) < 0.06f &&
-                                abs(config.translucency - style.config.translucency) < 0.05f &&
+                                abs(config.bevelThickness - style.config.bevelThickness) < 0.08f &&
+                                abs(config.translucency - style.config.translucency) < 0.06f &&
                                 config.highContrastText == style.config.highContrastText
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .defaultMinSize(minHeight = 38.dp)
+                                    .defaultMinSize(minHeight = 40.dp)
                                     .clip(RoundedCornerShape(10.dp))
+                                    .liquidGlassPressPhysics(enabled = true, scaleOnPress = 1.05f, bloomColor = CyanAccent)
                                     .background(if (isActive) CyanAccent.copy(alpha = 0.24f) else SlateDeepest.copy(alpha = 0.5f))
                                     .border(
                                         width = if (isActive) 1.4.dp else 1.dp,
@@ -412,18 +413,18 @@ fun LiquidGlassSettingsSection(
                     }
                 }
 
-                // Real-Time GPU Optical Sliders
+                // Real-Time GPU Optical Sliders (iOS 26 Liquid Glass Crystal Sliders)
                 LiquidGlassSliderRow(
                     label = "Độ mờ kính nền (Blur)",
                     value = config.blurRadius,
-                    range = 4f..36f,
-                    valueLabel = "${config.blurRadius.roundToInt()} dp",
+                    range = 0f..36f,
+                    valueLabel = if (config.blurRadius < 0.8f) "0 dp (Pha lê)" else "${config.blurRadius.roundToInt()} dp",
                     accent = SkyBlue,
                     testTag = "lg_slider_blur",
                     onValueChange = onUpdateBlurRadius
                 )
                 LiquidGlassSliderRow(
-                    label = "Độ khúc xạ viền kính (Refraction)",
+                    label = "Độ khúc xạ thấu kính (Refraction)",
                     value = config.refraction,
                     range = 0f..1f,
                     accent = CyanAccent,
@@ -431,7 +432,15 @@ fun LiquidGlassSettingsSection(
                     onValueChange = onUpdateRefraction
                 )
                 LiquidGlassSliderRow(
-                    label = "Tán sắc ánh sáng viền (Dispersion)",
+                    label = "Độ dày mép vát kính (Bevel Thickness)",
+                    value = config.bevelThickness,
+                    range = 0.15f..1f,
+                    accent = IndigoBright,
+                    testTag = "lg_slider_bevel_thickness",
+                    onValueChange = onUpdateBevelThickness
+                )
+                LiquidGlassSliderRow(
+                    label = "Tán sắc RGB viền kính (Dispersion)",
                     value = config.chromaticDispersion,
                     range = 0f..1f,
                     accent = PinkAccent,
@@ -441,7 +450,7 @@ fun LiquidGlassSettingsSection(
                 LiquidGlassSliderRow(
                     label = "Độ trong suốt kính",
                     value = config.translucency,
-                    range = 0.25f..0.90f,
+                    range = 0.25f..0.96f,
                     accent = EmeraldAccent,
                     testTag = "lg_slider_translucency",
                     onValueChange = onUpdateTranslucency
@@ -521,19 +530,14 @@ private fun LiquidGlassSliderRow(
                 fontWeight = FontWeight.Bold
             )
         }
-        Slider(
+        LiquidGlassSlider(
             value = value.coerceIn(range.start, range.endInclusive),
             onValueChange = onValueChange,
             valueRange = range,
-            colors = SliderDefaults.colors(
-                thumbColor = accent,
-                activeTrackColor = accent,
-                inactiveTrackColor = SlateBorder
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(28.dp)
-                .testTag(testTag)
+            accentColor = accent,
+            testTag = testTag,
+            forceCrystalStyle = true,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
@@ -570,13 +574,11 @@ private fun LiquidGlassToggleRow(
                 fontSize = 10.5.sp
             )
         }
-        Switch(
+        LiquidGlassSwitch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = IndigoBright
-            )
+            checkedTrackColor = IndigoBright,
+            forceCrystalStyle = true
         )
     }
 }

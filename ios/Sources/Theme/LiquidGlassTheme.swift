@@ -75,11 +75,12 @@ struct LiquidGlassBackdropView: View {
     }
 }
 
-// MARK: - Liquid Glass Card Surface
+// MARK: - iOS 26 Crystal Liquid Glass Card Surface & Elastic Press Physics
 
 struct LiquidGlassCardModifier: ViewModifier {
     var cornerRadius: CGFloat = 18
     var borderColor: Color = AppTheme.slateBorder.opacity(0.75)
+    var crystalClarity: Bool = false
 
     func body(content: Content) -> some View {
         content
@@ -88,29 +89,68 @@ struct LiquidGlassCardModifier: ViewModifier {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .fill(.ultraThinMaterial)
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(AppTheme.slateDark.opacity(0.68))
+                        .fill(AppTheme.slateDark.opacity(crystalClarity ? 0.28 : 0.62))
+                    // Subtle top meniscus gloss reflection
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(crystalClarity ? 0.24 : 0.14),
+                                    Color.clear,
+                                    Color.white.opacity(crystalClarity ? 0.08 : 0.03)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
                 }
             )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(
                         LinearGradient(
-                            colors: [Color.white.opacity(0.18), borderColor.opacity(0.6)],
+                            colors: [
+                                Color(hex: 0xCFFAFE).opacity(crystalClarity ? 0.85 : 0.45),
+                                Color.white.opacity(crystalClarity ? 0.26 : 0.16),
+                                Color(hex: 0xFBCFE8).opacity(crystalClarity ? 0.62 : 0.25),
+                                borderColor.opacity(0.55)
+                            ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         ),
-                        lineWidth: 1
+                        lineWidth: crystalClarity ? 1.25 : 1.0
                     )
             )
+    }
+}
+
+struct LiquidPressButtonStyle: ButtonStyle {
+    var scaleOnPress: CGFloat = 1.06
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(
+                x: configuration.isPressed ? scaleOnPress : 1.0,
+                y: configuration.isPressed ? (1.0 + (scaleOnPress - 1.0) * 0.82) : 1.0
+            )
+            .brightness(configuration.isPressed ? 0.08 : 0.0)
+            .animation(.spring(response: 0.24, dampingFraction: 0.62), value: configuration.isPressed)
     }
 }
 
 extension View {
     func liquidGlassCard(
         cornerRadius: CGFloat = 18,
-        borderColor: Color = AppTheme.slateBorder.opacity(0.75)
+        borderColor: Color = AppTheme.slateBorder.opacity(0.75),
+        crystalClarity: Bool = false
     ) -> some View {
-        modifier(LiquidGlassCardModifier(cornerRadius: cornerRadius, borderColor: borderColor))
+        modifier(
+            LiquidGlassCardModifier(
+                cornerRadius: cornerRadius,
+                borderColor: borderColor,
+                crystalClarity: crystalClarity
+            )
+        )
     }
 }
 

@@ -151,13 +151,14 @@ struct RootWorkspaceView: View {
 
 struct FloatingPillBottomNavBar: View {
     @Binding var activeTab: RootTab
+    @Namespace private var tabNamespace
 
     var body: some View {
         HStack(spacing: 4) {
             ForEach(RootTab.allCases) { tab in
                 let selected = (activeTab == tab)
                 Button(action: {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.72)) {
                         activeTab = tab
                     }
                 }) {
@@ -167,18 +168,56 @@ struct FloatingPillBottomNavBar: View {
                             .foregroundColor(selected ? tab.accent : AppTheme.textSecondary)
                         Text(tab.label)
                             .font(.system(size: 10, weight: selected ? .heavy : .medium))
-                            .foregroundColor(selected ? tab.accent : AppTheme.textSecondary)
+                            .foregroundColor(selected ? Color.white : AppTheme.textSecondary)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
-                    .background(selected ? tab.accent.opacity(0.18) : Color.clear)
-                    .clipShape(Capsule())
+                    .background(
+                        ZStack {
+                            if selected {
+                                Capsule()
+                                    .fill(.ultraThinMaterial)
+                                    .overlay(
+                                        Capsule()
+                                            .fill(
+                                                LinearGradient(
+                                                    colors: [
+                                                        Color.white.opacity(0.28),
+                                                        tab.accent.opacity(0.22),
+                                                        Color.white.opacity(0.08)
+                                                    ],
+                                                    startPoint: .topLeading,
+                                                    endPoint: .bottomTrailing
+                                                )
+                                            )
+                                    )
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(
+                                                LinearGradient(
+                                                    colors: [
+                                                        Color(hex: 0xCFFAFE).opacity(0.92),
+                                                        Color.white.opacity(0.22),
+                                                        Color(hex: 0xFBCFE8).opacity(0.72)
+                                                    ],
+                                                    startPoint: .topLeading,
+                                                    endPoint: .bottomTrailing
+                                                ),
+                                                lineWidth: 1.25
+                                            )
+                                    )
+                                    .shadow(color: tab.accent.opacity(0.26), radius: 8, x: 0, y: 2)
+                                    .matchedGeometryEffect(id: "active_glass_pill", in: tabNamespace)
+                            }
+                        }
+                    )
                 }
+                .buttonStyle(LiquidPressButtonStyle(scaleOnPress: 1.07))
             }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .liquidGlassCard(cornerRadius: 28, borderColor: Color.white.opacity(0.22))
-        .shadow(color: Color.black.opacity(0.45), radius: 18, x: 0, y: 8)
+        .liquidGlassCard(cornerRadius: 28, borderColor: Color.white.opacity(0.32), crystalClarity: true)
+        .shadow(color: Color.black.opacity(0.42), radius: 20, x: 0, y: 10)
     }
 }

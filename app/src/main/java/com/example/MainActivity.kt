@@ -185,92 +185,104 @@ fun ToolToanRootScreen(
         !(activeWorkspace == MathWorkspace.SETTINGS && settingsSubPage != null) &&
         !isImeVisible
 
-    // Single shared non-nested GPU backdrop: each workspace's raw Canvas or static Aurora background
-    // records into this layer ONCE (never wrapping floating glass chrome -> zero draw feedback loops!)
-    val sharedBackdrop = rememberLiquidGlassBackdropState()
+    // Two isolated non-nested GPU backdrops (zero draw feedback loops!):
+    // 1. workspaceBackdrop: captures raw canvas/aurora inside each tab for its own HUD chrome
+    // 2. rootNavBackdrop: captures the entire active workspace (including scrolling lists, PDF pages,
+    //    AI chats, colorful icons & 3D/2D canvases) live at 60fps for the Floating Pill Bottom Nav Bar!
+    val workspaceBackdrop = rememberLiquidGlassBackdropState()
+    val rootNavBackdrop = rememberLiquidGlassBackdropState()
     LaunchedEffect(activeWorkspace) {
-        sharedBackdrop.resetStaticCache()
+        workspaceBackdrop.resetStaticCache()
     }
 
-    CompositionLocalProvider(LocalLiquidGlassBackdrop provides sharedBackdrop) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            // Layer 1: Active Workspace Screen (state-isolated per tab!)
-            when (activeWorkspace) {
-                MathWorkspace.SPACE_3D -> GeometryStudioScreen(
-                    isImmersive = isImmersive,
-                    onToggleImmersive = { isImmersive = !isImmersive },
-                    viewModel = geometryViewModel
-                )
-                MathWorkspace.PLANE_2D -> Geo2DStudioScreen(
-                    isImmersive = isImmersive,
-                    onToggleImmersive = { isImmersive = !isImmersive },
-                    pendingPlotExpr = pending2DExpr,
-                    onConsumePendingPlot = { pending2DExpr = null },
-                    viewModel = geo2DViewModel
-                )
-                MathWorkspace.DOCUMENTS -> MathDocumentsScreen(
-                    isImmersive = isImmersive,
-                    onToggleImmersive = { isImmersive = !isImmersive },
-                    onSwitchWorkspace = onSelectWorkspace,
-                    pendingOpenPage = pendingPdfPage,
-                    onConsumePendingPage = { pendingPdfPage = null },
-                    onAskAiAboutPage = { pageNum ->
-                        aiViewModel.prepareAskAboutPdfPage(pageNum)
-                        onSelectWorkspace(MathWorkspace.AI)
-                    },
-                    sharedPdfRenderer = sharedPdfRenderer
-                )
-                MathWorkspace.AI -> AiWorkspaceScreen(
-                    aiViewModel = aiViewModel,
-                    onSwitchWorkspace = onSelectWorkspace,
-                    onOpenPdfPage = { pageNum ->
-                        pendingPdfPage = pageNum
-                        onSelectWorkspace(MathWorkspace.DOCUMENTS)
-                    },
-                    onApplyDrawingPlan = { plan ->
-                        when (plan.target) {
-                            AiDrawTarget.SPACE_3D -> {
-                                plan.scene3D?.let { spec ->
-                                    val snap3D = AiResponseParser.buildGeometrySnapshot(spec)
-                                    geometryViewModel.applyAiSnapshot(snap3D, plan.title)
-                                    onSelectWorkspace(MathWorkspace.SPACE_3D)
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Layer 1: Active Workspace Screen (state-isolated per tab, captured live for Layer 2 Bottom Nav)
+        CompositionLocalProvider(LocalLiquidGlassBackdrop provides workspaceBackdrop) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .liquidGlassBackdropSource(rootNavBackdrop, staticCapture = false)
+            ) {
+                when (activeWorkspace) {
+                    MathWorkspace.SPACE_3D -> GeometryStudioScreen(
+                        isImmersive = isImmersive,
+                        onToggleImmersive = { isImmersive = !isImmersive },
+                        viewModel = geometryViewModel
+                    )
+                    MathWorkspace.PLANE_2D -> Geo2DStudioScreen(
+                        isImmersive = isImmersive,
+                        onToggleImmersive = { isImmersive = !isImmersive },
+                        pendingPlotExpr = pending2DExpr,
+                        onConsumePendingPlot = { pending2DExpr = null },
+                        viewModel = geo2DViewModel
+                    )
+                    MathWorkspace.DOCUMENTS -> MathDocumentsScreen(
+                        isImmersive = isImmersive,
+                        onToggleImmersive = { isImmersive = !isImmersive },
+                        onSwitchWorkspace = onSelectWorkspace,
+                        pendingOpenPage = pendingPdfPage,
+                        onConsumePendingPage = { pendingPdfPage = null },
+                        onAskAiAboutPage = { pageNum ->
+                            aiViewModel.prepareAskAboutPdfPage(pageNum)
+                            onSelectWorkspace(MathWorkspace.AI)
+                        },
+                        sharedPdfRenderer = sharedPdfRenderer
+                    )
+                    MathWorkspace.AI -> AiWorkspaceScreen(
+                        aiViewModel = aiViewModel,
+                        onSwitchWorkspace = onSelectWorkspace,
+                        onOpenPdfPage = { pageNum ->
+                            pendingPdfPage = pageNum
+                            onSelectWorkspace(MathWorkspace.DOCUMENTS)
+                        },
+                        onApplyDrawingPlan = { plan ->
+                            when (plan.target) {
+                                AiDrawTarget.SPACE_3D -> {
+                                    plan.scene3D?.let { spec ->
+                                        val snap3D = AiResponseParser.buildGeometrySnapshot(spec)
+                                        geometryViewModel.applyAiSnapshot(snap3D, plan.title)
+                                        onSelectWorkspace(MathWorkspace.SPACE_3D)
+                                    }
+                                }
+                                AiDrawTarget.PLANE_2D -> {
+                                    plan.scene2D?.let { spec ->
+                                        val snap2D = AiResponseParser.buildGeo2DSnapshot(spec)
+                                        geo2DViewModel.applyAiSnapshot(snap2D, plan.title)
+                                        onSelectWorkspace(MathWorkspace.PLANE_2D)
+                                    }
                                 }
                             }
-                            AiDrawTarget.PLANE_2D -> {
-                                plan.scene2D?.let { spec ->
-                                    val snap2D = AiResponseParser.buildGeo2DSnapshot(spec)
-                                    geo2DViewModel.applyAiSnapshot(snap2D, plan.title)
-                                    onSelectWorkspace(MathWorkspace.PLANE_2D)
-                                }
-                            }
+                        },
+                        onOpenAiSettings = {
+                            activeWorkspace = MathWorkspace.SETTINGS
+                            settingsSubPage = SettingsSubPage.AI_PROVIDERS
+                            isImmersive = false
+                            workspacePrefs.saveLastWorkspace(MathWorkspace.SETTINGS)
                         }
-                    },
-                    onOpenAiSettings = {
-                        activeWorkspace = MathWorkspace.SETTINGS
-                        settingsSubPage = SettingsSubPage.AI_PROVIDERS
-                        isImmersive = false
-                        workspacePrefs.saveLastWorkspace(MathWorkspace.SETTINGS)
-                    }
-                )
-                MathWorkspace.SETTINGS -> SettingsWorkspaceHost(
-                    activeSubPage = settingsSubPage,
-                    onSelectSubPage = { settingsSubPage = it },
-                    themeViewModel = themeViewModel,
-                    themeUiState = themeUiState,
-                    geometryViewModel = geometryViewModel,
-                    geo2DViewModel = geo2DViewModel,
-                    updateViewModel = updateViewModel,
-                    aiViewModel = aiViewModel,
-                    rememberLastWorkspace = rememberLastWorkspace,
-                    onToggleRememberLastWorkspace = { enabled ->
-                        rememberLastWorkspace = enabled
-                        workspacePrefs.setRememberLastWorkspace(enabled)
-                    },
-                    onSwitchWorkspace = onSelectWorkspace
-                )
+                    )
+                    MathWorkspace.SETTINGS -> SettingsWorkspaceHost(
+                        activeSubPage = settingsSubPage,
+                        onSelectSubPage = { settingsSubPage = it },
+                        themeViewModel = themeViewModel,
+                        themeUiState = themeUiState,
+                        geometryViewModel = geometryViewModel,
+                        geo2DViewModel = geo2DViewModel,
+                        updateViewModel = updateViewModel,
+                        aiViewModel = aiViewModel,
+                        rememberLastWorkspace = rememberLastWorkspace,
+                        onToggleRememberLastWorkspace = { enabled ->
+                            rememberLastWorkspace = enabled
+                            workspacePrefs.setRememberLastWorkspace(enabled)
+                        },
+                        onSwitchWorkspace = onSelectWorkspace
+                    )
+                }
             }
+        }
 
-            // Layer 2: Unified Floating Pill Bottom Navigation Bar & Immersive Restore Pill
+        // Layer 2: Unified Floating Pill Bottom Navigation Bar & Immersive Restore Pill
+        // Samples rootNavBackdrop so scrolling cards, PDF pages, AI chats & 3D/2D canvases refract live!
+        CompositionLocalProvider(LocalLiquidGlassBackdrop provides rootNavBackdrop) {
             FloatingPillBottomNavBar(
                 current = activeWorkspace,
                 hasUpdateBadge = hasUpdateBadge,
@@ -284,18 +296,18 @@ fun ToolToanRootScreen(
                 onExitImmersive = { isImmersive = false },
                 modifier = Modifier.align(Alignment.BottomEnd)
             )
-
-            // Layer 3: Self-isolated Global Overlays (never recompose active workspace!)
-            RootAuthToastHost(
-                aiViewModel = aiViewModel,
-                modifier = Modifier.align(Alignment.TopCenter)
-            )
-
-            RootUpdateOverlayHost(
-                updateViewModel = updateViewModel,
-                modifier = Modifier.align(Alignment.TopCenter)
-            )
         }
+
+        // Layer 3: Self-isolated Global Overlays (never recompose active workspace!)
+        RootAuthToastHost(
+            aiViewModel = aiViewModel,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
+
+        RootUpdateOverlayHost(
+            updateViewModel = updateViewModel,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
     }
 }
 
@@ -328,10 +340,11 @@ private fun SettingsWorkspaceHost(
         onSelectAccentColor = { themeViewModel.selectAccentColor(it) },
         onToggleLiquidGlass = { themeViewModel.toggleLiquidGlass(it) },
         onApplyLiquidGlassStyle = { themeViewModel.applyLiquidGlassStyle(it) },
-        onUpdateLiquidGlass = { blur, ref, disp, t, s, r, b, sh, hc ->
+        onUpdateLiquidGlass = { blur, ref, bevel, disp, t, s, r, b, sh, hc ->
             themeViewModel.updateLiquidGlass(
                 blurRadius = blur,
                 refraction = ref,
+                bevelThickness = bevel,
                 chromaticDispersion = disp,
                 translucency = t,
                 specularGlow = s,

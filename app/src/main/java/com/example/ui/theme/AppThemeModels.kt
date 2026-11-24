@@ -116,30 +116,33 @@ enum class AppThemePreset(
  */
 data class LiquidGlassConfig(
     val enabled: Boolean = false,
-    /** 4f..36f dp — live backdrop Gaussian blur radius behind glass capsules */
-    val blurRadius: Float = 16f,
+    /** 0f..36f dp — live backdrop Gaussian blur radius behind glass capsules (0dp = pure crystal lens) */
+    val blurRadius: Float = 3.5f,
     /** 0.0f..1.0f — convex edge lens refraction / optical distortion strength (AGSL shader) */
-    val refraction: Float = 0.78f,
+    val refraction: Float = 0.90f,
+    /** 0.15f..1.0f — curved outer bevel thickness controlling optical rim width & depth */
+    val bevelThickness: Float = 0.62f,
     /** 0.0f..1.0f — prismatic RGB chromatic aberration along curved glass rims */
-    val chromaticDispersion: Float = 0.50f,
-    /** 0.25f..0.95f — higher means clearer, more transparent crystal glass */
-    val translucency: Float = 0.78f,
+    val chromaticDispersion: Float = 0.72f,
+    /** 0.25f..0.96f — higher means clearer, more transparent crystal glass */
+    val translucency: Float = 0.90f,
     /** 0.0f..1.0f — specular top-bevel highlight & glossy sheen intensity */
-    val specularGlow: Float = 0.84f,
+    val specularGlow: Float = 0.92f,
     /** 0.0f..1.0f — subtle chromatic glass tint & ambient aurora glow */
-    val refractionTint: Float = 0.28f,
+    val refractionTint: Float = 0.16f,
     /** 0.2f..1.0f — crisp Fresnel rim border brightness & thickness */
-    val borderIntensity: Float = 0.82f,
+    val borderIntensity: Float = 0.90f,
     /** Smooth animated specular shimmer sweep across glass panels */
     val dynamicShimmer: Boolean = true,
     /** Boosts frosted glass opacity slightly for extra text legibility */
     val highContrastText: Boolean = false
 ) {
     fun sanitized(): LiquidGlassConfig = copy(
-        blurRadius = blurRadius.coerceIn(4f, 36f),
+        blurRadius = blurRadius.coerceIn(0f, 36f),
         refraction = refraction.coerceIn(0f, 1f),
+        bevelThickness = bevelThickness.coerceIn(0.15f, 1f),
         chromaticDispersion = chromaticDispersion.coerceIn(0f, 1f),
-        translucency = translucency.coerceIn(0.25f, 0.95f),
+        translucency = translucency.coerceIn(0.25f, 0.96f),
         specularGlow = specularGlow.coerceIn(0f, 1f),
         refractionTint = refractionTint.coerceIn(0f, 1f),
         borderIntensity = borderIntensity.coerceIn(0.2f, 1f)
@@ -153,16 +156,17 @@ enum class LiquidGlassPresetStyle(
 ) {
     CRYSTAL(
         id = "crystal",
-        label = "Pha lê chuẩn",
+        label = "Pha lê iOS 26",
         config = LiquidGlassConfig(
             enabled = true,
-            blurRadius = 14f,
-            refraction = 0.86f,
-            chromaticDispersion = 0.58f,
-            translucency = 0.84f,
-            specularGlow = 0.88f,
-            refractionTint = 0.20f,
-            borderIntensity = 0.88f,
+            blurRadius = 3.5f,
+            refraction = 0.92f,
+            bevelThickness = 0.62f,
+            chromaticDispersion = 0.74f,
+            translucency = 0.92f,
+            specularGlow = 0.94f,
+            refractionTint = 0.14f,
+            borderIntensity = 0.92f,
             dynamicShimmer = true,
             highContrastText = false
         )
@@ -172,13 +176,14 @@ enum class LiquidGlassPresetStyle(
         label = "Kính mờ sương",
         config = LiquidGlassConfig(
             enabled = true,
-            blurRadius = 22f,
-            refraction = 0.65f,
-            chromaticDispersion = 0.35f,
-            translucency = 0.66f,
-            specularGlow = 0.74f,
-            refractionTint = 0.38f,
-            borderIntensity = 0.78f,
+            blurRadius = 14f,
+            refraction = 0.74f,
+            bevelThickness = 0.50f,
+            chromaticDispersion = 0.44f,
+            translucency = 0.74f,
+            specularGlow = 0.80f,
+            refractionTint = 0.30f,
+            borderIntensity = 0.82f,
             dynamicShimmer = true,
             highContrastText = false
         )
@@ -188,13 +193,14 @@ enum class LiquidGlassPresetStyle(
         label = "Kính dịu mắt",
         config = LiquidGlassConfig(
             enabled = true,
-            blurRadius = 28f,
-            refraction = 0.36f,
-            chromaticDispersion = 0.14f,
-            translucency = 0.44f,
-            specularGlow = 0.48f,
-            refractionTint = 0.26f,
-            borderIntensity = 0.58f,
+            blurRadius = 24f,
+            refraction = 0.42f,
+            bevelThickness = 0.36f,
+            chromaticDispersion = 0.18f,
+            translucency = 0.48f,
+            specularGlow = 0.54f,
+            refractionTint = 0.24f,
+            borderIntensity = 0.62f,
             dynamicShimmer = false,
             highContrastText = true
         )

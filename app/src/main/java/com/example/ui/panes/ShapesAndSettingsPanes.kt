@@ -538,17 +538,13 @@ private fun SensitivitySliderRow(
                 fontWeight = FontWeight.Bold
             )
         }
-        Slider(
+        LiquidGlassSlider(
             value = value.coerceIn(range.start, range.endInclusive),
             onValueChange = onValueChange,
             onValueChangeFinished = onFinished,
             valueRange = range,
-            colors = SliderDefaults.colors(
-                thumbColor = accent,
-                activeTrackColor = accent,
-                inactiveTrackColor = SlateBorder
-            ),
-            modifier = Modifier.height(28.dp).testTag(testTag)
+            accentColor = accent,
+            testTag = testTag
         )
     }
 }
@@ -713,17 +709,12 @@ private fun DimensionSliderRow(
                 fontWeight = FontWeight.Bold
             )
         }
-        Slider(
+        LiquidGlassSlider(
             value = value.coerceIn(range.start, range.endInclusive),
             onValueChange = onValueChange,
             onValueChangeFinished = onValueChangeFinished,
             valueRange = range,
-            colors = SliderDefaults.colors(
-                thumbColor = IndigoBright,
-                activeTrackColor = IndigoBright,
-                inactiveTrackColor = SlateBorder
-            ),
-            modifier = Modifier.height(30.dp)
+            accentColor = IndigoBright
         )
     }
 }
@@ -749,17 +740,10 @@ fun SettingCheckRow(
             color = SlateTextPrimary,
             modifier = Modifier.weight(1f)
         )
-        Switch(
+        LiquidGlassSwitch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = SlateTextPrimary,
-                checkedTrackColor = IndigoBright,
-                uncheckedThumbColor = SlateTextSecondary,
-                uncheckedTrackColor = SlateDark,
-                uncheckedBorderColor = SlateBorder
-            ),
-            modifier = Modifier.height(26.dp)
+            checkedTrackColor = IndigoBright
         )
     }
 }

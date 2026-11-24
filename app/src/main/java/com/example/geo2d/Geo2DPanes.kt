@@ -1031,12 +1031,16 @@ private fun Geo2DSwitchRow(label: String, checked: Boolean, onToggle: () -> Unit
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onToggle)
-            .padding(vertical = 2.dp),
+            .padding(vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Text(label, style = MaterialTheme.typography.bodySmall, color = SlateTextLight, modifier = Modifier.weight(1f))
-        Switch(checked = checked, onCheckedChange = { onToggle() })
+        LiquidGlassSwitch(
+            checked = checked,
+            onCheckedChange = { onToggle() },
+            checkedTrackColor = EmeraldAccent
+        )
     }
 }
 
@@ -1051,7 +1055,12 @@ private fun Geo2DSliderRow(label: String, value: Float, range: ClosedFloatingPoi
                 color = CyanAccent
             )
         }
-        Slider(value = value, onValueChange = onChange, valueRange = range)
+        LiquidGlassSlider(
+            value = value,
+            onValueChange = onChange,
+            valueRange = range,
+            accentColor = CyanAccent
+        )
     }
 }
 
@@ -1186,9 +1195,10 @@ fun Geo2DSaveExportModal(
                                 fontSize = 10.sp
                             )
                         }
-                        Switch(
+                        LiquidGlassSwitch(
                             checked = uiState.exportTransparentBg,
-                            onCheckedChange = { viewModel.toggleExportTransparentBg() }
+                            onCheckedChange = { viewModel.toggleExportTransparentBg() },
+                            checkedTrackColor = CyanAccent
                         )
                     }
 

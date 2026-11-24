@@ -86,6 +86,7 @@ fun AppSettingsScreen(
     onUpdateLiquidGlass: (
         blurRadius: Float?,
         refraction: Float?,
+        bevelThickness: Float?,
         chromaticDispersion: Float?,
         translucency: Float?,
         specularGlow: Float?,
@@ -210,21 +211,28 @@ fun AppSettingsScreen(
                             }
 
                             SettingsSubPage.LIQUID_GLASS -> {
-                                LiquidGlassLivePreviewBanner(config = themeConfig.liquidGlass)
+                                LiquidGlassOpticalLabCard(
+                                    config = themeConfig.liquidGlass,
+                                    onUpdateRefraction = { onUpdateLiquidGlass(null, it, null, null, null, null, null, null, null, null) },
+                                    onUpdateBevelThickness = { onUpdateLiquidGlass(null, null, it, null, null, null, null, null, null, null) },
+                                    onUpdateChromaticDispersion = { onUpdateLiquidGlass(null, null, null, it, null, null, null, null, null, null) },
+                                    onUpdateBlurRadius = { onUpdateLiquidGlass(it, null, null, null, null, null, null, null, null, null) }
+                                )
                                 SettingsSubCard {
                                     LiquidGlassSettingsSection(
                                         config = themeConfig.liquidGlass,
                                         onToggleEnabled = onToggleLiquidGlass,
                                         onApplyPresetStyle = onApplyLiquidGlassStyle,
-                                        onUpdateBlurRadius = { onUpdateLiquidGlass(it, null, null, null, null, null, null, null, null) },
-                                        onUpdateRefraction = { onUpdateLiquidGlass(null, it, null, null, null, null, null, null, null) },
-                                        onUpdateChromaticDispersion = { onUpdateLiquidGlass(null, null, it, null, null, null, null, null, null) },
-                                        onUpdateTranslucency = { onUpdateLiquidGlass(null, null, null, it, null, null, null, null, null) },
-                                        onUpdateSpecularGlow = { onUpdateLiquidGlass(null, null, null, null, it, null, null, null, null) },
-                                        onUpdateRefractionTint = { onUpdateLiquidGlass(null, null, null, null, null, it, null, null, null) },
-                                        onUpdateBorderIntensity = { onUpdateLiquidGlass(null, null, null, null, null, null, it, null, null) },
-                                        onToggleDynamicShimmer = { onUpdateLiquidGlass(null, null, null, null, null, null, null, it, null) },
-                                        onToggleHighContrastText = { onUpdateLiquidGlass(null, null, null, null, null, null, null, null, it) }
+                                        onUpdateBlurRadius = { onUpdateLiquidGlass(it, null, null, null, null, null, null, null, null, null) },
+                                        onUpdateRefraction = { onUpdateLiquidGlass(null, it, null, null, null, null, null, null, null, null) },
+                                        onUpdateBevelThickness = { onUpdateLiquidGlass(null, null, it, null, null, null, null, null, null, null) },
+                                        onUpdateChromaticDispersion = { onUpdateLiquidGlass(null, null, null, it, null, null, null, null, null, null) },
+                                        onUpdateTranslucency = { onUpdateLiquidGlass(null, null, null, null, it, null, null, null, null, null) },
+                                        onUpdateSpecularGlow = { onUpdateLiquidGlass(null, null, null, null, null, it, null, null, null, null) },
+                                        onUpdateRefractionTint = { onUpdateLiquidGlass(null, null, null, null, null, null, it, null, null, null) },
+                                        onUpdateBorderIntensity = { onUpdateLiquidGlass(null, null, null, null, null, null, null, it, null, null) },
+                                        onToggleDynamicShimmer = { onUpdateLiquidGlass(null, null, null, null, null, null, null, null, it, null) },
+                                        onToggleHighContrastText = { onUpdateLiquidGlass(null, null, null, null, null, null, null, null, null, it) }
                                     )
                                 }
                             }
@@ -336,7 +344,8 @@ private fun SettingsHubView(
         LiquidGlassPresetStyle.entries.firstOrNull { style ->
             abs(lgConfig.blurRadius - style.config.blurRadius) < 1.5f &&
                 abs(lgConfig.refraction - style.config.refraction) < 0.06f &&
-                abs(lgConfig.translucency - style.config.translucency) < 0.05f &&
+                abs(lgConfig.bevelThickness - style.config.bevelThickness) < 0.08f &&
+                abs(lgConfig.translucency - style.config.translucency) < 0.06f &&
                 lgConfig.highContrastText == style.config.highContrastText
         }?.label ?: "Tùy chỉnh"
     }
@@ -508,10 +517,12 @@ private fun SettingsHubRowCard(
     leadingOverride: (@Composable () -> Unit)? = null,
     onClick: () -> Unit
 ) {
+    val isGlass = ActiveThemeState.current.liquidGlass.enabled
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .defaultMinSize(minHeight = 68.dp)
+            .liquidGlassPressPhysics(enabled = isGlass, scaleOnPress = 1.025f, bloomColor = iconTint)
             .liquidGlassSurface(
                 shape = RoundedCornerShape(18.dp),
                 elevated = false,
@@ -684,100 +695,6 @@ private fun SettingsSubCard(
     )
 }
 
-@Composable
-private fun LiquidGlassLivePreviewBanner(
-    config: LiquidGlassConfig
-) {
-    val previewBackdrop = rememberLiquidGlassBackdropState()
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(126.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .border(1.dp, SlateBorder, RoundedCornerShape(20.dp))
-            .testTag("liquid_glass_live_preview")
-    ) {
-        // Vibrant mathematical gradient pattern behind the live glass sample
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            IndigoPrimary.copy(alpha = 0.85f),
-                            CyanAccent.copy(alpha = 0.72f),
-                            PurpleAccent.copy(alpha = 0.78f),
-                            EmeraldAccent.copy(alpha = 0.65f)
-                        )
-                    )
-                )
-                .liquidGlassBackdropSource(previewBackdrop, staticCapture = true)
-        ) {
-            Text(
-                text = "f(x) = x³ − 3mx + 1   ·   V = ⅓ Sđ · h   ·   Oxyz",
-                style = MaterialTheme.typography.titleMedium.copy(fontFamily = MonoFontFamily),
-                color = Color.White.copy(alpha = 0.34f),
-                fontWeight = FontWeight.Black,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(14.dp)
-            )
-            Text(
-                text = "∫ sin(x) dx = −cos(x) + C",
-                style = MaterialTheme.typography.titleSmall.copy(fontFamily = MonoFontFamily),
-                color = Color.White.copy(alpha = 0.28f),
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(14.dp)
-            )
-        }
-
-        // Foreground live Liquid Glass sample capsule
-        CompositionLocalProvider(LocalLiquidGlassBackdrop provides previewBackdrop) {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(horizontal = 16.dp)
-                    .liquidGlassSurface(
-                        shape = RoundedCornerShape(18.dp),
-                        pillShape = CircleShape,
-                        elevated = true,
-                        fallbackBg = SlateDark.copy(alpha = 0.92f),
-                        fallbackBorder = SlateBorder
-                    )
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.AutoAwesome,
-                    contentDescription = null,
-                    tint = CyanAccent,
-                    modifier = Modifier.size(20.dp)
-                )
-                Column {
-                    Text(
-                        text = if (config.enabled) "Xem trước kính lỏng trực tiếp" else "Liquid Glass đang tắt",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = SlateTextPrimary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = if (config.enabled) {
-                            "Mờ ${config.blurRadius.toInt()}dp · Khúc xạ ${(config.refraction * 100).toInt()}% · Tán sắc ${(config.chromaticDispersion * 100).toInt()}%"
-                        } else {
-                            "Bật công tắc bên dưới để thấy hiệu ứng"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = SlateTextSecondary,
-                        fontSize = 11.sp
-                    )
-                }
-            }
-        }
-    }
-}
 
 @Composable
 private fun ControlsSubScreenContent(
@@ -888,13 +805,10 @@ private fun ControlsSubScreenContent(
                     color = SlateTextSecondary
                 )
             }
-            Switch(
+            LiquidGlassSwitch(
                 checked = rememberLastWorkspace,
                 onCheckedChange = onToggleRememberLastWorkspace,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = IndigoBright
-                )
+                checkedTrackColor = IndigoBright
             )
         }
     }
@@ -1001,13 +915,10 @@ private fun StorageExportSubScreenContent(
                     color = SlateTextSecondary
                 )
             }
-            Switch(
+            LiquidGlassSwitch(
                 checked = exportTransparentPng,
                 onCheckedChange = onToggleTransparentPng,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = CyanAccent
-                )
+                checkedTrackColor = CyanAccent
             )
         }
     }
