@@ -300,6 +300,8 @@ fun LiquidGlassSettingsSection(
     onToggleEnabled: (Boolean) -> Unit,
     onApplyPresetStyle: (LiquidGlassPresetStyle) -> Unit,
     onUpdateBlurRadius: (Float) -> Unit,
+    onUpdateVibrancy: (Float) -> Unit,
+    onUpdateFrostGrain: (Float) -> Unit,
     onUpdateRefraction: (Float) -> Unit,
     onUpdateBevelThickness: (Float) -> Unit,
     onUpdateChromaticDispersion: (Float) -> Unit,
@@ -339,16 +341,16 @@ fun LiquidGlassSettingsSection(
         ) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    text = "Bật chất liệu Liquid Glass",
+                    text = "Bật chất liệu MeeTube Liquid Glass",
                     style = MaterialTheme.typography.labelLarge,
                     color = SlateTextPrimary,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
                     text = if (config.enabled) {
-                        "Đang bật kính lỏng làm mờ & khúc xạ thời gian thực (GPU)"
+                        "Đang bật kính mờ pha lê siêu mượt (AGSL GPU + Vibrancy + Hạt mịn)"
                     } else {
-                        "Bật kính lỏng trong suốt dạng viên nang cho mọi chủ đề"
+                        "Bật kính mờ pha lê MeeTube siêu mượt cho thanh nổi, bảng công cụ & thẻ"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = SlateTextSecondary,
@@ -379,9 +381,9 @@ fun LiquidGlassSettingsSection(
                     ) {
                         LiquidGlassPresetStyle.entries.forEach { style ->
                             val isActive = abs(config.blurRadius - style.config.blurRadius) < 1.5f &&
-                                abs(config.refraction - style.config.refraction) < 0.06f &&
-                                abs(config.bevelThickness - style.config.bevelThickness) < 0.08f &&
-                                abs(config.translucency - style.config.translucency) < 0.06f &&
+                                abs(config.vibrancy - style.config.vibrancy) < 0.08f &&
+                                abs(config.refraction - style.config.refraction) < 0.08f &&
+                                abs(config.translucency - style.config.translucency) < 0.08f &&
                                 config.highContrastText == style.config.highContrastText
                             Box(
                                 modifier = Modifier
@@ -413,18 +415,34 @@ fun LiquidGlassSettingsSection(
                     }
                 }
 
-                // Real-Time GPU Optical Sliders (iOS 26 Liquid Glass Crystal Sliders)
+                // Real-Time GPU Optical Sliders (MeeTube Frosted Crystal Sliders)
                 LiquidGlassSliderRow(
                     label = "Độ mờ kính nền (Blur)",
                     value = config.blurRadius,
                     range = 0f..36f,
-                    valueLabel = if (config.blurRadius < 0.8f) "0 dp (Pha lê)" else "${config.blurRadius.roundToInt()} dp",
+                    valueLabel = if (config.blurRadius < 0.8f) "0 dp (Trong)" else "${config.blurRadius.roundToInt()} dp",
                     accent = SkyBlue,
                     testTag = "lg_slider_blur",
                     onValueChange = onUpdateBlurRadius
                 )
                 LiquidGlassSliderRow(
-                    label = "Độ khúc xạ thấu kính (Refraction)",
+                    label = "Độ rực màu nền (Vibrancy)",
+                    value = config.vibrancy,
+                    range = 0f..1f,
+                    accent = EmeraldAccent,
+                    testTag = "lg_slider_vibrancy",
+                    onValueChange = onUpdateVibrancy
+                )
+                LiquidGlassSliderRow(
+                    label = "Hạt mịn kính mờ (Frost Grain)",
+                    value = config.frostGrain,
+                    range = 0f..1f,
+                    accent = AmberAccent,
+                    testTag = "lg_slider_frost_grain",
+                    onValueChange = onUpdateFrostGrain
+                )
+                LiquidGlassSliderRow(
+                    label = "Độ khúc xạ viền kính (Refraction)",
                     value = config.refraction,
                     range = 0f..1f,
                     accent = CyanAccent,

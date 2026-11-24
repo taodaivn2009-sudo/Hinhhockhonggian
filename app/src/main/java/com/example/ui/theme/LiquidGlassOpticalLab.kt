@@ -95,6 +95,7 @@ fun LiquidGlassOpticalLabCard(
     onUpdateBevelThickness: (Float) -> Unit,
     onUpdateChromaticDispersion: (Float) -> Unit,
     onUpdateBlurRadius: (Float) -> Unit,
+    onUpdateVibrancy: (Float) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var activeTab by remember { mutableStateOf(OpticalLabTab.PIN_PAD) }
@@ -165,7 +166,8 @@ fun LiquidGlassOpticalLabCard(
         ) {
             when (activeTab) {
                 OpticalLabTab.PIN_PAD -> {
-                    // Draggable high-contrast abstract wallpaper so users can pan vivid ribbons under the lenses!
+                    val panKey = (panOffset.x.roundToInt().toLong() shl 20) xor panOffset.y.roundToInt().toLong()
+                    // Draggable high-contrast abstract wallpaper: cached via captureKey so it ONLY re-records while dragging!
                     AbstractLiquidWallpaper(
                         panOffset = panOffset,
                         modifier = Modifier
@@ -181,8 +183,9 @@ fun LiquidGlassOpticalLabCard(
                             }
                             .liquidGlassBackdropSource(
                                 state = stageBackdrop,
-                                staticCapture = false,
-                                alwaysCapture = true
+                                staticCapture = true,
+                                alwaysCapture = true,
+                                captureKey = panKey
                             )
                     )
                     CompositionLocalProvider(LocalLiquidGlassBackdrop provides stageBackdrop) {
@@ -195,7 +198,7 @@ fun LiquidGlassOpticalLabCard(
                 }
 
                 OpticalLabTab.FLOATING_NAV -> {
-                    // Authentic HyperIOS / iOS 26 demo: colorful scrolling list behind floating refractive nav pill!
+                    // Live scrolling colorful list behind MeeTube floating frosted-crystal nav pill!
                     LiquidNavScrollingDemo(
                         backdropState = stageBackdrop,
                         modifier = Modifier.fillMaxSize()
@@ -203,14 +206,16 @@ fun LiquidGlassOpticalLabCard(
                 }
 
                 OpticalLabTab.CONTROLS -> {
+                    val panKey = (panOffset.x.roundToInt().toLong() shl 20) xor panOffset.y.roundToInt().toLong()
                     AbstractLiquidWallpaper(
                         panOffset = panOffset,
                         modifier = Modifier
                             .fillMaxSize()
                             .liquidGlassBackdropSource(
                                 state = stageBackdrop,
-                                staticCapture = false,
-                                alwaysCapture = true
+                                staticCapture = true,
+                                alwaysCapture = true,
+                                captureKey = panKey
                             )
                     )
                     CompositionLocalProvider(LocalLiquidGlassBackdrop provides stageBackdrop) {
@@ -228,9 +233,12 @@ fun LiquidGlassOpticalLabCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(SlateDark.copy(alpha = 0.78f))
-                .border(1.dp, CyanAccent.copy(alpha = 0.35f), RoundedCornerShape(18.dp))
+                .liquidGlassSurface(
+                    shape = RoundedCornerShape(18.dp),
+                    liveBackdrop = false,
+                    fallbackBg = SlateDark.copy(alpha = 0.78f),
+                    accentBorder = CyanAccent.copy(alpha = 0.45f)
+                )
                 .padding(horizontal = 14.dp, vertical = 12.dp)
                 .testTag("lg_quick_tuning_panel"),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -251,7 +259,7 @@ fun LiquidGlassOpticalLabCard(
                         modifier = Modifier.size(16.dp)
                     )
                     Text(
-                        text = "Tinh chỉnh quang học tức thời",
+                        text = "Tinh chỉnh quang học MeeTube tức thời",
                         style = MaterialTheme.typography.labelLarge,
                         color = SlateTextPrimary,
                         fontWeight = FontWeight.Bold
@@ -266,7 +274,25 @@ fun LiquidGlassOpticalLabCard(
             }
 
             QuickOpticalSlider(
-                label = "Refraction Intensity (Khúc xạ)",
+                label = "Blur Radius (Độ mờ kính)",
+                value = config.blurRadius,
+                range = 0f..36f,
+                valueLabel = "${config.blurRadius.roundToInt()} dp",
+                accent = SkyBlue,
+                testTag = "lg_lab_slider_blur",
+                onValueChange = onUpdateBlurRadius
+            )
+            QuickOpticalSlider(
+                label = "Vibrancy (Độ rực màu nền MeeTube)",
+                value = config.vibrancy,
+                range = 0f..1f,
+                valueLabel = "${(config.vibrancy * 100f).roundToInt()}%",
+                accent = EmeraldAccent,
+                testTag = "lg_lab_slider_vibrancy",
+                onValueChange = onUpdateVibrancy
+            )
+            QuickOpticalSlider(
+                label = "Refraction Intensity (Khúc xạ viền)",
                 value = config.refraction,
                 range = 0f..1f,
                 valueLabel = "${(config.refraction * 100f).roundToInt()}%",
@@ -291,15 +317,6 @@ fun LiquidGlassOpticalLabCard(
                 accent = PinkAccent,
                 testTag = "lg_lab_slider_dispersion",
                 onValueChange = onUpdateChromaticDispersion
-            )
-            QuickOpticalSlider(
-                label = "Blur Radius (Độ mờ kính)",
-                value = config.blurRadius,
-                range = 0f..36f,
-                valueLabel = "${config.blurRadius.roundToInt()} dp",
-                accent = EmeraldAccent,
-                testTag = "lg_lab_slider_blur",
-                onValueChange = onUpdateBlurRadius
             )
         }
     }
@@ -519,7 +536,7 @@ private fun LiquidGlassPinPadDemo(modifier: Modifier = Modifier) {
                                 .liquidGlassSurface(
                                     shape = CircleShape,
                                     pillShape = CircleShape,
-                                    elevated = true,
+                                    elevated = false,
                                     lensZoom = 1.35f,
                                     crystalClarity = true,
                                     forceLiveOptical = true

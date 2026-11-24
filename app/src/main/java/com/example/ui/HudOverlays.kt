@@ -243,6 +243,7 @@ fun TopStudioHeader(
                             .liquidGlassSurface(
                                 shape = CircleShape,
                                 pillShape = CircleShape,
+                                liveBackdrop = false,
                                 fallbackBg = SlateDeepest.copy(alpha = 0.84f),
                                 fallbackBorder = SlateBorder.copy(alpha = 0.75f)
                             )
@@ -272,6 +273,7 @@ fun TopStudioHeader(
                             .liquidGlassSurface(
                                 shape = CircleShape,
                                 pillShape = CircleShape,
+                                liveBackdrop = false,
                                 fallbackBg = SlateDeepest.copy(alpha = 0.84f),
                                 fallbackBorder = SlateBorder.copy(alpha = 0.75f)
                             )
@@ -401,6 +403,7 @@ fun RightCanvasQuickControls(
                 .liquidGlassSurface(
                     shape = RoundedCornerShape(22.dp),
                     pillShape = RoundedCornerShape(24.dp),
+                    liveBackdrop = false,
                     fallbackBg = SlateDark.copy(alpha = 0.84f),
                     fallbackBorder = SlateBorder.copy(alpha = 0.72f)
                 )
@@ -724,16 +727,22 @@ private fun DockSheetChip(
     testTag: String,
     onClick: () -> Unit
 ) {
+    val isGlass = ActiveThemeState.current.liquidGlass.enabled
     Row(
         modifier = Modifier
             .testTag(testTag)
             .defaultMinSize(minHeight = 40.dp)
-            .clip(CircleShape)
-            .background(if (active) accent.copy(alpha = 0.24f) else Color.Transparent)
-            .border(
-                width = 1.dp,
-                color = if (active) accent.copy(alpha = 0.7f) else Color.Transparent,
-                shape = CircleShape
+            .liquidGlassPressPhysics(enabled = isGlass, scaleOnPress = 1.05f, bloomColor = accent)
+            .then(
+                if (active) {
+                    Modifier.liquidGlassActiveBubble(
+                        active = true,
+                        shape = CircleShape,
+                        fallbackActiveColor = accent.copy(alpha = 0.24f)
+                    )
+                } else {
+                    Modifier.clip(CircleShape)
+                }
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 7.dp),
@@ -764,12 +773,29 @@ private fun SubDragChip(
     testTag: String,
     onClick: () -> Unit
 ) {
+    val isGlass = ActiveThemeState.current.liquidGlass.enabled
     Box(
         modifier = Modifier
             .testTag(testTag)
-            .clip(CircleShape)
-            .background(if (active) PinkAccent else SlateSurface)
-            .border(1.dp, if (active) PinkLight else SlateBorder, CircleShape)
+            .liquidGlassPressPhysics(enabled = isGlass, scaleOnPress = 1.06f, bloomColor = PinkAccent)
+            .then(
+                if (active) {
+                    Modifier
+                        .liquidGlassActiveBubble(
+                            active = true,
+                            shape = CircleShape,
+                            fallbackActiveColor = PinkAccent
+                        )
+                } else {
+                    Modifier.liquidGlassSurface(
+                        shape = CircleShape,
+                        pillShape = CircleShape,
+                        liveBackdrop = false,
+                        fallbackBg = SlateSurface,
+                        fallbackBorder = SlateBorder
+                    )
+                }
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {

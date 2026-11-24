@@ -177,6 +177,7 @@ struct FloatingPillBottomNavBar: View {
                             if selected {
                                 Capsule()
                                     .fill(.ultraThinMaterial)
+                                    .saturation(1.26)
                                     .overlay(
                                         Capsule()
                                             .fill(
@@ -186,8 +187,8 @@ struct FloatingPillBottomNavBar: View {
                                                         tab.accent.opacity(0.22),
                                                         Color.white.opacity(0.08)
                                                     ],
-                                                    startPoint: .topLeading,
-                                                    endPoint: .bottomTrailing
+                                                    startPoint: .top,
+                                                    endPoint: .bottom
                                                 )
                                             )
                                     )
@@ -195,15 +196,15 @@ struct FloatingPillBottomNavBar: View {
                                         Capsule()
                                             .stroke(
                                                 LinearGradient(
-                                                    colors: [
-                                                        Color(hex: 0xCFFAFE).opacity(0.92),
-                                                        Color.white.opacity(0.22),
-                                                        Color(hex: 0xFBCFE8).opacity(0.72)
+                                                    stops: [
+                                                        .init(color: Color(hex: 0xE0F7FF).opacity(0.92), location: 0.0),
+                                                        .init(color: Color.white.opacity(0.22), location: 0.38),
+                                                        .init(color: Color(hex: 0xFFD8EB).opacity(0.62), location: 1.0)
                                                     ],
-                                                    startPoint: .topLeading,
-                                                    endPoint: .bottomTrailing
+                                                    startPoint: .top,
+                                                    endPoint: .bottom
                                                 ),
-                                                lineWidth: 1.25
+                                                lineWidth: 1.2
                                             )
                                     )
                                     .shadow(color: tab.accent.opacity(0.26), radius: 8, x: 0, y: 2)

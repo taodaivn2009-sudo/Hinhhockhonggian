@@ -184,8 +184,8 @@ fun FloatingPillBottomNavBar(
                         shape = CircleShape,
                         pillShape = CircleShape,
                         elevated = true,
-                        lensZoom = 1.04f,
-                        crystalClarity = true,
+                        lensZoom = 1.05f,
+                        crystalClarity = false,
                         fallbackBg = SlateDark.copy(alpha = 0.96f),
                         fallbackBorder = SlateBorder.copy(alpha = 0.85f)
                     )
@@ -198,15 +198,17 @@ fun FloatingPillBottomNavBar(
                 val slotWidthPx = innerWidthPx / tabCount
                 val pillOffsetPx = (animatedSlot * slotWidthPx).roundToInt()
 
-                // 1. Sliding Fluid-Morphing Magnified Liquid Glass Droplet Pill
+                // 1. Sliding Fluid-Morphing MeeTube Crystal Lens Pill (zero nested FBO -> silky 120fps slide & scrub!)
                 val dropletModifier = if (isGlass) {
                     val disp = lg.chromaticDispersion
                     val specular = lg.specularGlow
-                    val rimBrush = Brush.linearGradient(
-                        colors = listOf(
-                            lerp(Color.White, Color(0xFFCFFAFE), disp * 0.45f).copy(alpha = (0.76f + specular * 0.22f).coerceIn(0f, 1f)),
-                            Color.White.copy(alpha = 0.16f),
-                            lerp(Color.White, Color(0xFFFFD4E8), disp * 0.35f).copy(alpha = (0.48f + specular * 0.25f).coerceIn(0f, 1f))
+                    val rimBrush = Brush.verticalGradient(
+                        colorStops = arrayOf(
+                            0.0f to lerp(Color.White, Color(0xFFD8F6FF), disp * 0.45f)
+                                .copy(alpha = (0.86f + specular * 0.14f).coerceIn(0f, 1f)),
+                            0.38f to Color.White.copy(alpha = 0.24f),
+                            1.0f to lerp(Color.White, Color(0xFFFFD6EB), disp * 0.35f)
+                                .copy(alpha = (0.50f + specular * 0.24f).coerceIn(0f, 1f))
                         )
                     )
                     Modifier
@@ -217,35 +219,27 @@ fun FloatingPillBottomNavBar(
                             scaleX = liftScale * (1f + stretchFactor)
                             scaleY = liftScale * (1f - stretchFactor * 0.26f)
                         }
-                        .liquidGlassSurface(
-                            shape = CircleShape,
-                            pillShape = CircleShape,
-                            elevated = true,
-                            lensZoom = if (isScrubbing) 1.48f else 1.32f,
-                            crystalClarity = true,
-                            fallbackBg = activeSpec.activeColor.copy(alpha = 0.28f),
-                            fallbackBorder = Color.White.copy(alpha = 0.65f)
-                        )
+                        .clip(CircleShape)
                         .background(
                             brush = Brush.verticalGradient(
                                 colors = if (palette.isDark) {
                                     listOf(
-                                        Color.White.copy(alpha = if (isScrubbing) 0.26f else 0.18f),
-                                        activeSpec.activeColor.copy(alpha = 0.14f),
-                                        Color.White.copy(alpha = 0.08f)
+                                        Color.White.copy(alpha = if (isScrubbing) 0.32f else 0.22f),
+                                        activeSpec.activeColor.copy(alpha = if (isScrubbing) 0.24f else 0.18f),
+                                        Color.White.copy(alpha = if (isScrubbing) 0.16f else 0.09f)
                                     )
                                 } else {
                                     listOf(
-                                        Color.White.copy(alpha = if (isScrubbing) 0.56f else 0.44f),
-                                        activeSpec.activeColor.copy(alpha = 0.12f),
-                                        Color.White.copy(alpha = 0.24f)
+                                        Color.White.copy(alpha = if (isScrubbing) 0.74f else 0.62f),
+                                        activeSpec.activeColor.copy(alpha = 0.16f),
+                                        Color.White.copy(alpha = 0.36f)
                                     )
                                 }
                             ),
                             shape = CircleShape
                         )
                         .border(
-                            width = if (isScrubbing) 1.5.dp else 1.2.dp,
+                            width = if (isScrubbing) 1.4.dp else 1.15.dp,
                             brush = rimBrush,
                             shape = CircleShape
                         )
@@ -262,7 +256,27 @@ fun FloatingPillBottomNavBar(
                         .background(activeSpec.activeColor, CircleShape)
                 }
 
-                Box(modifier = dropletModifier)
+                Box(modifier = dropletModifier) {
+                    if (isGlass) {
+                        // Crisp MeeTube top-edge specular meniscus catchlight across the sliding pill
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .fillMaxWidth(0.74f)
+                                .height(9.dp)
+                                .padding(top = 1.5.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color.White.copy(alpha = if (isScrubbing) 0.56f else 0.40f),
+                                            Color.Transparent
+                                        )
+                                    )
+                                )
+                        )
+                    }
+                }
 
                 // 2. Interactive 5-Tab Row with Direct Finger Drag-to-Scrub + Tap Physics
                 Row(

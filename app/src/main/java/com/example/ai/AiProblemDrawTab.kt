@@ -915,12 +915,17 @@ fun AiMissingKeyBanner(
 
 @Composable
 private fun SampleProblemChip(label: String, onClick: () -> Unit) {
+    val isGlass = ActiveThemeState.current.liquidGlass.enabled
     Box(
         modifier = Modifier
             .defaultMinSize(minHeight = 34.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(SlateDeepest.copy(alpha = 0.65f))
-            .border(1.dp, SlateBorder, RoundedCornerShape(10.dp))
+            .liquidGlassPressPhysics(enabled = isGlass, scaleOnPress = 1.04f, bloomColor = CyanAccent)
+            .liquidGlassSurface(
+                shape = RoundedCornerShape(10.dp),
+                liveBackdrop = false,
+                fallbackBg = SlateDeepest.copy(alpha = 0.65f),
+                fallbackBorder = SlateBorder
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center

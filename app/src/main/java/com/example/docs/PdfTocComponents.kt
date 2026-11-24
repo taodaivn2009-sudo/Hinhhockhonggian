@@ -646,12 +646,18 @@ private fun PdfQuickChip(
     testTag: String,
     onClick: () -> Unit
 ) {
+    val isGlass = ActiveThemeState.current.liquidGlass.enabled
     Box(
         modifier = Modifier
             .defaultMinSize(minHeight = 36.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(accent.copy(alpha = 0.14f))
-            .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+            .liquidGlassPressPhysics(enabled = isGlass, scaleOnPress = 1.05f, bloomColor = accent)
+            .liquidGlassSurface(
+                shape = RoundedCornerShape(10.dp),
+                liveBackdrop = false,
+                fallbackBg = accent.copy(alpha = 0.14f),
+                fallbackBorder = accent.copy(alpha = 0.45f),
+                accentBorder = accent
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 7.dp)
             .testTag(testTag),

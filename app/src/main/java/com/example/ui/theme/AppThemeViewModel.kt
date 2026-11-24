@@ -18,19 +18,45 @@ class ThemePreferences(context: Context) {
         val hasCustomAccent = prefs.contains(KEY_ACCENT_ARGB)
         val customAccent = if (hasCustomAccent) prefs.getLong(KEY_ACCENT_ARGB, 0L) else null
         val defaultGlass = LiquidGlassConfig(enabled = preset.isLiquidGlass)
-        val liquidGlass = LiquidGlassConfig(
-            enabled = prefs.getBoolean(KEY_LG_ENABLED, defaultGlass.enabled),
-            blurRadius = prefs.getFloat(KEY_LG_BLUR, defaultGlass.blurRadius),
-            refraction = prefs.getFloat(KEY_LG_LENS_REFRACTION, defaultGlass.refraction),
-            bevelThickness = prefs.getFloat(KEY_LG_BEVEL_THICKNESS, defaultGlass.bevelThickness),
-            chromaticDispersion = prefs.getFloat(KEY_LG_DISPERSION, defaultGlass.chromaticDispersion),
-            translucency = prefs.getFloat(KEY_LG_TRANSLUCENCY, defaultGlass.translucency),
-            specularGlow = prefs.getFloat(KEY_LG_SPECULAR, defaultGlass.specularGlow),
-            refractionTint = prefs.getFloat(KEY_LG_REFRACTION, defaultGlass.refractionTint),
-            borderIntensity = prefs.getFloat(KEY_LG_BORDER, defaultGlass.borderIntensity),
-            dynamicShimmer = prefs.getBoolean(KEY_LG_SHIMMER, defaultGlass.dynamicShimmer),
-            highContrastText = prefs.getBoolean(KEY_LG_HIGH_CONTRAST, defaultGlass.highContrastText)
-        ).sanitized()
+        val meetubeMigrated = prefs.getBoolean(KEY_LG_MEETUBE_MIGRATED_V3, false)
+        val liquidGlass = if (!meetubeMigrated) {
+            val enabledNow = prefs.getBoolean(KEY_LG_ENABLED, defaultGlass.enabled)
+            val migrated = LiquidGlassPresetStyle.MEETUBE.config.copy(enabled = enabledNow).sanitized()
+            prefs.edit()
+                .putBoolean(KEY_LG_MEETUBE_MIGRATED_V3, true)
+                .putBoolean(KEY_LG_PERF_MIGRATED_V2, true)
+                .putBoolean(KEY_LG_ENABLED, migrated.enabled)
+                .putFloat(KEY_LG_BLUR, migrated.blurRadius)
+                .putFloat(KEY_LG_VIBRANCY, migrated.vibrancy)
+                .putFloat(KEY_LG_FROST_GRAIN, migrated.frostGrain)
+                .putFloat(KEY_LG_LENS_REFRACTION, migrated.refraction)
+                .putFloat(KEY_LG_BEVEL_THICKNESS, migrated.bevelThickness)
+                .putFloat(KEY_LG_DISPERSION, migrated.chromaticDispersion)
+                .putFloat(KEY_LG_TRANSLUCENCY, migrated.translucency)
+                .putFloat(KEY_LG_SPECULAR, migrated.specularGlow)
+                .putFloat(KEY_LG_REFRACTION, migrated.refractionTint)
+                .putFloat(KEY_LG_BORDER, migrated.borderIntensity)
+                .putBoolean(KEY_LG_SHIMMER, migrated.dynamicShimmer)
+                .putBoolean(KEY_LG_HIGH_CONTRAST, migrated.highContrastText)
+                .apply()
+            migrated
+        } else {
+            LiquidGlassConfig(
+                enabled = prefs.getBoolean(KEY_LG_ENABLED, defaultGlass.enabled),
+                blurRadius = prefs.getFloat(KEY_LG_BLUR, defaultGlass.blurRadius),
+                vibrancy = prefs.getFloat(KEY_LG_VIBRANCY, defaultGlass.vibrancy),
+                frostGrain = prefs.getFloat(KEY_LG_FROST_GRAIN, defaultGlass.frostGrain),
+                refraction = prefs.getFloat(KEY_LG_LENS_REFRACTION, defaultGlass.refraction),
+                bevelThickness = prefs.getFloat(KEY_LG_BEVEL_THICKNESS, defaultGlass.bevelThickness),
+                chromaticDispersion = prefs.getFloat(KEY_LG_DISPERSION, defaultGlass.chromaticDispersion),
+                translucency = prefs.getFloat(KEY_LG_TRANSLUCENCY, defaultGlass.translucency),
+                specularGlow = prefs.getFloat(KEY_LG_SPECULAR, defaultGlass.specularGlow),
+                refractionTint = prefs.getFloat(KEY_LG_REFRACTION, defaultGlass.refractionTint),
+                borderIntensity = prefs.getFloat(KEY_LG_BORDER, defaultGlass.borderIntensity),
+                dynamicShimmer = prefs.getBoolean(KEY_LG_SHIMMER, defaultGlass.dynamicShimmer),
+                highContrastText = prefs.getBoolean(KEY_LG_HIGH_CONTRAST, defaultGlass.highContrastText)
+            ).sanitized()
+        }
         return AppThemeConfig(
             mode = mode,
             preset = preset,
@@ -51,6 +77,8 @@ class ThemePreferences(context: Context) {
             }
             putBoolean(KEY_LG_ENABLED, lg.enabled)
             putFloat(KEY_LG_BLUR, lg.blurRadius)
+            putFloat(KEY_LG_VIBRANCY, lg.vibrancy)
+            putFloat(KEY_LG_FROST_GRAIN, lg.frostGrain)
             putFloat(KEY_LG_LENS_REFRACTION, lg.refraction)
             putFloat(KEY_LG_BEVEL_THICKNESS, lg.bevelThickness)
             putFloat(KEY_LG_DISPERSION, lg.chromaticDispersion)
@@ -60,6 +88,8 @@ class ThemePreferences(context: Context) {
             putFloat(KEY_LG_BORDER, lg.borderIntensity)
             putBoolean(KEY_LG_SHIMMER, lg.dynamicShimmer)
             putBoolean(KEY_LG_HIGH_CONTRAST, lg.highContrastText)
+            putBoolean(KEY_LG_PERF_MIGRATED_V2, true)
+            putBoolean(KEY_LG_MEETUBE_MIGRATED_V3, true)
             apply()
         }
     }
@@ -70,6 +100,8 @@ class ThemePreferences(context: Context) {
         private const val KEY_ACCENT_ARGB = "theme_custom_accent_argb"
         private const val KEY_LG_ENABLED = "lg_enabled"
         private const val KEY_LG_BLUR = "lg_blur_radius"
+        private const val KEY_LG_VIBRANCY = "lg_vibrancy"
+        private const val KEY_LG_FROST_GRAIN = "lg_frost_grain"
         private const val KEY_LG_LENS_REFRACTION = "lg_lens_refraction"
         private const val KEY_LG_BEVEL_THICKNESS = "lg_bevel_thickness"
         private const val KEY_LG_DISPERSION = "lg_chromatic_dispersion"
@@ -79,6 +111,8 @@ class ThemePreferences(context: Context) {
         private const val KEY_LG_BORDER = "lg_border"
         private const val KEY_LG_SHIMMER = "lg_shimmer"
         private const val KEY_LG_HIGH_CONTRAST = "lg_high_contrast"
+        private const val KEY_LG_PERF_MIGRATED_V2 = "lg_perf_migrated_v2"
+        private const val KEY_LG_MEETUBE_MIGRATED_V3 = "lg_meetube_migrated_v3"
     }
 }
 
@@ -141,6 +175,8 @@ class AppThemeViewModel(application: Application) : AndroidViewModel(application
 
     fun updateLiquidGlass(
         blurRadius: Float? = null,
+        vibrancy: Float? = null,
+        frostGrain: Float? = null,
         refraction: Float? = null,
         bevelThickness: Float? = null,
         chromaticDispersion: Float? = null,
@@ -157,6 +193,8 @@ class AppThemeViewModel(application: Application) : AndroidViewModel(application
                 liquidGlass = lg.copy(
                     enabled = true,
                     blurRadius = blurRadius ?: lg.blurRadius,
+                    vibrancy = vibrancy ?: lg.vibrancy,
+                    frostGrain = frostGrain ?: lg.frostGrain,
                     refraction = refraction ?: lg.refraction,
                     bevelThickness = bevelThickness ?: lg.bevelThickness,
                     chromaticDispersion = chromaticDispersion ?: lg.chromaticDispersion,

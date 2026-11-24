@@ -75,7 +75,7 @@ struct LiquidGlassBackdropView: View {
     }
 }
 
-// MARK: - iOS 26 Crystal Liquid Glass Card Surface & Elastic Press Physics
+// MARK: - MeeTube Vibrant Frosted Crystal Glass Card Surface & Elastic Press Physics
 
 struct LiquidGlassCardModifier: ViewModifier {
     var cornerRadius: CGFloat = 18
@@ -88,19 +88,21 @@ struct LiquidGlassCardModifier: ViewModifier {
                 ZStack {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .fill(.ultraThinMaterial)
+                        .saturation(1.26)
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(AppTheme.slateDark.opacity(crystalClarity ? 0.28 : 0.62))
-                    // Subtle top meniscus gloss reflection
+                        .fill(AppTheme.slateDark.opacity(crystalClarity ? 0.34 : 0.58))
+                    // MeeTube crisp top-edge specular catchlight + subtle ambient lower reflection
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .fill(
                             LinearGradient(
-                                colors: [
-                                    Color.white.opacity(crystalClarity ? 0.24 : 0.14),
-                                    Color.clear,
-                                    Color.white.opacity(crystalClarity ? 0.08 : 0.03)
+                                stops: [
+                                    .init(color: Color.white.opacity(crystalClarity ? 0.24 : 0.15), location: 0.0),
+                                    .init(color: Color.white.opacity(0.04), location: 0.18),
+                                    .init(color: Color.clear, location: 0.60),
+                                    .init(color: Color.white.opacity(crystalClarity ? 0.09 : 0.04), location: 1.0)
                                 ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
+                                startPoint: .top,
+                                endPoint: .bottom
                             )
                         )
                 }
@@ -109,16 +111,16 @@ struct LiquidGlassCardModifier: ViewModifier {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(
                         LinearGradient(
-                            colors: [
-                                Color(hex: 0xCFFAFE).opacity(crystalClarity ? 0.85 : 0.45),
-                                Color.white.opacity(crystalClarity ? 0.26 : 0.16),
-                                Color(hex: 0xFBCFE8).opacity(crystalClarity ? 0.62 : 0.25),
-                                borderColor.opacity(0.55)
+                            stops: [
+                                .init(color: Color(hex: 0xE0F7FF).opacity(crystalClarity ? 0.88 : 0.56), location: 0.0),
+                                .init(color: Color.white.opacity(crystalClarity ? 0.22 : 0.14), location: 0.36),
+                                .init(color: Color(hex: 0xFFD8EB).opacity(crystalClarity ? 0.48 : 0.22), location: 0.88),
+                                .init(color: borderColor.opacity(0.55), location: 1.0)
                             ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+                            startPoint: .top,
+                            endPoint: .bottom
                         ),
-                        lineWidth: crystalClarity ? 1.25 : 1.0
+                        lineWidth: crystalClarity ? 1.2 : 1.0
                     )
             )
     }

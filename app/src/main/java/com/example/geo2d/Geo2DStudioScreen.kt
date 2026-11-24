@@ -648,6 +648,7 @@ private fun Geo2DTopHeader(
                         .widthIn(max = 680.dp)
                         .liquidGlassSurface(
                             shape = RoundedCornerShape(14.dp),
+                            liveBackdrop = false,
                             fallbackBg = SlateDeepest.copy(alpha = 0.92f),
                             accentBorder = CyanAccent.copy(alpha = 0.6f)
                         )
@@ -722,6 +723,7 @@ private fun Geo2DRightQuickControls(
             .liquidGlassSurface(
                 shape = RoundedCornerShape(22.dp),
                 pillShape = RoundedCornerShape(24.dp),
+                liveBackdrop = false,
                 fallbackBg = SlateDark.copy(alpha = 0.84f),
                 fallbackBorder = SlateBorder.copy(alpha = 0.7f)
             )
@@ -911,10 +913,12 @@ private fun Geo2DMiniSheetChip(
     testTag: String,
     onClick: () -> Unit
 ) {
+    val isGlass = ActiveThemeState.current.liquidGlass.enabled
     Row(
         modifier = Modifier
             .testTag(testTag)
             .defaultMinSize(minHeight = 36.dp)
+            .liquidGlassPressPhysics(enabled = isGlass, scaleOnPress = 1.05f, bloomColor = tint)
             .clip(CircleShape)
             .clickable(onClick = onClick)
             .padding(horizontal = 9.dp, vertical = 6.dp),
@@ -1128,11 +1132,18 @@ private fun GraphFeatureChip(
     active: Boolean,
     onClick: () -> Unit
 ) {
+    val isGlass = ActiveThemeState.current.liquidGlass.enabled
     Row(
         modifier = Modifier
-            .clip(CircleShape)
-            .background(if (active) CyanAccent.copy(alpha = 0.2f) else SlateSurface)
-            .border(1.dp, if (active) CyanAccent else SlateBorder, CircleShape)
+            .liquidGlassPressPhysics(enabled = isGlass, scaleOnPress = 1.05f, bloomColor = CyanAccent)
+            .liquidGlassSurface(
+                shape = CircleShape,
+                pillShape = CircleShape,
+                liveBackdrop = false,
+                fallbackBg = if (active) CyanAccent.copy(alpha = 0.2f) else SlateSurface,
+                fallbackBorder = if (active) CyanAccent else SlateBorder,
+                accentBorder = if (active) CyanAccent else null
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,

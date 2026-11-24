@@ -111,34 +111,41 @@ enum class AppThemePreset(
 }
 
 /**
- * Real-time GPU optical parameters for the Liquid Glass backdrop blur, lens refraction,
- * chromatic dispersion, and specular Fresnel rim highlights.
+ * Real-time GPU optical parameters for MeeTube-grade Liquid Glass:
+ * backdrop Gaussian blur, luma-preserving saturation vibrancy, procedural frosted micro-grain,
+ * physical convex edge lens refraction, RGB chromatic fringing, and crisp top specular rims.
  */
 data class LiquidGlassConfig(
     val enabled: Boolean = false,
-    /** 0f..36f dp — live backdrop Gaussian blur radius behind glass capsules (0dp = pure crystal lens) */
-    val blurRadius: Float = 3.5f,
-    /** 0.0f..1.0f — convex edge lens refraction / optical distortion strength (AGSL shader) */
-    val refraction: Float = 0.90f,
+    /** 0f..36f dp — live backdrop Gaussian blur radius behind glass capsules (10dp = MeeTube crystal frost) */
+    val blurRadius: Float = 10f,
+    /** 0.0f..1.0f — MeeTube luma-preserving backdrop saturation vibrancy boost (prevents muddy gray blur) */
+    val vibrancy: Float = 0.72f,
+    /** 0.0f..1.0f — MeeTube procedural optical micro-grain anti-banding frosted glass texture */
+    val frostGrain: Float = 0.32f,
+    /** 0.0f..1.0f — convex edge lens refraction / physical compression ring strength (AGSL shader) */
+    val refraction: Float = 0.68f,
     /** 0.15f..1.0f — curved outer bevel thickness controlling optical rim width & depth */
-    val bevelThickness: Float = 0.62f,
-    /** 0.0f..1.0f — prismatic RGB chromatic aberration along curved glass rims */
-    val chromaticDispersion: Float = 0.72f,
+    val bevelThickness: Float = 0.52f,
+    /** 0.0f..1.0f — prismatic RGB chromatic aberration strictly along curved glass rims */
+    val chromaticDispersion: Float = 0.38f,
     /** 0.25f..0.96f — higher means clearer, more transparent crystal glass */
-    val translucency: Float = 0.90f,
-    /** 0.0f..1.0f — specular top-bevel highlight & glossy sheen intensity */
-    val specularGlow: Float = 0.92f,
+    val translucency: Float = 0.84f,
+    /** 0.0f..1.0f — bright top specular rim & glossy sheen intensity */
+    val specularGlow: Float = 0.90f,
     /** 0.0f..1.0f — subtle chromatic glass tint & ambient aurora glow */
-    val refractionTint: Float = 0.16f,
-    /** 0.2f..1.0f — crisp Fresnel rim border brightness & thickness */
-    val borderIntensity: Float = 0.90f,
-    /** Smooth animated specular shimmer sweep across glass panels */
-    val dynamicShimmer: Boolean = true,
+    val refractionTint: Float = 0.18f,
+    /** 0.2f..1.0f — crisp Fresnel top-rim border brightness & thickness */
+    val borderIntensity: Float = 0.92f,
+    /** Optional animated specular shimmer sweep (off by default for zero idle GPU redraws) */
+    val dynamicShimmer: Boolean = false,
     /** Boosts frosted glass opacity slightly for extra text legibility */
     val highContrastText: Boolean = false
 ) {
     fun sanitized(): LiquidGlassConfig = copy(
         blurRadius = blurRadius.coerceIn(0f, 36f),
+        vibrancy = vibrancy.coerceIn(0f, 1f),
+        frostGrain = frostGrain.coerceIn(0f, 1f),
         refraction = refraction.coerceIn(0f, 1f),
         bevelThickness = bevelThickness.coerceIn(0.15f, 1f),
         chromaticDispersion = chromaticDispersion.coerceIn(0f, 1f),
@@ -154,12 +161,33 @@ enum class LiquidGlassPresetStyle(
     val label: String,
     val config: LiquidGlassConfig
 ) {
+    MEETUBE(
+        id = "meetube",
+        label = "MeeTube Pha lê",
+        config = LiquidGlassConfig(
+            enabled = true,
+            blurRadius = 10f,
+            vibrancy = 0.72f,
+            frostGrain = 0.32f,
+            refraction = 0.68f,
+            bevelThickness = 0.52f,
+            chromaticDispersion = 0.38f,
+            translucency = 0.84f,
+            specularGlow = 0.90f,
+            refractionTint = 0.18f,
+            borderIntensity = 0.92f,
+            dynamicShimmer = false,
+            highContrastText = false
+        )
+    ),
     CRYSTAL(
         id = "crystal",
         label = "Pha lê iOS 26",
         config = LiquidGlassConfig(
             enabled = true,
-            blurRadius = 3.5f,
+            blurRadius = 1.5f,
+            vibrancy = 0.45f,
+            frostGrain = 0.12f,
             refraction = 0.92f,
             bevelThickness = 0.62f,
             chromaticDispersion = 0.74f,
@@ -167,24 +195,7 @@ enum class LiquidGlassPresetStyle(
             specularGlow = 0.94f,
             refractionTint = 0.14f,
             borderIntensity = 0.92f,
-            dynamicShimmer = true,
-            highContrastText = false
-        )
-    ),
-    FROSTED(
-        id = "frosted",
-        label = "Kính mờ sương",
-        config = LiquidGlassConfig(
-            enabled = true,
-            blurRadius = 14f,
-            refraction = 0.74f,
-            bevelThickness = 0.50f,
-            chromaticDispersion = 0.44f,
-            translucency = 0.74f,
-            specularGlow = 0.80f,
-            refractionTint = 0.30f,
-            borderIntensity = 0.82f,
-            dynamicShimmer = true,
+            dynamicShimmer = false,
             highContrastText = false
         )
     ),
@@ -193,14 +204,16 @@ enum class LiquidGlassPresetStyle(
         label = "Kính dịu mắt",
         config = LiquidGlassConfig(
             enabled = true,
-            blurRadius = 24f,
-            refraction = 0.42f,
-            bevelThickness = 0.36f,
-            chromaticDispersion = 0.18f,
-            translucency = 0.48f,
-            specularGlow = 0.54f,
+            blurRadius = 18f,
+            vibrancy = 0.56f,
+            frostGrain = 0.42f,
+            refraction = 0.36f,
+            bevelThickness = 0.38f,
+            chromaticDispersion = 0.16f,
+            translucency = 0.52f,
+            specularGlow = 0.58f,
             refractionTint = 0.24f,
-            borderIntensity = 0.62f,
+            borderIntensity = 0.66f,
             dynamicShimmer = false,
             highContrastText = true
         )

@@ -185,23 +185,32 @@ fun ToolToanRootScreen(
         !(activeWorkspace == MathWorkspace.SETTINGS && settingsSubPage != null) &&
         !isImeVisible
 
-    // Two isolated non-nested GPU backdrops (zero draw feedback loops!):
-    // 1. workspaceBackdrop: captures raw canvas/aurora inside each tab for its own HUD chrome
-    // 2. rootNavBackdrop: captures the entire active workspace (including scrolling lists, PDF pages,
-    //    AI chats, colorful icons & 3D/2D canvases) live at 60fps for the Floating Pill Bottom Nav Bar!
+    // Zero-nested GPU backdrop routing for locked 60-120fps:
+    // - On 3D & 2D: raw full-bleed canvas already records into workspaceBackdrop -> bottom nav samples
+    //   it directly (ZERO double-FBO capture!).
+    // - On Documents / AI / Settings: rootNavBackdrop captures scrolling lists, PDF pages & colorful
+    //   cards ONLY while showBottomNav && Liquid Glass are active (0% overhead in Optical Lab/Immersive!).
     val workspaceBackdrop = rememberLiquidGlassBackdropState()
     val rootNavBackdrop = rememberLiquidGlassBackdropState()
+    val isCanvasTab = activeWorkspace == MathWorkspace.SPACE_3D || activeWorkspace == MathWorkspace.PLANE_2D
+    val captureRootForNav = !isCanvasTab && showBottomNav && themeUiState.config.liquidGlass.enabled
+    val navBackdrop = if (isCanvasTab) workspaceBackdrop else rootNavBackdrop
+
     LaunchedEffect(activeWorkspace) {
         workspaceBackdrop.resetStaticCache()
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Layer 1: Active Workspace Screen (state-isolated per tab, captured live for Layer 2 Bottom Nav)
+        // Layer 1: Active Workspace Screen (state-isolated per tab)
         CompositionLocalProvider(LocalLiquidGlassBackdrop provides workspaceBackdrop) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .liquidGlassBackdropSource(rootNavBackdrop, staticCapture = false)
+                    .liquidGlassBackdropSource(
+                        state = rootNavBackdrop,
+                        staticCapture = false,
+                        captureEnabled = captureRootForNav
+                    )
             ) {
                 when (activeWorkspace) {
                     MathWorkspace.SPACE_3D -> GeometryStudioScreen(
@@ -281,8 +290,7 @@ fun ToolToanRootScreen(
         }
 
         // Layer 2: Unified Floating Pill Bottom Navigation Bar & Immersive Restore Pill
-        // Samples rootNavBackdrop so scrolling cards, PDF pages, AI chats & 3D/2D canvases refract live!
-        CompositionLocalProvider(LocalLiquidGlassBackdrop provides rootNavBackdrop) {
+        CompositionLocalProvider(LocalLiquidGlassBackdrop provides navBackdrop) {
             FloatingPillBottomNavBar(
                 current = activeWorkspace,
                 hasUpdateBadge = hasUpdateBadge,
@@ -340,9 +348,11 @@ private fun SettingsWorkspaceHost(
         onSelectAccentColor = { themeViewModel.selectAccentColor(it) },
         onToggleLiquidGlass = { themeViewModel.toggleLiquidGlass(it) },
         onApplyLiquidGlassStyle = { themeViewModel.applyLiquidGlassStyle(it) },
-        onUpdateLiquidGlass = { blur, ref, bevel, disp, t, s, r, b, sh, hc ->
+        onUpdateLiquidGlass = { blur, vib, grain, ref, bevel, disp, t, s, r, b, sh, hc ->
             themeViewModel.updateLiquidGlass(
                 blurRadius = blur,
+                vibrancy = vib,
+                frostGrain = grain,
                 refraction = ref,
                 bevelThickness = bevel,
                 chromaticDispersion = disp,

@@ -85,6 +85,8 @@ fun AppSettingsScreen(
     onApplyLiquidGlassStyle: (LiquidGlassPresetStyle) -> Unit,
     onUpdateLiquidGlass: (
         blurRadius: Float?,
+        vibrancy: Float?,
+        frostGrain: Float?,
         refraction: Float?,
         bevelThickness: Float?,
         chromaticDispersion: Float?,
@@ -213,26 +215,29 @@ fun AppSettingsScreen(
                             SettingsSubPage.LIQUID_GLASS -> {
                                 LiquidGlassOpticalLabCard(
                                     config = themeConfig.liquidGlass,
-                                    onUpdateRefraction = { onUpdateLiquidGlass(null, it, null, null, null, null, null, null, null, null) },
-                                    onUpdateBevelThickness = { onUpdateLiquidGlass(null, null, it, null, null, null, null, null, null, null) },
-                                    onUpdateChromaticDispersion = { onUpdateLiquidGlass(null, null, null, it, null, null, null, null, null, null) },
-                                    onUpdateBlurRadius = { onUpdateLiquidGlass(it, null, null, null, null, null, null, null, null, null) }
+                                    onUpdateRefraction = { onUpdateLiquidGlass(null, null, null, it, null, null, null, null, null, null, null, null) },
+                                    onUpdateBevelThickness = { onUpdateLiquidGlass(null, null, null, null, it, null, null, null, null, null, null, null) },
+                                    onUpdateChromaticDispersion = { onUpdateLiquidGlass(null, null, null, null, null, it, null, null, null, null, null, null) },
+                                    onUpdateBlurRadius = { onUpdateLiquidGlass(it, null, null, null, null, null, null, null, null, null, null, null) },
+                                    onUpdateVibrancy = { onUpdateLiquidGlass(null, it, null, null, null, null, null, null, null, null, null, null) }
                                 )
                                 SettingsSubCard {
                                     LiquidGlassSettingsSection(
                                         config = themeConfig.liquidGlass,
                                         onToggleEnabled = onToggleLiquidGlass,
                                         onApplyPresetStyle = onApplyLiquidGlassStyle,
-                                        onUpdateBlurRadius = { onUpdateLiquidGlass(it, null, null, null, null, null, null, null, null, null) },
-                                        onUpdateRefraction = { onUpdateLiquidGlass(null, it, null, null, null, null, null, null, null, null) },
-                                        onUpdateBevelThickness = { onUpdateLiquidGlass(null, null, it, null, null, null, null, null, null, null) },
-                                        onUpdateChromaticDispersion = { onUpdateLiquidGlass(null, null, null, it, null, null, null, null, null, null) },
-                                        onUpdateTranslucency = { onUpdateLiquidGlass(null, null, null, null, it, null, null, null, null, null) },
-                                        onUpdateSpecularGlow = { onUpdateLiquidGlass(null, null, null, null, null, it, null, null, null, null) },
-                                        onUpdateRefractionTint = { onUpdateLiquidGlass(null, null, null, null, null, null, it, null, null, null) },
-                                        onUpdateBorderIntensity = { onUpdateLiquidGlass(null, null, null, null, null, null, null, it, null, null) },
-                                        onToggleDynamicShimmer = { onUpdateLiquidGlass(null, null, null, null, null, null, null, null, it, null) },
-                                        onToggleHighContrastText = { onUpdateLiquidGlass(null, null, null, null, null, null, null, null, null, it) }
+                                        onUpdateBlurRadius = { onUpdateLiquidGlass(it, null, null, null, null, null, null, null, null, null, null, null) },
+                                        onUpdateVibrancy = { onUpdateLiquidGlass(null, it, null, null, null, null, null, null, null, null, null, null) },
+                                        onUpdateFrostGrain = { onUpdateLiquidGlass(null, null, it, null, null, null, null, null, null, null, null, null) },
+                                        onUpdateRefraction = { onUpdateLiquidGlass(null, null, null, it, null, null, null, null, null, null, null, null) },
+                                        onUpdateBevelThickness = { onUpdateLiquidGlass(null, null, null, null, it, null, null, null, null, null, null, null) },
+                                        onUpdateChromaticDispersion = { onUpdateLiquidGlass(null, null, null, null, null, it, null, null, null, null, null, null) },
+                                        onUpdateTranslucency = { onUpdateLiquidGlass(null, null, null, null, null, null, it, null, null, null, null, null) },
+                                        onUpdateSpecularGlow = { onUpdateLiquidGlass(null, null, null, null, null, null, null, it, null, null, null, null) },
+                                        onUpdateRefractionTint = { onUpdateLiquidGlass(null, null, null, null, null, null, null, null, it, null, null, null) },
+                                        onUpdateBorderIntensity = { onUpdateLiquidGlass(null, null, null, null, null, null, null, null, null, it, null, null) },
+                                        onToggleDynamicShimmer = { onUpdateLiquidGlass(null, null, null, null, null, null, null, null, null, null, it, null) },
+                                        onToggleHighContrastText = { onUpdateLiquidGlass(null, null, null, null, null, null, null, null, null, null, null, it) }
                                     )
                                 }
                             }
@@ -343,9 +348,9 @@ private fun SettingsHubView(
     val lgPresetName = remember(lgConfig) {
         LiquidGlassPresetStyle.entries.firstOrNull { style ->
             abs(lgConfig.blurRadius - style.config.blurRadius) < 1.5f &&
-                abs(lgConfig.refraction - style.config.refraction) < 0.06f &&
-                abs(lgConfig.bevelThickness - style.config.bevelThickness) < 0.08f &&
-                abs(lgConfig.translucency - style.config.translucency) < 0.06f &&
+                abs(lgConfig.vibrancy - style.config.vibrancy) < 0.08f &&
+                abs(lgConfig.refraction - style.config.refraction) < 0.08f &&
+                abs(lgConfig.translucency - style.config.translucency) < 0.08f &&
                 lgConfig.highContrastText == style.config.highContrastText
         }?.label ?: "Tùy chỉnh"
     }
