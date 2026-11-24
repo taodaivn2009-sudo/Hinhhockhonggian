@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/ic_tool_toan_icon_1795190316812"
+        android:drawable="@drawable/ic_tool_toan_launcher"
         android:gravity="center" />
 </layer-list>
