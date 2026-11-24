@@ -183,29 +183,38 @@ export function evaluateMathExpr(expression: string, x: number, m: number): numb
   if (tokens.length === 0) return NaN;
   let pos = 0;
 
+  function peekOp(): string | null {
+    const tok = tokens[pos];
+    return tok && tok.type === 'op' ? tok.val : null;
+  }
+
   function parseAddSub(): number {
     let left = parseMulDiv();
-    while (pos < tokens.length && tokens[pos].type === 'op' && (tokens[pos].val === '+' || tokens[pos].val === '-')) {
-      const op = (tokens[pos++] as { type: 'op'; val: string }).val;
+    let op = peekOp();
+    while (op === '+' || op === '-') {
+      pos++;
       const right = parseMulDiv();
       left = op === '+' ? left + right : left - right;
+      op = peekOp();
     }
     return left;
   }
 
   function parseMulDiv(): number {
     let left = parsePower();
-    while (pos < tokens.length && tokens[pos].type === 'op' && (tokens[pos].val === '*' || tokens[pos].val === '/')) {
-      const op = (tokens[pos++] as { type: 'op'; val: string }).val;
+    let op = peekOp();
+    while (op === '*' || op === '/') {
+      pos++;
       const right = parsePower();
       left = op === '*' ? left * right : left / right;
+      op = peekOp();
     }
     return left;
   }
 
   function parsePower(): number {
     let base = parseUnary();
-    if (pos < tokens.length && tokens[pos].type === 'op' && tokens[pos].val === '^') {
+    if (peekOp() === '^') {
       pos++;
       const exp = parsePower();
       base = Math.pow(base, exp);
@@ -214,8 +223,9 @@ export function evaluateMathExpr(expression: string, x: number, m: number): numb
   }
 
   function parseUnary(): number {
-    if (pos < tokens.length && tokens[pos].type === 'op' && (tokens[pos].val === '+' || tokens[pos].val === '-')) {
-      const op = (tokens[pos++] as { type: 'op'; val: string }).val;
+    const op = peekOp();
+    if (op === '+' || op === '-') {
+      pos++;
       const v = parseUnary();
       return op === '-' ? -v : v;
     }
