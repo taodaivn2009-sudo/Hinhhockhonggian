@@ -107,16 +107,35 @@ export interface Scene3DSnapshot {
   customLines: CustomLine3D[];
   customPlanes: CustomPlane3D[];
   dynamicSection: DynamicSectionSpec | null;
+  showSection?: boolean;
+  secRatio?: number;
 }
 
 export interface NamedVertex {
   name: string;
   pos: Vec3;
+  isHelper?: boolean; // e.g. altitude foot O not part of solid faces
 }
 
 export interface ShapeEdge {
   from: number;
   to: number;
+}
+
+export interface AltitudeSpec3D {
+  topName: string;
+  footName: string;
+  top: Vec3;
+  foot: Vec3;
+  ref: Vec3;
+}
+
+export interface ClickableSegment3D {
+  fromName: string;
+  toName: string;
+  fromPos: Vec3;
+  toPos: Vec3;
+  isCustom?: boolean;
 }
 
 export interface ShapeMetrics {
@@ -136,6 +155,9 @@ export interface Built3DScene {
   pointRegistry: Record<string, Vec3>;
   metrics: ShapeMetrics;
   dynamicSection: DynamicSectionResult | null;
+  horizontalSection: Vec3[] | null;
+  altitude: AltitudeSpec3D | null;
+  clickableSegments: ClickableSegment3D[];
 }
 
 export function add3(a: Vec3, b: Vec3): Vec3 {
@@ -220,7 +242,7 @@ function uniqueEdgesFromFaces(faces: number[][]): ShapeEdge[] {
   return Array.from(map.values());
 }
 
-function polygonArea3D(pts: Vec3[]): number {
+export function polygonArea3D(pts: Vec3[]): number {
   if (pts.length < 3) return 0;
   let area = 0;
   const p0 = pts[0];
@@ -289,6 +311,95 @@ export function computeDynamicCrossSection(
   const area = polygonArea3D(ordered);
   if (area < 1e-4) return null;
   return { polygon: ordered, area };
+}
+
+/**
+ * Slices the solid horizontally at plane y = cutY.
+ * Handles both polyhedra and round bodies (cylinder, cone, sphere).
+ */
+export function computeHorizontalCrossSection(
+  shapeKey: string,
+  a: number,
+  h: number,
+  cutRatio: number,
+  edgePairs: [Vec3, Vec3][],
+  vertices: NamedVertex[]
+): Vec3[] | null {
+  const ratio = Math.max(0.08, Math.min(0.92, cutRatio));
+  const safeA = Math.max(0.5, a);
+  const safeH = Math.max(0.5, h);
+
+  if (shapeKey === 'cylinder') {
+    const r = safeA * 0.55;
+    const yCut = ratio * safeH;
+    const pts: Vec3[] = [];
+    for (let i = 0; i < 28; i++) {
+      const ang = (i * 2 * Math.PI) / 28;
+      pts.push({ x: r * Math.cos(ang), y: yCut, z: r * Math.sin(ang) });
+    }
+    return pts;
+  }
+  if (shapeKey === 'cone') {
+    const r = safeA * 0.55;
+    const yCut = ratio * safeH;
+    const rCut = r * (1 - ratio);
+    if (rCut < 0.05) return null;
+    const pts: Vec3[] = [];
+    for (let i = 0; i < 28; i++) {
+      const ang = (i * 2 * Math.PI) / 28;
+      pts.push({ x: rCut * Math.cos(ang), y: yCut, z: rCut * Math.sin(ang) });
+    }
+    return pts;
+  }
+  if (shapeKey === 'sphere') {
+    const r = safeA * 0.6;
+    const yCut = ratio * 2 * r;
+    const dy = yCut - r;
+    const rCutSq = r * r - dy * dy;
+    if (rCutSq <= 0.01) return null;
+    const rCut = Math.sqrt(rCutSq);
+    const pts: Vec3[] = [];
+    for (let i = 0; i < 28; i++) {
+      const ang = (i * 2 * Math.PI) / 28;
+      pts.push({ x: rCut * Math.cos(ang), y: yCut, z: rCut * Math.sin(ang) });
+    }
+    return pts;
+  }
+
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const v of vertices) {
+    if (v.isHelper) continue;
+    if (v.pos.y < minY) minY = v.pos.y;
+    if (v.pos.y > maxY) maxY = v.pos.y;
+  }
+  if (!Number.isFinite(minY) || maxY - minY < 0.05) return null;
+  const yCut = minY + (maxY - minY) * ratio;
+
+  const hits: Vec3[] = [];
+  const addUnique = (pt: Vec3) => {
+    if (!hits.some((existing) => dist3(existing, pt) < 1e-3)) hits.push(pt);
+  };
+  for (const [u, v] of edgePairs) {
+    const du = u.y - yCut;
+    const dv = v.y - yCut;
+    if (Math.abs(du) < 1e-4) addUnique(u);
+    else if (Math.abs(dv) < 1e-4) addUnique(v);
+    else if ((du > 0 && dv < 0) || (du < 0 && dv > 0)) {
+      const t = du / (du - dv);
+      addUnique(lerp3(u, v, t));
+    }
+  }
+  if (hits.length < 3) return null;
+  let cx = 0;
+  let cz = 0;
+  for (const p of hits) {
+    cx += p.x;
+    cz += p.z;
+  }
+  cx /= hits.length;
+  cz /= hits.length;
+  return hits.sort((pA, pB) => Math.atan2(pA.z - cz, pA.x - cx) - Math.atan2(pB.z - cz, pB.x - cx));
 }
 
 export function formatPlaneEquation(m1: Vec3, m2: Vec3, m3: Vec3): string {
@@ -372,11 +483,13 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
     const vB: Vec3 = { x: safeA / 2, y: 0, z: r / 2 };
     const vC: Vec3 = { x: 0, y: 0, z: -r };
     const vS: Vec3 = key === 'pyramid3_sa' ? { x: vA.x, y: safeH, z: vA.z } : { x: 0, y: safeH, z: 0 };
+    const vO: Vec3 = key === 'pyramid3_sa' ? { x: vA.x, y: 0, z: vA.z } : { x: 0, y: 0, z: 0 };
     const vertices: NamedVertex[] = [
       { name: 'A', pos: vA },
       { name: 'B', pos: vB },
       { name: 'C', pos: vC },
-      { name: 'S', pos: vS }
+      { name: 'S', pos: vS },
+      ...(key === 'pyramid3' ? [{ name: 'O', pos: vO, isHelper: true }] : [])
     ];
     const faces = [[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]];
     const sDay = (Math.sqrt(3) / 4) * safeA * safeA;
@@ -447,7 +560,8 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
       { name: 'B', pos: vB },
       { name: 'C', pos: vC },
       { name: 'D', pos: vD },
-      { name: 'S', pos: vS }
+      { name: 'S', pos: vS },
+      ...(key === 'pyramid4' ? [{ name: 'O', pos: { x: 0, y: 0, z: 0 }, isHelper: true }] : [])
     ];
     const faces = [[0, 3, 2, 1], [0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]];
     const sDay = key === 'pyramid_trap' ? ((safeA + topW) * safeA) / 2 : safeA * safeA;
@@ -492,7 +606,12 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
       { name: 'C', pos: base[2] },
       { name: "A'", pos: { x: base[0].x + shiftX, y: safeH, z: base[0].z } },
       { name: "B'", pos: { x: base[1].x + shiftX, y: safeH, z: base[1].z } },
-      { name: "C'", pos: { x: base[2].x + shiftX, y: safeH, z: base[2].z } }
+      { name: "C'", pos: { x: base[2].x + shiftX, y: safeH, z: base[2].z } },
+      {
+        name: 'O',
+        pos: key === 'prism3_oblique' ? { x: base[0].x + shiftX, y: 0, z: base[0].z } : { x: 0, y: 0, z: 0 },
+        isHelper: true
+      }
     ];
     const faces = [[0, 2, 1], [3, 4, 5], [0, 1, 4, 3], [1, 2, 5, 4], [2, 0, 3, 5]];
     const sDay = (Math.sqrt(3) / 4) * safeA * safeA;
@@ -529,6 +648,7 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
       const ang = (i * Math.PI) / 3;
       vertices.push({ name: `${names[i]}'`, pos: { x: r * Math.cos(ang), y: safeH, z: r * Math.sin(ang) } });
     }
+    vertices.push({ name: 'O', pos: { x: 0, y: 0, z: 0 }, isHelper: true });
     const faces: number[][] = [[0, 5, 4, 3, 2, 1], [6, 7, 8, 9, 10, 11]];
     for (let i = 0; i < 6; i++) {
       const n = (i + 1) % 6;
@@ -563,7 +683,8 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
       { name: 'C', pos: { x: -r, y: r, z: 0 } },
       { name: 'D', pos: { x: 0, y: r, z: -r } },
       { name: 'S', pos: { x: 0, y: 2 * r, z: 0 } },
-      { name: "S'", pos: { x: 0, y: 0, z: 0 } }
+      { name: "S'", pos: { x: 0, y: 0, z: 0 } },
+      { name: 'O', pos: { x: 0, y: r, z: 0 }, isHelper: true }
     ];
     const faces = [
       [0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4],
@@ -582,7 +703,7 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
         vol: (Math.sqrt(2) / 3) * safeA * safeA * safeA,
         dimensionRows: [
           { label: 'Cạnh a', value: formatMathNum(safeA) },
-          { label: 'Đường chéo SS\'', value: formatMathNum(2 * r) }
+          { label: "Đường chéo SS'", value: formatMathNum(2 * r) }
         ],
         formulaLines: ['• Stp = 2a²√3', '• V = (a³√2) / 3']
       }
@@ -595,7 +716,8 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
     const vertices: NamedVertex[] = [];
     for (let i = 0; i < segs; i++) {
       const ang = (i * 2 * Math.PI) / segs;
-      vertices.push({ name: i === 0 ? 'A' : '', pos: { x: r * Math.cos(ang), y: 0, z: r * Math.sin(ang) } });
+      const name = i === 0 ? 'A' : i === segs / 2 ? 'B' : '';
+      vertices.push({ name, pos: { x: r * Math.cos(ang), y: 0, z: r * Math.sin(ang) } });
     }
     const faces: number[][] = [];
     const edges: ShapeEdge[] = [];
@@ -604,7 +726,8 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
     if (key === 'cylinder') {
       for (let i = 0; i < segs; i++) {
         const ang = (i * 2 * Math.PI) / segs;
-        vertices.push({ name: i === 0 ? "A'" : '', pos: { x: r * Math.cos(ang), y: safeH, z: r * Math.sin(ang) } });
+        const name = i === 0 ? "A'" : i === segs / 2 ? "B'" : '';
+        vertices.push({ name, pos: { x: r * Math.cos(ang), y: safeH, z: r * Math.sin(ang) } });
       }
       for (let i = 0; i < segs; i++) {
         const n = (i + 1) % segs;
@@ -612,7 +735,10 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
         edges.push({ from: i + segs, to: n + segs });
       }
       edges.push({ from: 0, to: segs }, { from: segs / 2, to: segs + segs / 2 });
-      vertices.push({ name: 'O', pos: { x: 0, y: 0, z: 0 } }, { name: "O'", pos: { x: 0, y: safeH, z: 0 } });
+      vertices.push(
+        { name: 'O', pos: { x: 0, y: 0, z: 0 }, isHelper: true },
+        { name: "O'", pos: { x: 0, y: safeH, z: 0 }, isHelper: true }
+      );
       const sDay = Math.PI * r * r;
       const sXq = 2 * Math.PI * r * safeH;
       return {
@@ -635,7 +761,7 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
     } else {
       const apexIdx = vertices.length;
       vertices.push({ name: 'S', pos: { x: 0, y: safeH, z: 0 } });
-      vertices.push({ name: 'O', pos: { x: 0, y: 0, z: 0 } });
+      vertices.push({ name: 'O', pos: { x: 0, y: 0, z: 0 }, isHelper: true });
       for (let i = 0; i < segs; i++) {
         const n = (i + 1) % segs;
         faces.push([i, n, apexIdx]);
@@ -676,8 +802,12 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
       const phi = (i * Math.PI) / rings;
       for (let j = 0; j < segs; j++) {
         const theta = (j * 2 * Math.PI) / segs;
+        let name = '';
+        if (i === rings / 2 && j === 0) name = 'A';
+        else if (i === rings / 2 && j === segs / 2) name = 'B';
+        else if (i === 0 && j === 0) name = 'N';
         vertices.push({
-          name: i === rings / 2 && j === 0 ? 'A' : '',
+          name,
           pos: {
             x: r * Math.sin(phi) * Math.cos(theta),
             y: r + r * Math.cos(phi),
@@ -697,7 +827,7 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
         if (j === 0 || j === segs / 4) edges.push({ from: aIdx, to: dIdx });
       }
     }
-    vertices.push({ name: 'O', pos: { x: 0, y: r, z: 0 } });
+    vertices.push({ name: 'O', pos: { x: 0, y: r, z: 0 }, isHelper: true });
     const sTp = 4 * Math.PI * r * r;
     return {
       vertices,
@@ -732,7 +862,8 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
     { name: "A'", pos: { x: -hw, y: height, z: hd } },
     { name: "B'", pos: { x: hw, y: height, z: hd } },
     { name: "C'", pos: { x: hw, y: height, z: -hd } },
-    { name: "D'", pos: { x: -hw, y: height, z: -hd } }
+    { name: "D'", pos: { x: -hw, y: height, z: -hd } },
+    { name: 'O', pos: { x: 0, y: 0, z: 0 }, isHelper: true }
   ];
   const faces = [
     [0, 3, 2, 1], [4, 5, 6, 7],
@@ -754,7 +885,7 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
         key === 'cube'
           ? [
               { label: 'Cạnh a', value: formatMathNum(w) },
-              { label: 'Đường chéo AC\'', value: formatMathNum(w * Math.sqrt(3)) }
+              { label: "Đường chéo AC'", value: formatMathNum(w * Math.sqrt(3)) }
             ]
           : [
               { label: 'Chiều dài a', value: formatMathNum(w) },
@@ -763,18 +894,216 @@ function buildBaseShape(key: string, a: number, b: number, h: number): {
             ],
       formulaLines:
         key === 'cube'
-          ? ['• Stp = 6a²', '• V = a³', '• AC\' = a√3']
+          ? ['• Stp = 6a²', '• V = a³', "• AC' = a√3"]
           : ['• Sxq = 2(a + b)h', '• Stp = 2(ab + ah + bh)', '• V = a · b · h']
     }
+  };
+}
+
+function buildAltitudeSpec(shapeKey: string, registry: Record<string, Vec3>): AltitudeSpec3D | null {
+  const get = (k: string) => registry[k];
+  if (shapeKey === 'pyramid3' || shapeKey === 'pyramid4' || shapeKey === 'cone') {
+    const s = get('S');
+    const o = get('O');
+    const ref = get('A') || get('B');
+    if (s && o && ref && dist3(s, o) > 0.05) {
+      return { topName: 'S', footName: 'O', top: s, foot: o, ref };
+    }
+  }
+  if (shapeKey === 'pyramid3_sa' || shapeKey === 'pyramid4_sa' || shapeKey === 'pyramid_trap') {
+    const s = get('S');
+    const a = get('A');
+    const b = get('B');
+    if (s && a && b && dist3(s, a) > 0.05) {
+      return { topName: 'S', footName: 'A', top: s, foot: a, ref: b };
+    }
+  }
+  if (shapeKey === 'tetra_ortho') {
+    const c = get('C');
+    const o = get('O');
+    const a = get('A');
+    if (c && o && a) return { topName: 'C', footName: 'O', top: c, foot: o, ref: a };
+  }
+  if (shapeKey === 'prism3_oblique') {
+    const a1 = get("A'");
+    const o = get('O');
+    const a = get('A');
+    if (a1 && o && a && dist3(a1, o) > 0.05) {
+      return { topName: "A'", footName: 'O', top: a1, foot: o, ref: a };
+    }
+  }
+  if (shapeKey === 'cylinder') {
+    const o1 = get("O'");
+    const o = get('O');
+    const a = get('A');
+    if (o1 && o && a && dist3(o1, o) > 0.05) {
+      return { topName: "O'", footName: 'O', top: o1, foot: o, ref: a };
+    }
+  }
+  return null;
+}
+
+function recomputeDeformedMetrics(
+  shapeKey: string,
+  baseMetrics: ShapeMetrics,
+  vertices: NamedVertex[],
+  faces: number[][],
+  registry: Record<string, Vec3>,
+  overrides: Record<string, Vec3>
+): ShapeMetrics {
+  if (Object.keys(overrides).length === 0) return baseMetrics;
+
+  // For round solids, recalculate from live radius & height
+  if (shapeKey === 'cylinder' || shapeKey === 'cone') {
+    const o = registry['O'];
+    const a = registry['A'];
+    const top = shapeKey === 'cylinder' ? registry["O'"] : registry['S'];
+    if (o && a && top) {
+      const r = Math.max(0.1, Math.hypot(a.x - o.x, a.z - o.z));
+      const realH = Math.max(0.1, Math.abs(top.y - o.y));
+      const sDay = Math.PI * r * r;
+      if (shapeKey === 'cylinder') {
+        const sXq = 2 * Math.PI * r * realH;
+        return {
+          ...baseMetrics,
+          realH,
+          sDay,
+          sXq,
+          sTp: 2 * sDay + sXq,
+          vol: sDay * realH,
+          dimensionRows: [
+            { label: 'Bán kính R', value: formatMathNum(r) },
+            { label: 'Chiều cao h', value: formatMathNum(realH) }
+          ]
+        };
+      } else {
+        const l = Math.hypot(r, realH);
+        const sXq = Math.PI * r * l;
+        return {
+          ...baseMetrics,
+          realH,
+          sDay,
+          sXq,
+          sTp: sDay + sXq,
+          vol: (sDay * realH) / 3,
+          dimensionRows: [
+            { label: 'Bán kính R', value: formatMathNum(r) },
+            { label: 'Đường sinh l', value: formatMathNum(l) },
+            { label: 'Chiều cao h', value: formatMathNum(realH) }
+          ]
+        };
+      }
+    }
+  }
+  if (shapeKey === 'sphere') {
+    const o = registry['O'];
+    const a = registry['A'];
+    if (o && a) {
+      const r = Math.max(0.2, dist3(o, a));
+      const sTp = 4 * Math.PI * r * r;
+      return {
+        ...baseMetrics,
+        realH: 2 * r,
+        sDay: Math.PI * r * r,
+        sXq: sTp,
+        sTp,
+        vol: (4 / 3) * Math.PI * r * r * r,
+        dimensionRows: [
+          { label: 'Bán kính R', value: formatMathNum(r) },
+          { label: 'Đường kính 2R', value: formatMathNum(2 * r) }
+        ]
+      };
+    }
+  }
+
+  // Polyhedra: exact divergence-theorem volume & face areas from live vertices
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const v of vertices) {
+    if (v.isHelper) continue;
+    if (v.pos.y < minY) minY = v.pos.y;
+    if (v.pos.y > maxY) maxY = v.pos.y;
+  }
+  const realH = Math.max(0.05, maxY - minY);
+  const sDay = faces.length > 0 ? polygonArea3D(faces[0].map((i) => vertices[i].pos)) : baseMetrics.sDay;
+  let sTp = 0;
+  let signedVol = 0;
+  for (const f of faces) {
+    const pts = f.map((i) => vertices[i].pos);
+    sTp += polygonArea3D(pts);
+    const p0 = pts[0];
+    for (let i = 1; i < pts.length - 1; i++) {
+      signedVol += dot3(p0, cross3(pts[i], pts[i + 1])) / 6;
+    }
+  }
+  const isPrismLike = shapeKey === 'prism3' || shapeKey === 'prism3_oblique' || shapeKey === 'prism6' || shapeKey === 'cube' || shapeKey === 'box';
+  const sXq = Math.max(0, isPrismLike ? sTp - 2 * sDay : sTp - sDay);
+  const vol = Math.abs(signedVol);
+  return {
+    ...baseMetrics,
+    realH,
+    sDay,
+    sXq,
+    sTp,
+    vol
   };
 }
 
 export function build3DSceneFromSnapshot(snap: Scene3DSnapshot): Built3DScene {
   const base = buildBaseShape(snap.shapeKey, snap.a, snap.b, snap.h);
   const overrides = snap.vertexOverrides || {};
-  const vertices: NamedVertex[] = base.vertices.map((v) =>
-    v.name && overrides[v.name] ? { name: v.name, pos: overrides[v.name] } : v
+
+  // For round solids, if A/O/O'/S were dragged via overrides, smoothly rescale rim ring vertices too!
+  let vertices: NamedVertex[] = base.vertices.map((v) =>
+    v.name && overrides[v.name] ? { ...v, pos: overrides[v.name] } : v
   );
+
+  if (Object.keys(overrides).length > 0 && (snap.shapeKey === 'cylinder' || snap.shapeKey === 'cone')) {
+    const oPos = overrides['O'] || base.vertices.find((v) => v.name === 'O')?.pos || { x: 0, y: 0, z: 0 };
+    const aPos = overrides['A'] || base.vertices.find((v) => v.name === 'A')?.pos || { x: snap.a * 0.55, y: 0, z: 0 };
+    const topPos =
+      snap.shapeKey === 'cylinder'
+        ? overrides["O'"] || base.vertices.find((v) => v.name === "O'")?.pos || { x: oPos.x, y: snap.h, z: oPos.z }
+        : overrides['S'] || base.vertices.find((v) => v.name === 'S')?.pos || { x: oPos.x, y: snap.h, z: oPos.z };
+    const r = Math.max(0.25, Math.hypot(aPos.x - oPos.x, aPos.z - oPos.z));
+    const segs = 20;
+    vertices = vertices.map((v, idx) => {
+      if (idx < segs) {
+        const ang = (idx * 2 * Math.PI) / segs;
+        return { ...v, pos: { x: oPos.x + r * Math.cos(ang), y: oPos.y, z: oPos.z + r * Math.sin(ang) } };
+      }
+      if (snap.shapeKey === 'cylinder' && idx >= segs && idx < segs * 2) {
+        const ang = ((idx - segs) * 2 * Math.PI) / segs;
+        return { ...v, pos: { x: topPos.x + r * Math.cos(ang), y: topPos.y, z: topPos.z + r * Math.sin(ang) } };
+      }
+      return v;
+    });
+  } else if (Object.keys(overrides).length > 0 && snap.shapeKey === 'sphere') {
+    const oPos = overrides['O'] || base.vertices.find((v) => v.name === 'O')?.pos || { x: 0, y: snap.a * 0.6, z: 0 };
+    const aPos = overrides['A'] || base.vertices.find((v) => v.name === 'A')?.pos;
+    const r = aPos ? Math.max(0.3, dist3(oPos, aPos)) : snap.a * 0.6;
+    const rings = 8;
+    const segs = 16;
+    vertices = vertices.map((v, idx) => {
+      if (v.name === 'O') return { ...v, pos: oPos };
+      const ringIdx = Math.floor(idx / segs);
+      const segIdx = idx % segs;
+      if (ringIdx <= rings) {
+        const phi = (ringIdx * Math.PI) / rings;
+        const theta = (segIdx * 2 * Math.PI) / segs;
+        return {
+          ...v,
+          pos: {
+            x: oPos.x + r * Math.sin(phi) * Math.cos(theta),
+            y: oPos.y + r * Math.cos(phi),
+            z: oPos.z + r * Math.sin(phi) * Math.sin(theta)
+          }
+        };
+      }
+      return v;
+    });
+  }
+
   const registry: Record<string, Vec3> = {};
   for (const v of vertices) {
     if (v.name) registry[v.name] = v.pos;
@@ -782,12 +1111,10 @@ export function build3DSceneFromSnapshot(snap: Scene3DSnapshot): Built3DScene {
 
   const originWorld = registry[snap.originPoint] || { x: 0, y: 0, z: 0 };
 
-  // Add custom XYZ points first
   for (const pt of snap.customXYZPoints) {
     registry[pt.name] = mathToWorld({ x: pt.x, y: pt.y, z: pt.z }, originWorld);
   }
 
-  // Add custom edge points in order (supports chaining points on previously created segments!)
   for (const cp of snap.customPoints) {
     const pFrom = registry[cp.from];
     const pTo = registry[cp.to];
@@ -796,28 +1123,87 @@ export function build3DSceneFromSnapshot(snap: Scene3DSnapshot): Built3DScene {
     }
   }
 
-  // Compute dynamic 3-point cross-section if defined
+  const edgePairs: [Vec3, Vec3][] = base.edges.map((e) => [vertices[e.from].pos, vertices[e.to].pos]);
+
   let dynamicSection: DynamicSectionResult | null = null;
   if (snap.dynamicSection) {
     const p1 = registry[snap.dynamicSection.p1];
     const p2 = registry[snap.dynamicSection.p2];
     const p3 = registry[snap.dynamicSection.p3];
     if (p1 && p2 && p3) {
-      const edgePairs: [Vec3, Vec3][] = base.edges.map((e) => [
-        vertices[e.from].pos,
-        vertices[e.to].pos
-      ]);
       dynamicSection = computeDynamicCrossSection(p1, p2, p3, edgePairs);
     }
   }
+
+  let horizontalSection: Vec3[] | null = null;
+  if (snap.showSection) {
+    horizontalSection = computeHorizontalCrossSection(
+      snap.shapeKey,
+      snap.a,
+      snap.h,
+      snap.secRatio ?? 0.5,
+      edgePairs,
+      vertices
+    );
+  }
+
+  const altitude = buildAltitudeSpec(snap.shapeKey, registry);
+
+  // Build clickable named segments (solid named edges + altitude + custom lines) for direct edge point-placement & segment rail dragging
+  const clickableSegments: ClickableSegment3D[] = [];
+  const segSeen = new Set<string>();
+  const addClickable = (fromName: string, toName: string, isCustom = false) => {
+    if (!fromName || !toName || fromName === toName) return;
+    const key = fromName < toName ? `${fromName}|${toName}` : `${toName}|${fromName}`;
+    if (segSeen.has(key)) return;
+    const p1 = registry[fromName];
+    const p2 = registry[toName];
+    if (!p1 || !p2 || dist3(p1, p2) < 1e-3) return;
+    segSeen.add(key);
+    clickableSegments.push({ fromName, toName, fromPos: p1, toPos: p2, isCustom });
+  };
+
+  for (const e of base.edges) {
+    const n1 = vertices[e.from]?.name;
+    const n2 = vertices[e.to]?.name;
+    if (n1 && n2) addClickable(n1, n2, false);
+  }
+  if (altitude) {
+    addClickable(altitude.topName, altitude.footName, false);
+  }
+  // Useful diagonals & radii for round bodies
+  if (snap.shapeKey === 'cylinder') {
+    addClickable('O', 'A');
+    addClickable('O', 'B');
+    addClickable("O'", "A'");
+    addClickable('A', "A'");
+    addClickable('B', "B'");
+  } else if (snap.shapeKey === 'cone') {
+    addClickable('O', 'A');
+    addClickable('O', 'B');
+    addClickable('S', 'A');
+    addClickable('S', 'B');
+  } else if (snap.shapeKey === 'sphere') {
+    addClickable('O', 'A');
+    addClickable('O', 'B');
+    addClickable('O', 'N');
+  }
+  for (const cl of snap.customLines) {
+    addClickable(cl.p1, cl.p2, true);
+  }
+
+  const metrics = recomputeDeformedMetrics(snap.shapeKey, base.metrics, vertices, base.faces, registry, overrides);
 
   return {
     vertices,
     faces: base.faces,
     edges: base.edges,
     pointRegistry: registry,
-    metrics: base.metrics,
-    dynamicSection
+    metrics,
+    dynamicSection,
+    horizontalSection,
+    altitude,
+    clickableSegments
   };
 }
 
@@ -828,12 +1214,14 @@ export interface Camera3D {
   target: Vec3;
 }
 
-export function projectPoint(
-  p: Vec3,
-  cam: Camera3D,
-  width: number,
-  height: number
-): { x: number; y: number; depth: number } {
+export interface CameraBasis3D {
+  camPos: Vec3;
+  forward: Vec3;
+  right: Vec3;
+  up: Vec3;
+}
+
+export function getCameraBasis(cam: Camera3D): CameraBasis3D {
   const camPos: Vec3 = {
     x: cam.target.x + cam.radius * Math.sin(cam.phi) * Math.sin(cam.theta),
     y: cam.target.y + cam.radius * Math.cos(cam.phi),
@@ -843,7 +1231,16 @@ export function projectPoint(
   const worldUp: Vec3 = { x: 0, y: 1, z: 0 };
   const right = norm3(cross3(forward, worldUp));
   const up = cross3(right, forward);
+  return { camPos, forward, right, up };
+}
 
+export function projectPoint(
+  p: Vec3,
+  cam: Camera3D,
+  width: number,
+  height: number
+): { x: number; y: number; depth: number } {
+  const { camPos, forward, right, up } = getCameraBasis(cam);
   const rel = sub3(p, camPos);
   const cx = dot3(rel, right);
   const cy = dot3(rel, up);
@@ -855,6 +1252,40 @@ export function projectPoint(
     y: height * 0.52 - (cy / cz) * focal,
     depth: cz
   };
+}
+
+/**
+ * Unprojects a 2D canvas coordinate (sx, sy) into a world-space 3D ray.
+ */
+export function screenToRay3D(
+  sx: number,
+  sy: number,
+  cam: Camera3D,
+  width: number,
+  height: number
+): { origin: Vec3; dir: Vec3 } {
+  const { camPos, forward, right, up } = getCameraBasis(cam);
+  const focal = Math.min(width, height) * 1.15;
+  const ndcX = (sx - width * 0.5) / focal;
+  const ndcY = (height * 0.52 - sy) / focal;
+  const dir = norm3(add3(add3(forward, scale3(right, ndcX)), scale3(up, ndcY)));
+  return { origin: camPos, dir };
+}
+
+/**
+ * Intersects a 3D ray with a plane defined by (planePoint, planeNormal).
+ */
+export function intersectRayPlane3D(
+  rayOrigin: Vec3,
+  rayDir: Vec3,
+  planePoint: Vec3,
+  planeNormal: Vec3
+): Vec3 | null {
+  const denom = dot3(rayDir, planeNormal);
+  if (Math.abs(denom) < 1e-4) return null;
+  const t = dot3(sub3(planePoint, rayOrigin), planeNormal) / denom;
+  if (t <= 0.05 || t > 180) return null;
+  return add3(rayOrigin, scale3(rayDir, t));
 }
 
 export function exportSceneToObj(scene: Built3DScene, title: string): string {

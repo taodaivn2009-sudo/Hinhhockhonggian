@@ -5,9 +5,12 @@ import {
   Download,
   Eye,
   EyeOff,
+  Grid,
   Link2,
+  Magnet,
   Maximize2,
   Minimize2,
+  Minus,
   Pause,
   Play,
   Plus,
@@ -1388,22 +1391,62 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
         </div>
       )}
 
-      {/* 4-Tab 2D Drawer */}
+      {/* Right-Side Quick Controls Rail (matching 3D Studio HUD) */}
+      {!isImmersive && (
+        <div className="glass-surface studio-right-rail">
+          <button
+            type="button"
+            className={`studio-rail-btn ${showAxes ? 'active' : ''}`}
+            onClick={() => setShowAxes((v) => !v)}
+            title="Bật/tắt trục tọa độ Oxy"
+          >
+            <Sigma size={15} />
+            <span>Oxy</span>
+          </button>
+          <button
+            type="button"
+            className={`studio-rail-btn ${showGrid ? 'active' : ''}`}
+            onClick={() => setShowGrid((v) => !v)}
+            title="Bật/tắt lưới tọa độ"
+          >
+            <Grid size={15} />
+            <span>Lưới</span>
+          </button>
+          <button
+            type="button"
+            className={`studio-rail-btn ${snapToGrid ? 'snap-on' : ''}`}
+            onClick={() => setSnapToGrid((v) => !v)}
+            title="Bật/tắt hút lưới 0.5"
+          >
+            <Magnet size={15} />
+            <span>Hút</span>
+          </button>
+          <div style={{ width: 22, height: 1, background: 'var(--border-subtle)', margin: '2px 0' }} />
+          <button
+            type="button"
+            className="studio-rail-btn"
+            onClick={() => setView((v) => ({ ...v, scale: Math.min(2000, v.scale * 1.22) }))}
+            title="Phóng to"
+            aria-label="Phóng to"
+          >
+            <Plus size={16} />
+          </button>
+          <button
+            type="button"
+            className="studio-rail-btn"
+            onClick={() => setView((v) => ({ ...v, scale: Math.max(4, v.scale * 0.82) }))}
+            title="Thu nhỏ"
+            aria-label="Thu nhỏ"
+          >
+            <Minus size={16} />
+          </button>
+        </div>
+      )}
+
+      {/* 4-Tab 2D Responsive Inspector (Side panel on desktop / Bottom sheet on mobile) */}
       {drawerOpen && !isImmersive && (
-        <aside
-          className="glass-surface"
-          style={{
-            position: 'absolute',
-            top: 62,
-            right: 10,
-            bottom: 162,
-            width: 'min(390px, calc(100vw - 20px))',
-            borderRadius: 22,
-            display: 'flex',
-            flexDirection: 'column',
-            zIndex: 22
-          }}
-        >
+        <aside className="glass-surface studio-inspector-panel">
+          <div className="studio-inspector-handle" />
           <div
             style={{
               display: 'flex',
