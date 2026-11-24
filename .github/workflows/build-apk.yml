@@ -11,9 +11,13 @@ permissions:
   contents: write
 
 jobs:
-  build-and-publish-debug-apk:
-    name: Build & Publish Tool Toán APK
+  determine-version:
+    name: Determine Release Version
     runs-on: ubuntu-latest
+    outputs:
+      version_num: ${{ steps.app_version.outputs.version_num }}
+      version_tag: ${{ steps.app_version.outputs.version_tag }}
+      release_title: ${{ steps.app_version.outputs.release_title }}
 
     steps:
       - name: Checkout repository
@@ -63,6 +67,23 @@ jobs:
           echo "version_num=${NEXT_V}" >> "${GITHUB_OUTPUT}"
           echo "version_tag=${VERSION_TAG}" >> "${GITHUB_OUTPUT}"
           echo "release_title=${RELEASE_TITLE}" >> "${GITHUB_OUTPUT}"
+
+  build-android-apk:
+    name: Build Android APK
+    needs: determine-version
+    runs-on: ubuntu-latest
+    outputs:
+      asset_name: ${{ steps.prepare_release_asset.outputs.asset_name }}
+      sha1: ${{ steps.keystore.outputs.sha1 }}
+      sha256: ${{ steps.keystore.outputs.sha256 }}
+      firebase_sha1_status: ${{ steps.firebase_cfg.outputs.sha1_status }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up Temurin Java 21
         uses: actions/setup-java@v4
@@ -285,8 +306,8 @@ jobs:
       - name: Build debug APK
         shell: bash
         env:
-          APP_VERSION_CODE: ${{ steps.app_version.outputs.version_num }}
-          APP_VERSION_NAME: ${{ steps.app_version.outputs.version_tag }}
+          APP_VERSION_CODE: ${{ needs.determine-version.outputs.version_num }}
+          APP_VERSION_NAME: ${{ needs.determine-version.outputs.version_tag }}
           APP_GITHUB_REPO: ${{ github.repository }}
         run: >
           gradle :app:assembleDebug
@@ -295,93 +316,235 @@ jobs:
           -PappGithubRepo="${APP_GITHUB_REPO}"
           --no-configuration-cache --stacktrace --no-daemon
 
-      - name: Verify debug APK
+      - name: Verify & stage APK release asset
+        id: prepare_release_asset
         shell: bash
+        env:
+          VERSION_TAG: ${{ needs.determine-version.outputs.version_tag }}
         run: |
           set -euo pipefail
           EXPECTED_APK="app/build/outputs/apk/debug/app-debug.apk"
 
-          if [ ! -e "${EXPECTED_APK}" ]; then
-            echo "::error::Expected debug APK not found at ${EXPECTED_APK}."
-            if [ -d "app/build/outputs/apk" ]; then
-              echo "APK files discovered inside app/build/outputs/apk:"
-              find app/build/outputs/apk -type f -name '*.apk' || true
-            else
-              echo "Directory app/build/outputs/apk does not exist."
-            fi
-            exit 1
-          fi
-
-          if [ ! -f "${EXPECTED_APK}" ]; then
-            echo "::error::${EXPECTED_APK} is not a regular file."
-            exit 1
-          fi
-
-          if [ ! -s "${EXPECTED_APK}" ]; then
-            echo "::error::${EXPECTED_APK} is empty."
-            exit 1
-          fi
-
-          if [[ "${EXPECTED_APK}" != *.apk ]]; then
-            echo "::error::${EXPECTED_APK} does not have the .apk extension."
+          if [ ! -f "${EXPECTED_APK}" ] || [ ! -s "${EXPECTED_APK}" ]; then
+            echo "::error::Expected debug APK not found or empty at ${EXPECTED_APK}."
+            find app/build/outputs/apk -type f -name '*.apk' 2>/dev/null || true
             exit 1
           fi
 
           apk_size="$(stat -c%s "${EXPECTED_APK}")"
           echo "Verified debug APK: ${EXPECTED_APK} (${apk_size} bytes)"
 
-      - name: Upload debug APK artifact
-        id: upload_artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tool-toan-${{ steps.app_version.outputs.version_tag }}-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
-      - name: Prepare APK release asset
-        id: prepare_release_asset
-        shell: bash
-        env:
-          VERSION_TAG: ${{ steps.app_version.outputs.version_tag }}
-        run: |
-          set -euo pipefail
-          SOURCE_APK="app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -f "${SOURCE_APK}" ] || [ ! -s "${SOURCE_APK}" ]; then
-            echo "::error::Verified debug APK is missing or empty at ${SOURCE_APK}."
-            exit 1
-          fi
-
           ASSET_FILENAME="tool-toan-${VERSION_TAG}.apk"
           RELEASE_DIR="${RUNNER_TEMP}/apk-release-asset"
           mkdir -p "${RELEASE_DIR}"
           ASSET_PATH="${RELEASE_DIR}/${ASSET_FILENAME}"
+          cp "${EXPECTED_APK}" "${ASSET_PATH}"
 
-          cp "${SOURCE_APK}" "${ASSET_PATH}"
-
-          if [ ! -f "${ASSET_PATH}" ] || [ ! -s "${ASSET_PATH}" ] || [[ "${ASSET_PATH}" != *.apk ]]; then
-            echo "::error::Prepared release APK asset validation failed at ${ASSET_PATH}."
-            exit 1
-          fi
-
-          echo "Prepared release asset: ${ASSET_FILENAME}"
+          echo "Prepared release APK asset: ${ASSET_FILENAME}"
           echo "asset_path=${ASSET_PATH}" >> "${GITHUB_OUTPUT}"
           echo "asset_name=${ASSET_FILENAME}" >> "${GITHUB_OUTPUT}"
 
-      - name: Publish APK to GitHub Releases
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tool-toan-${{ needs.determine-version.outputs.version_tag }}-apk
+          path: ${{ steps.prepare_release_asset.outputs.asset_path }}
+          if-no-files-found: error
+
+  build-ios-ipa:
+    name: Build iPhone IPA (iOS 15+ Universal Unsigned)
+    needs: determine-version
+    runs-on: macos-latest
+    outputs:
+      asset_name: ${{ steps.package_ipa.outputs.asset_name }}
+      ipa_size_mb: ${{ steps.package_ipa.outputs.ipa_size_mb }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify Xcode & install XcodeGen
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Prepare shared PDF, AppIcon & version metadata for iOS
+        shell: bash
+        env:
+          VERSION_TAG: ${{ needs.determine-version.outputs.version_tag }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # 1. Reuse the single 388-page DPAD PDF from Android assets (zero git duplication)
+          PDF_SRC="app/src/main/assets/docs/toan_10_11_12_dpad.pdf"
+          PDF_DST="ios/Resources/toan_10_11_12_dpad.pdf"
+          if [ ! -f "${PDF_SRC}" ] || [ ! -s "${PDF_SRC}" ]; then
+            echo "::error::Bundled 388-page PDF missing at ${PDF_SRC}."
+            exit 1
+          fi
+          mkdir -p ios/Resources
+          cp "${PDF_SRC}" "${PDF_DST}"
+          echo "Bundled PDF copied to ${PDF_DST} ($(stat -f%z "${PDF_DST}") bytes)."
+
+          # 2. Generate universal iOS AppIcon PNGs from Android launcher icon using macOS sips
+          ICON_SRC="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png"
+          ICON_DIR="ios/Resources/Assets.xcassets/AppIcon.appiconset"
+          mkdir -p "${ICON_DIR}"
+          if [ -f "${ICON_SRC}" ] && [ -s "${ICON_SRC}" ]; then
+            sips -s format png -z 120 120 "${ICON_SRC}" --out "${ICON_DIR}/icon-120.png" >/dev/null
+            sips -s format png -z 180 180 "${ICON_SRC}" --out "${ICON_DIR}/icon-180.png" >/dev/null
+            sips -s format png -z 152 152 "${ICON_SRC}" --out "${ICON_DIR}/icon-152.png" >/dev/null
+            sips -s format png -z 167 167 "${ICON_SRC}" --out "${ICON_DIR}/icon-167.png" >/dev/null
+            sips -s format png -z 1024 1024 "${ICON_SRC}" --out "${ICON_DIR}/icon-1024.png" >/dev/null
+            echo "Generated all universal iOS AppIcon PNGs from ${ICON_SRC}."
+          else
+            echo "::warning::Launcher icon missing at ${ICON_SRC}; continuing without custom AppIcon PNGs."
+          fi
+
+          # 3. Inject version tag & GitHub repo into ios/Info.plist
+          PLIST="ios/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :ToolToanVersionTag ${VERSION_TAG}" "${PLIST}"
+          /usr/libexec/PlistBuddy -c "Set :ToolToanGithubRepo ${GITHUB_REPO}" "${PLIST}"
+          echo "Injected ToolToanVersionTag=${VERSION_TAG} and ToolToanGithubRepo=${GITHUB_REPO} into ${PLIST}."
+
+      - name: Generate Xcode project & compile unsigned arm64 iOS Release app
+        shell: bash
+        env:
+          VERSION_NUM: ${{ needs.determine-version.outputs.version_num }}
+        run: |
+          set -euo pipefail
+          cd ios
+          xcodegen generate --spec project.yml
+
+          xcodebuild \
+            -project ToolToan.xcodeproj \
+            -scheme ToolToan \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION="${VERSION_NUM}.0" \
+            CURRENT_PROJECT_VERSION="${VERSION_NUM}" \
+            build
+
+      - name: Package & verify unsigned universal IPA
+        id: package_ipa
+        shell: bash
+        env:
+          VERSION_TAG: ${{ needs.determine-version.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          APP_BUNDLE="ios/build/Build/Products/Release-iphoneos/ToolToan.app"
+          if [ ! -d "${APP_BUNDLE}" ] || [ ! -f "${APP_BUNDLE}/ToolToan" ]; then
+            echo "::error::Compiled iOS .app bundle or binary missing at ${APP_BUNDLE}."
+            ls -la ios/build/Build/Products/Release-iphoneos || true
+            exit 1
+          fi
+
+          if [ ! -f "${APP_BUNDLE}/toan_10_11_12_dpad.pdf" ]; then
+            echo "::error::Bundled 388-page PDF was not copied into ${APP_BUNDLE}!"
+            ls -la "${APP_BUNDLE}"
+            exit 1
+          fi
+
+          STAGE_DIR="${RUNNER_TEMP}/ipa-stage"
+          RELEASE_DIR="${RUNNER_TEMP}/ipa-release-asset"
+          rm -rf "${STAGE_DIR}" "${RELEASE_DIR}"
+          mkdir -p "${STAGE_DIR}/Payload" "${RELEASE_DIR}"
+
+          cp -R "${APP_BUNDLE}" "${STAGE_DIR}/Payload/ToolToan.app"
+          # Strip any residual signatures/profiles so AltStore/Sideloadly/TrollStore/ESign install cleanly
+          rm -rf "${STAGE_DIR}/Payload/ToolToan.app/_CodeSignature"
+          rm -f "${STAGE_DIR}/Payload/ToolToan.app/embedded.mobileprovision"
+
+          ASSET_FILENAME="tool-toan-${VERSION_TAG}.ipa"
+          ASSET_PATH="${RELEASE_DIR}/${ASSET_FILENAME}"
+
+          (
+            cd "${STAGE_DIR}"
+            zip -qry "${ASSET_PATH}" Payload
+          )
+
+          if [ ! -f "${ASSET_PATH}" ] || [ ! -s "${ASSET_PATH}" ]; then
+            echo "::error::Failed to create non-empty IPA at ${ASSET_PATH}."
+            exit 1
+          fi
+
+          # Verify key contents inside the packaged .ipa archive
+          unzip -l "${ASSET_PATH}" | grep -q "Payload/ToolToan.app/ToolToan"
+          unzip -l "${ASSET_PATH}" | grep -q "Payload/ToolToan.app/Info.plist"
+          unzip -l "${ASSET_PATH}" | grep -q "Payload/ToolToan.app/toan_10_11_12_dpad.pdf"
+
+          IPA_BYTES="$(stat -f%z "${ASSET_PATH}")"
+          IPA_MB="$(awk "BEGIN { printf \"%.1f MB\", ${IPA_BYTES} / 1048576 }")"
+          echo "Verified unsigned universal iPhone IPA: ${ASSET_FILENAME} (${IPA_BYTES} bytes / ${IPA_MB})"
+
+          echo "asset_path=${ASSET_PATH}" >> "${GITHUB_OUTPUT}"
+          echo "asset_name=${ASSET_FILENAME}" >> "${GITHUB_OUTPUT}"
+          echo "ipa_size_mb=${IPA_MB}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload iPhone IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tool-toan-${{ needs.determine-version.outputs.version_tag }}-ipa
+          path: ${{ steps.package_ipa.outputs.asset_path }}
+          if-no-files-found: error
+
+  publish-github-release:
+    name: Publish Dual-Platform GitHub Release (APK + IPA)
+    needs: [determine-version, build-android-apk, build-ios-ipa]
+    if: always() && needs.determine-version.result == 'success' && (needs.build-android-apk.result == 'success' || needs.build-ios-ipa.result == 'success')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Download Android APK artifact
+        if: needs.build-android-apk.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: tool-toan-${{ needs.determine-version.outputs.version_tag }}-apk
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Download iPhone IPA artifact
+        if: needs.build-ios-ipa.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: tool-toan-${{ needs.determine-version.outputs.version_tag }}-ipa
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Create GitHub Release with APK & IPA
         id: publish_release
         continue-on-error: true
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          ASSET_PATH: ${{ steps.prepare_release_asset.outputs.asset_path }}
-          ASSET_NAME: ${{ steps.prepare_release_asset.outputs.asset_name }}
-          VERSION_NUM: ${{ steps.app_version.outputs.version_num }}
-          VERSION_TAG: ${{ steps.app_version.outputs.version_tag }}
-          RELEASE_TITLE: ${{ steps.app_version.outputs.release_title }}
-          SIGNING_SHA1: ${{ steps.keystore.outputs.sha1 }}
-          SIGNING_SHA256: ${{ steps.keystore.outputs.sha256 }}
-          FIREBASE_SHA1_STATUS: ${{ steps.firebase_cfg.outputs.sha1_status }}
+          VERSION_NUM: ${{ needs.determine-version.outputs.version_num }}
+          VERSION_TAG: ${{ needs.determine-version.outputs.version_tag }}
+          RELEASE_TITLE: ${{ needs.determine-version.outputs.release_title }}
+          APK_RESULT: ${{ needs.build-android-apk.result }}
+          IPA_RESULT: ${{ needs.build-ios-ipa.result }}
+          APK_NAME: ${{ needs.build-android-apk.outputs.asset_name }}
+          IPA_NAME: ${{ needs.build-ios-ipa.outputs.asset_name }}
+          IPA_SIZE: ${{ needs.build-ios-ipa.outputs.ipa_size_mb }}
+          SIGNING_SHA1: ${{ needs.build-android-apk.outputs.sha1 }}
+          SIGNING_SHA256: ${{ needs.build-android-apk.outputs.sha256 }}
+          FIREBASE_SHA1_STATUS: ${{ needs.build-android-apk.outputs.firebase_sha1_status }}
         run: |
           set -euo pipefail
 
@@ -389,14 +552,21 @@ jobs:
             echo "::warning::GitHub CLI (gh) is not available on this runner."
             exit 1
           fi
-          gh --version
 
-          if [ -z "${ASSET_PATH}" ] || [ ! -f "${ASSET_PATH}" ] || [ ! -s "${ASSET_PATH}" ] || [[ "${ASSET_PATH}" != *.apk ]]; then
-            echo "::warning::Prepared release APK asset is invalid or missing. Aborting release creation."
-            exit 1
+          ASSETS_DIR="${RUNNER_TEMP}/release-assets"
+          ASSET_FILES=()
+          if [ -n "${APK_NAME}" ] && [ -s "${ASSETS_DIR}/${APK_NAME}" ]; then
+            ASSET_FILES+=("${ASSETS_DIR}/${APK_NAME}")
+          fi
+          if [ -n "${IPA_NAME}" ] && [ -s "${ASSETS_DIR}/${IPA_NAME}" ]; then
+            ASSET_FILES+=("${ASSETS_DIR}/${IPA_NAME}")
           fi
 
-          RELEASE_TAG="${VERSION_TAG}"
+          if [ "${#ASSET_FILES[@]}" -eq 0 ]; then
+            echo "::error::No release assets found in ${ASSETS_DIR}."
+            ls -la "${ASSETS_DIR}" || true
+            exit 1
+          fi
 
           CHANGELOG_SECTION=""
           if [ -f "CHANGELOG.md" ]; then
@@ -429,69 +599,65 @@ jobs:
           if [ -n "${COMMIT_LOG}" ]; then
             RELEASE_NOTES+="### Chi tiết commit cập nhật"$'\n'"${COMMIT_LOG}"$'\n\n'
           fi
+
           RELEASE_NOTES+="---"$'\n'
-          RELEASE_NOTES+="### Thông tin bản dựng"$'\n'
+          RELEASE_NOTES+="### 📱 Tải xuống & Cài đặt"$'\n'
+          if [ "${APK_RESULT}" = "success" ] && [ -n "${APK_NAME}" ]; then
+            RELEASE_NOTES+="- **Android (.apk):** \`${APK_NAME}\` — cài trực tiếp trên Android (cập nhật đè không mất dữ liệu)."$'\n'
+          fi
+          if [ "${IPA_RESULT}" = "success" ] && [ -n "${IPA_NAME}" ]; then
+            RELEASE_NOTES+="- **iPhone / iPad (.ipa):** \`${IPA_NAME}\` (${IPA_SIZE}) — bản **không ký sẵn (unsigned), iOS 15.0+, arm64**, đầy đủ 5 tab (3D, 2D, PDF 388 trang, Trợ lý AI streaming, Cài đặt)."$'\n'
+            RELEASE_NOTES+="  - Cài trên mọi iPhone bằng **AltStore / SideStore / Sideloadly** (Apple ID miễn phí), **TrollStore**, **ESign** hoặc **Scarlet**."$'\n'
+          fi
+
+          RELEASE_NOTES+=$'\n'"### Thông tin bản dựng"$'\n'
           RELEASE_NOTES+="- **Phiên bản ứng dụng:** \`${VERSION_TAG}\` (versionCode: \`${VERSION_NUM}\`)"$'\n'
-          RELEASE_NOTES+="- **File APK:** \`${ASSET_NAME}\`"$'\n'
-          RELEASE_NOTES+="- **Chữ ký SHA-1 (Google Sign-In / Firebase):** \`${SIGNING_SHA1}\`"$'\n'
-          RELEASE_NOTES+="- **Trạng thái Google Sign-In:** ${FIREBASE_SHA1_STATUS}"$'\n'
-          RELEASE_NOTES+="- **Chữ ký SHA-256 cố định:** \`${SIGNING_SHA256}\`"$'\n'
+          if [ "${APK_RESULT}" = "success" ]; then
+            RELEASE_NOTES+="- **Android SHA-1 (Google Sign-In / Firebase):** \`${SIGNING_SHA1}\`"$'\n'
+            RELEASE_NOTES+="- **Trạng thái Google Sign-In:** ${FIREBASE_SHA1_STATUS}"$'\n'
+            RELEASE_NOTES+="- **Android SHA-256 cố định:** \`${SIGNING_SHA256}\`"$'\n'
+          fi
           RELEASE_NOTES+="- **Workflow Run:** #${GITHUB_RUN_NUMBER}"$'\n'
           RELEASE_NOTES+="- **Commit SHA:** \`${GITHUB_SHA}\`"$'\n'
 
-          gh release create "${RELEASE_TAG}" "${ASSET_PATH}" \
+          gh release create "${VERSION_TAG}" "${ASSET_FILES[@]}" \
             --target "${GITHUB_SHA}" \
             --title "${RELEASE_TITLE}" \
             --notes "${RELEASE_NOTES}" \
             --latest
 
-          echo "release_tag=${RELEASE_TAG}" >> "${GITHUB_OUTPUT}"
-          echo "release_title=${RELEASE_TITLE}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${VERSION_TAG}" >> "${GITHUB_OUTPUT}"
 
-      - name: Report APK download result
-        if: always() && steps.publish_release.outcome != 'skipped'
+      - name: Report dual-platform release summary
+        if: always()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           PUBLISH_OUTCOME: ${{ steps.publish_release.outcome }}
-          ASSET_NAME: ${{ steps.prepare_release_asset.outputs.asset_name }}
-          VERSION_TAG: ${{ steps.app_version.outputs.version_tag }}
-          RELEASE_TAG: ${{ steps.app_version.outputs.version_tag }}
-          RELEASE_TITLE: ${{ steps.app_version.outputs.release_title }}
+          APK_RESULT: ${{ needs.build-android-apk.result }}
+          IPA_RESULT: ${{ needs.build-ios-ipa.result }}
+          APK_NAME: ${{ needs.build-android-apk.outputs.asset_name }}
+          IPA_NAME: ${{ needs.build-ios-ipa.outputs.asset_name }}
+          VERSION_TAG: ${{ needs.determine-version.outputs.version_tag }}
+          RELEASE_TITLE: ${{ needs.determine-version.outputs.release_title }}
         run: |
           set -euo pipefail
-
+          RELEASE_URL=""
           if [ "${PUBLISH_OUTCOME}" = "success" ]; then
-            RELEASE_URL="$(gh release view "${RELEASE_TAG}" --json url --jq '.url' 2>/dev/null || true)"
-            if [ -n "${RELEASE_URL}" ]; then
-              echo "Release Tag: ${RELEASE_TAG}"
-              echo "Release Title: ${RELEASE_TITLE}"
-              echo "Release URL: ${RELEASE_URL}"
-              echo "APK Asset Filename: ${ASSET_NAME}"
-
-              {
-                echo "## ${RELEASE_TITLE} — Kết quả Build & Release APK"
-                echo ""
-                echo "- **Status:** APK build, Actions artifact upload, and GitHub Release publishing succeeded."
-                echo "- **Release Tag:** \`${RELEASE_TAG}\`"
-                echo "- **Release Title:** ${RELEASE_TITLE}"
-                echo "- **APK Asset Filename:** \`${ASSET_NAME}\`"
-                echo "- **GitHub Release URL:** ${RELEASE_URL}"
-                echo ""
-                echo "Tải file APK trực tiếp tại mục **Assets** của trang GitHub Release phía trên."
-                echo "Bản dự phòng cũng có trong GitHub Actions artifact (\`tool-toan-${VERSION_TAG}-apk\`)."
-              } >> "${GITHUB_STEP_SUMMARY}"
-              exit 0
-            fi
+            RELEASE_URL="$(gh release view "${VERSION_TAG}" --json url --jq '.url' 2>/dev/null || true)"
           fi
 
-          echo "::warning::GitHub Release publishing failed or could not be verified, but the debug APK build succeeded and the Actions artifact 'tool-toan-${VERSION_TAG}-apk' remains available."
           {
-            echo "## ${RELEASE_TITLE} — Kết quả Build & Release APK"
+            echo "## ${RELEASE_TITLE} — Kết quả Build & Release (Android APK + iPhone IPA)"
             echo ""
-            echo "> **Warning:** GitHub Release publishing failed or could not be verified."
+            echo "| Nền tảng | Trạng thái | File phát hành | Artifact dự phòng |"
+            echo "| :--- | :--- | :--- | :--- |"
+            echo "| **Android** | \`${APK_RESULT}\` | \`${APK_NAME:-n/a}\` | \`tool-toan-${VERSION_TAG}-apk\` |"
+            echo "| **iPhone (iOS 15+)** | \`${IPA_RESULT}\` | \`${IPA_NAME:-n/a}\` | \`tool-toan-${VERSION_TAG}-ipa\` |"
             echo ""
-            echo "- **APK Build:** Succeeded"
-            echo "- **Actions Artifact Backup:** \`tool-toan-${VERSION_TAG}-apk\` remains available for download in this workflow run."
-            echo "- **GitHub Release:** Not published or unverified"
+            if [ -n "${RELEASE_URL}" ]; then
+              echo "- **GitHub Release URL:** ${RELEASE_URL}"
+            else
+              echo "> **Warning:** Không thể tạo hoặc xác minh GitHub Release; các file vẫn có sẵn trong mục Artifacts phía trên."
+            fi
           } >> "${GITHUB_STEP_SUMMARY}"
