@@ -187,8 +187,28 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
     pointId: string | null;
     x: number;
     y: number;
+    offsetWorldX: number;
+    offsetWorldY: number;
+    moved: boolean;
+    preDragSnap: Geo2DSnapshot | null;
     pinchDist: number | null;
-  }>({ mode: 'none', pointId: null, x: 0, y: 0, pinchDist: null });
+    pinchMidX: number | null;
+    pinchMidY: number | null;
+    wasMultiTouch: boolean;
+  }>({
+    mode: 'none',
+    pointId: null,
+    x: 0,
+    y: 0,
+    offsetWorldX: 0,
+    offsetWorldY: 0,
+    moved: false,
+    preDragSnap: null,
+    pinchDist: null,
+    pinchMidX: null,
+    pinchMidY: null,
+    wasMultiTouch: false
+  });
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
 
   const commit = (updater: (prev: Geo2DSnapshot) => Geo2DSnapshot, recordHistory = true) => {
@@ -897,8 +917,9 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
     return { x: wx, y: wy };
   };
 
-  const findHitPoint = (wx: number, wy: number): Geo2DPoint | null => {
-    const hitTol = (18 * sensitivity.touchRadius) / viewRef.current.scale;
+  const findHitPoint = (wx: number, wy: number, isTouch = false): Geo2DPoint | null => {
+    const basePx = isTouch ? 30 : 20;
+    const hitTol = (basePx * sensitivity.touchRadius) / viewRef.current.scale;
     let best: Geo2DPoint | null = null;
     let bestD = hitTol;
     for (const pt of snapshot.points) {
@@ -987,6 +1008,33 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
     setPendingPointIds([]);
   };
 
+  // Non-passive cursor-centered wheel zoom
+  const sensitivity2DRef = useRef(sensitivity);
+  sensitivity2DRef.current = sensitivity;
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const view = viewRef.current;
+      const beforeWx = view.cx + (sx - rect.width / 2) / view.scale;
+      const beforeWy = view.cy - (sy - rect.height / 2) / view.scale;
+
+      const deltaScale = Math.max(-1.6, Math.min(1.6, e.deltaY / 100));
+      const factor = Math.pow(1.12, -deltaScale * sensitivity2DRef.current.zoom);
+      const nextScale = Math.min(2000, Math.max(4, view.scale * factor));
+      view.scale = nextScale;
+      view.cx = beforeWx - (sx - rect.width / 2) / nextScale;
+      view.cy = beforeWy + (sy - rect.height / 2) / nextScale;
+      scheduleRender();
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [scheduleRender]);
+
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -998,24 +1046,69 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
         pointId: null,
         x: e.clientX,
         y: e.clientY,
-        pinchDist: Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)
+        offsetWorldX: 0,
+        offsetWorldY: 0,
+        moved: false,
+        preDragSnap: null,
+        pinchDist: Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y),
+        pinchMidX: (pts[0].x + pts[1].x) * 0.5,
+        pinchMidY: (pts[0].y + pts[1].y) * 0.5,
+        wasMultiTouch: true
       };
       return;
+    }
+
+    if (pointersRef.current.size === 1) {
+      dragRef.current.wasMultiTouch = false;
     }
 
     const { x: wx, y: wy } = screenToWorld(e.clientX, e.clientY);
     if (activeTool === 'trace') {
       setTraceX(wx);
-      dragRef.current = { mode: 'trace', pointId: null, x: e.clientX, y: e.clientY, pinchDist: null };
+      dragRef.current = {
+        ...dragRef.current,
+        mode: 'trace',
+        pointId: null,
+        x: e.clientX,
+        y: e.clientY,
+        pinchDist: null,
+        wasMultiTouch: false
+      };
       return;
     }
 
     if (activeTool === 'pan') {
-      const hit = findHitPoint(wx, wy);
+      const hit = findHitPoint(wx, wy, e.pointerType === 'touch');
       if (hit) {
-        dragRef.current = { mode: 'point', pointId: hit.id, x: e.clientX, y: e.clientY, pinchDist: null };
+        dragRef.current = {
+          mode: 'point',
+          pointId: hit.id,
+          x: e.clientX,
+          y: e.clientY,
+          offsetWorldX: hit.x - wx,
+          offsetWorldY: hit.y - wy,
+          moved: false,
+          preDragSnap: snapshot,
+          pinchDist: null,
+          pinchMidX: null,
+          pinchMidY: null,
+          wasMultiTouch: false
+        };
       } else {
-        dragRef.current = { mode: 'pan', pointId: null, x: e.clientX, y: e.clientY, pinchDist: null };
+        dragRef.current = {
+          mode: 'pan',
+          pointId: null,
+          x: e.clientX,
+          y: e.clientY,
+          offsetWorldX: 0,
+          offsetWorldY: 0,
+          moved: false,
+          preDragSnap: null,
+          pinchDist: null,
+          pinchMidX: null,
+          pinchMidY: null,
+          wasMultiTouch: false
+        };
       }
       return;
     }
@@ -1030,15 +1123,37 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
     if (pointersRef.current.size === 2) {
       const pts = Array.from(pointersRef.current.values());
       const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-      if (dragRef.current.pinchDist && dist > 10) {
+      const midX = (pts[0].x + pts[1].x) * 0.5;
+      const midY = (pts[0].y + pts[1].y) * 0.5;
+      const canvas = canvasRef.current;
+      if (dragRef.current.pinchDist && dragRef.current.pinchMidX !== null && dragRef.current.pinchMidY !== null && dist > 10 && canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const view = viewRef.current;
+        const sx = midX - rect.left;
+        const sy = midY - rect.top;
+        const beforeWx = view.cx + (sx - rect.width / 2) / view.scale;
+        const beforeWy = view.cy - (sy - rect.height / 2) / view.scale;
+
         const rawFactor = dist / dragRef.current.pinchDist;
-        const factor = 1 + (rawFactor - 1) * sensitivity.zoom;
-        viewRef.current.scale = Math.min(2000, Math.max(4, viewRef.current.scale * factor));
+        const factor = Math.max(0.65, Math.min(1.55, 1 + (rawFactor - 1) * sensitivity.zoom));
+        const nextScale = Math.min(2000, Math.max(4, view.scale * factor));
+        view.scale = nextScale;
+        view.cx = beforeWx - (sx - rect.width / 2) / nextScale;
+        view.cy = beforeWy + (sy - rect.height / 2) / nextScale;
+
+        const panDx = (midX - dragRef.current.pinchMidX) * sensitivity.pan;
+        const panDy = (midY - dragRef.current.pinchMidY) * sensitivity.pan;
+        view.cx -= panDx / nextScale;
+        view.cy += panDy / nextScale;
         scheduleRender();
       }
       dragRef.current.pinchDist = dist;
+      dragRef.current.pinchMidX = midX;
+      dragRef.current.pinchMidY = midY;
       return;
     }
+
+    if (dragRef.current.wasMultiTouch) return;
 
     if (dragRef.current.mode === 'trace') {
       const { x: wx } = screenToWorld(e.clientX, e.clientY);
@@ -1049,10 +1164,13 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
     if (dragRef.current.mode === 'point' && dragRef.current.pointId) {
       const { x: wx, y: wy } = screenToWorld(e.clientX, e.clientY);
       const id = dragRef.current.pointId;
+      const targetX = snapCoord(wx + dragRef.current.offsetWorldX);
+      const targetY = snapCoord(wy + dragRef.current.offsetWorldY);
+      dragRef.current.moved = true;
       commit(
         (p) => ({
           ...p,
-          points: p.points.map((pt) => (pt.id === id ? { ...pt, x: snapCoord(wx), y: snapCoord(wy) } : pt))
+          points: p.points.map((pt) => (pt.id === id ? { ...pt, x: targetX, y: targetY } : pt))
         }),
         false
       );
@@ -1071,19 +1189,27 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
     pointersRef.current.delete(e.pointerId);
+    if (pointersRef.current.size < 2) {
+      dragRef.current.pinchDist = null;
+      dragRef.current.pinchMidX = null;
+      dragRef.current.pinchMidY = null;
+    }
     if (pointersRef.current.size === 0) {
+      if (dragRef.current.mode === 'point' && dragRef.current.moved && dragRef.current.preDragSnap) {
+        const pre = dragRef.current.preDragSnap;
+        setUndoStack((u) => [...u.slice(-39), pre]);
+        setRedoStack([]);
+      }
       dragRef.current.mode = 'none';
       dragRef.current.pointId = null;
-      dragRef.current.pinchDist = null;
+      dragRef.current.preDragSnap = null;
+      dragRef.current.moved = false;
+      dragRef.current.wasMultiTouch = false;
     }
-  };
-
-  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    const stepFactor = 1 + 0.1 * sensitivity.zoom;
-    const factor = e.deltaY > 0 ? 1 / stepFactor : stepFactor;
-    viewRef.current.scale = Math.min(2000, Math.max(4, viewRef.current.scale * factor));
-    scheduleRender();
   };
 
   const addFunctionExpr = (expr: string) => {
@@ -1173,7 +1299,6 @@ export const Plane2DWorkspace: React.FC<Plane2DWorkspaceProps> = ({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        onWheel={handleWheel}
         style={{
           width: '100%',
           height: '100%',

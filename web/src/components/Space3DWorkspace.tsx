@@ -38,9 +38,11 @@ import {
   exportSceneToSvg,
   formatMathNum,
   getCameraBasis,
+  intersectRayPlane3D,
   nextAutoPointName,
   projectPoint,
   projectWithBasis,
+  screenToRay3D,
   sub3,
   dot3,
   cross3,
@@ -62,8 +64,9 @@ import {
   applyGeometricRelationships3D,
   buildRightAngleMark3D,
   computeConstrainedDrag3D,
-  findBestRailForPoint3D,
-  findNearestEdgeHit3D
+  findCandidateRailsForPoint3D,
+  findNearestEdgeHit3D,
+  rawParamOnRail3D
 } from '../engine/geo3dDragSnap';
 import { AiDrawingPlan, Sensitivity3D, ThemeMode } from '../types/app';
 import { SavedProject3D, Space3DExportModal } from './Space3DExportModal';
@@ -179,21 +182,32 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
-  const pinchStartDistRef = useRef<number | null>(null);
-  const pinchStartRadiusRef = useRef<number>(DEFAULT_CAMERA.radius);
+  const pinchLastDistRef = useRef<number | null>(null);
+  const pinchLastCentroidRef = useRef<{ x: number; y: number } | null>(null);
+  const wasMultiTouchRef = useRef<boolean>(false);
+  const pendingVertexMoveRef = useRef<{ sx: number; sy: number; width: number; height: number } | null>(null);
+  const vertexDragRafRef = useRef<number | null>(null);
+  const [isGrabbing, setIsGrabbing] = useState<boolean>(false);
 
   const dragSessionRef = useRef<{
-    type: 'orbit' | 'vertex';
+    type: 'orbit' | 'pan' | 'vertex';
     pointerId: number;
     startX: number;
     startY: number;
     lastX: number;
     lastY: number;
     moved: boolean;
+    isOrbiting?: boolean;
     vertexName?: string;
     startWorldPos?: Vec3;
+    initialHorizHit?: Vec3 | null;
+    initialVertHit?: Vec3 | null;
+    initialRailT?: number;
     rail?: DragRail3D | null;
+    candidateRails?: DragRail3D[];
+    railDirectionLocked?: boolean;
     preDragSnap?: Scene3DSnapshot;
+    preDragRegistry?: Record<string, Vec3>;
     isCustomEdgePoint?: boolean;
     isCustomXyzPoint?: boolean;
   } | null>(null);
@@ -949,24 +963,211 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
     return () => cancelAnimationFrame(rafId);
   }, [autoRotate, paintCanvasNow]);
 
+  // Non-passive wheel listener for smooth zoom without page scrolling or passive-event warnings
+  const sensitivityRef = useRef(sensitivity);
+  sensitivityRef.current = sensitivity;
+  const autoRotateRef = useRef(autoRotate);
+  autoRotateRef.current = autoRotate;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (autoRotateRef.current) setAutoRotate(false);
+      const deltaScale = Math.max(-1.6, Math.min(1.6, e.deltaY / 100));
+      const factor = Math.pow(1.11, deltaScale * sensitivityRef.current.zoom);
+      cameraRef.current.radius = Math.max(3.4, Math.min(28, cameraRef.current.radius * factor));
+      scheduleRender();
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      canvas.removeEventListener('wheel', onWheel);
+      if (vertexDragRafRef.current !== null) {
+        cancelAnimationFrame(vertexDragRafRef.current);
+        vertexDragRafRef.current = null;
+      }
+    };
+  }, [scheduleRender]);
+
   // ===================== HIT TESTING & POINTER INTERACTIONS =====================
+  const wrapTheta = (t: number) => {
+    const twoPi = Math.PI * 2;
+    let r = t % twoPi;
+    if (r > Math.PI) r -= twoPi;
+    if (r < -Math.PI) r += twoPi;
+    return r;
+  };
+
   const findNearestVertex = useCallback(
-    (sx: number, sy: number, width: number, height: number): string | null => {
-      const maxHit = 26 * sensitivity.touchRadius;
+    (sx: number, sy: number, width: number, height: number, isTouch = false): string | null => {
+      const baseRadius = isTouch ? 40 : 28;
+      const maxHit = baseRadius * sensitivity.touchRadius;
       const cam = cameraRef.current;
       let bestName: string | null = null;
-      let bestDist = maxHit;
+      let bestScore = Infinity;
       for (const [name, worldPos] of Object.entries(scene.pointRegistry)) {
         const p = projectPoint(worldPos, cam, width, height);
         const d = Math.hypot(sx - p.x, sy - p.y);
-        if (d < bestDist) {
-          bestDist = d;
-          bestName = name;
+        if (d < maxHit) {
+          // Depth-aware tie-breaker: prefer closer vertex when two vertices overlap closely on screen
+          const score = d + p.depth * 0.35;
+          if (score < bestScore) {
+            bestScore = score;
+            bestName = name;
+          }
         }
       }
       return bestName;
     },
     [scene.pointRegistry, sensitivity.touchRadius]
+  );
+
+  const applyVertexDragFrame = useCallback(
+    (sx: number, sy: number, width: number, height: number) => {
+      const sess = dragSessionRef.current;
+      if (!sess || sess.type !== 'vertex' || !sess.vertexName || !sess.startWorldPos || !sess.preDragSnap || !sess.preDragRegistry) {
+        return;
+      }
+
+      const activeConstraint: DragConstraint3D = sess.isCustomEdgePoint ? 'segment' : dragConstraint;
+
+      // For base vertices in segment mode with multiple incident edges, lock to the incident edge matching initial swipe direction!
+      if (activeConstraint === 'segment' && !sess.railDirectionLocked && sess.candidateRails && sess.candidateRails.length > 1) {
+        const moveDist = Math.hypot(sx - sess.startX, sy - sess.startY);
+        if (moveDist >= 6) {
+          const mx = (sx - sess.startX) / moveDist;
+          const my = (sy - sess.startY) / moveDist;
+          let bestRail = sess.rail || null;
+          let bestAlign = -1;
+          for (const cand of sess.candidateRails) {
+            const pA = projectPoint(cand.fromPos, cameraRef.current, width, height);
+            const pB = projectPoint(cand.toPos, cameraRef.current, width, height);
+            const sdx = pB.x - pA.x;
+            const sdy = pB.y - pA.y;
+            const slen = Math.hypot(sdx, sdy);
+            if (slen < 8) continue;
+            const align = Math.abs((sdx / slen) * mx + (sdy / slen) * my);
+            if (align > bestAlign) {
+              bestAlign = align;
+              bestRail = cand;
+            }
+          }
+          if (bestRail) {
+            sess.rail = bestRail;
+            const currentT = bestRail.fromName === sess.vertexName ? 0 : bestRail.toName === sess.vertexName ? 1 : 0.5;
+            const ptrT = rawParamOnRail3D(sess.startX, sess.startY, bestRail, cameraRef.current, width, height);
+            sess.initialRailT = ptrT !== null ? currentT - ptrT : 0;
+          }
+          sess.railDirectionLocked = true;
+        }
+      }
+
+      const preOrigin = sess.preDragRegistry[sess.preDragSnap.originPoint] || originWorld;
+      const result = computeConstrainedDrag3D({
+        sx,
+        sy,
+        startX: sess.startX,
+        startY: sess.startY,
+        cam: cameraRef.current,
+        width,
+        height,
+        constraint: activeConstraint,
+        startPos: sess.startWorldPos,
+        initialHorizHit: sess.initialHorizHit ?? null,
+        initialVertHit: sess.initialVertHit ?? null,
+        initialRailT: sess.initialRailT ?? 0,
+        isEdgePoint: Boolean(sess.isCustomEdgePoint),
+        rail: sess.rail || null,
+        dragSensitivity: sensitivity.drag,
+        snapEnabled,
+        shapeKey: sess.preDragSnap.shapeKey,
+        draggedVertex: sess.vertexName,
+        originWorld: preOrigin,
+        registry: sess.preDragRegistry
+      });
+
+      if (sess.isCustomEdgePoint && result.ratio !== undefined) {
+        const ratio = result.ratio;
+        const vName = sess.vertexName;
+        setSnap((prev) => ({
+          ...prev,
+          customPoints: prev.customPoints.map((cp) => (cp.name === vName ? { ...cp, ratio } : cp))
+        }));
+        setDragFeedback({
+          vertexName: vName,
+          worldPos: result.pos,
+          isSnapped: result.snap.isSnapped,
+          snapReason: result.snap.reason,
+          relationHint: sess.rail ? `Trượt trên cạnh ${sess.rail.fromName}${sess.rail.toName}` : '',
+          linkedVertices: [],
+          rail: sess.rail || null
+        });
+        return;
+      }
+
+      if (sess.isCustomXyzPoint) {
+        const mPos = worldToMath(result.pos, preOrigin);
+        const vName = sess.vertexName;
+        setSnap((prev) => ({
+          ...prev,
+          customXYZPoints: prev.customXYZPoints.map((xp) =>
+            xp.name === vName ? { ...xp, x: mPos.x, y: mPos.y, z: mPos.z } : xp
+          )
+        }));
+        setDragFeedback({
+          vertexName: vName,
+          worldPos: result.pos,
+          isSnapped: result.snap.isSnapped,
+          snapReason: result.snap.reason,
+          relationHint: 'Điểm Oxyz tự do',
+          linkedVertices: [],
+          rail: sess.rail || null
+        });
+        return;
+      }
+
+      // Base solid vertex drag computed deterministically from immutable preDragRegistry & preDragSnap -> ZERO drift!
+      const vName = sess.vertexName;
+      const baseOverrides = sess.preDragSnap.vertexOverrides || {};
+      if (keepRelations) {
+        const rel = applyGeometricRelationships3D(
+          sess.preDragSnap.shapeKey,
+          vName,
+          result.pos,
+          sess.startWorldPos,
+          sess.preDragRegistry
+        );
+        setSnap((prev) => ({
+          ...prev,
+          vertexOverrides: { ...baseOverrides, ...rel.updates }
+        }));
+        setDragFeedback({
+          vertexName: vName,
+          worldPos: result.pos,
+          isSnapped: result.snap.isSnapped,
+          snapReason: result.snap.reason,
+          relationHint: rel.relationHint,
+          linkedVertices: rel.linkedVertices,
+          rail: sess.rail || null
+        });
+      } else {
+        setSnap((prev) => ({
+          ...prev,
+          vertexOverrides: { ...baseOverrides, [vName]: result.pos }
+        }));
+        setDragFeedback({
+          vertexName: vName,
+          worldPos: result.pos,
+          isSnapped: result.snap.isSnapped,
+          snapReason: result.snap.reason,
+          relationHint: 'Chế độ kéo tự do (không khóa hình)',
+          linkedVertices: [],
+          rail: sess.rail || null
+        });
+      }
+    },
+    [dragConstraint, keepRelations, originWorld, sensitivity.drag, snapEnabled]
   );
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -976,20 +1177,44 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
     const rect = canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
+    const isTouch = e.pointerType === 'touch';
 
     pointersRef.current.set(e.pointerId, { x: sx, y: sy });
 
-    // 2-finger pinch start
+    // 2-finger pinch zoom + pan start
     if (pointersRef.current.size === 2) {
       const pts = Array.from(pointersRef.current.values());
-      pinchStartDistRef.current = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      pinchStartRadiusRef.current = cameraRef.current.radius;
+      pinchLastDistRef.current = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      pinchLastCentroidRef.current = { x: (pts[0].x + pts[1].x) * 0.5, y: (pts[0].y + pts[1].y) * 0.5 };
+      wasMultiTouchRef.current = true;
       dragSessionRef.current = null;
       setDragFeedback(null);
+      setIsGrabbing(false);
+      if (autoRotateRef.current) setAutoRotate(false);
       return;
     }
 
+    if (pointersRef.current.size === 1) {
+      wasMultiTouchRef.current = false;
+    }
+
     setCameraMenuOpen(false);
+
+    // Desktop right-click / middle-click / Shift+left-click -> smooth camera pan
+    if (!isTouch && (e.button === 1 || e.button === 2 || e.shiftKey)) {
+      if (autoRotateRef.current) setAutoRotate(false);
+      dragSessionRef.current = {
+        type: 'pan',
+        pointerId: e.pointerId,
+        startX: sx,
+        startY: sy,
+        lastX: sx,
+        lastY: sy,
+        moved: false
+      };
+      setIsGrabbing(true);
+      return;
+    }
 
     // Direct "Chấm điểm trên cạnh" mode
     if (mode === 'add_point') {
@@ -1000,7 +1225,7 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
         cameraRef.current,
         rect.width,
         rect.height,
-        28 * sensitivity.touchRadius,
+        (isTouch ? 36 : 28) * sensitivity.touchRadius,
         snapEnabled
       );
       if (hit) {
@@ -1020,7 +1245,7 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
 
     // Direct Connect Line / Vector mode
     if (mode === 'connect_dashed' || mode === 'connect_solid' || mode === 'connect_vector') {
-      const hitV = findNearestVertex(sx, sy, rect.width, rect.height);
+      const hitV = findNearestVertex(sx, sy, rect.width, rect.height, isTouch);
       if (hitV) {
         if (!selectedFirstPt) {
           setSelectedFirstPt(hitV);
@@ -1046,12 +1271,49 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
 
     // Drag Vertex mode
     if (mode === 'drag') {
-      const hitV = findNearestVertex(sx, sy, rect.width, rect.height);
+      const hitV = findNearestVertex(sx, sy, rect.width, rect.height, isTouch);
       if (hitV) {
         const startPos = scene.pointRegistry[hitV];
-        const rail = findBestRailForPoint3D(hitV, scene, snap);
+        const candidateRails = findCandidateRailsForPoint3D(hitV, scene, snap);
+        const initialRail = candidateRails[0] || null;
         const isCustomEdge = snap.customPoints.some((c) => c.name === hitV);
         const isCustomXyz = snap.customXYZPoints.some((c) => c.name === hitV);
+
+        // Capture initial plane hits & rail param so there is ZERO jump on first touch!
+        const cam = cameraRef.current;
+        const startRay = screenToRay3D(sx, sy, cam, rect.width, rect.height);
+        const initHorizHit =
+          Math.abs(startRay.dir.y) >= 0.16
+            ? intersectRayPlane3D(startRay.origin, startRay.dir, startPos, { x: 0, y: 1, z: 0 })
+            : null;
+        const { forward } = getCameraBasis(cam);
+        const horizLen = Math.hypot(forward.x, forward.z);
+        const vertNormal: Vec3 =
+          horizLen > 1e-3 ? { x: forward.x / horizLen, y: 0, z: forward.z / horizLen } : { x: 0, y: 0, z: 1 };
+        const initVertHit =
+          Math.abs(dot3(startRay.dir, vertNormal)) >= 0.16
+            ? intersectRayPlane3D(startRay.origin, startRay.dir, startPos, vertNormal)
+            : null;
+
+        let initRailT = 0;
+        if (initialRail) {
+          let currentT = 0.5;
+          if (isCustomEdge) {
+            currentT = snap.customPoints.find((c) => c.name === hitV)?.ratio ?? 0.5;
+          } else if (initialRail.fromName === hitV) {
+            currentT = 0;
+          } else if (initialRail.toName === hitV) {
+            currentT = 1;
+          } else {
+            const ab = sub3(initialRail.toPos, initialRail.fromPos);
+            const lenSq = dot3(ab, ab);
+            if (lenSq > 1e-5) currentT = dot3(sub3(startPos, initialRail.fromPos), ab) / lenSq;
+          }
+          const ptrT = rawParamOnRail3D(sx, sy, initialRail, cam, rect.width, rect.height);
+          initRailT = ptrT !== null ? currentT - ptrT : 0;
+        }
+
+        if (autoRotateRef.current) setAutoRotate(false);
         dragSessionRef.current = {
           type: 'vertex',
           pointerId: e.pointerId,
@@ -1062,11 +1324,18 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
           moved: false,
           vertexName: hitV,
           startWorldPos: startPos,
-          rail,
+          initialHorizHit: initHorizHit,
+          initialVertHit: initVertHit,
+          initialRailT: initRailT,
+          rail: initialRail,
+          candidateRails,
+          railDirectionLocked: isCustomEdge || candidateRails.length <= 1,
           preDragSnap: snap,
+          preDragRegistry: { ...scene.pointRegistry },
           isCustomEdgePoint: isCustomEdge,
           isCustomXyzPoint: isCustomXyz
         };
+        setIsGrabbing(true);
         setDragFeedback({
           vertexName: hitV,
           worldPos: startPos,
@@ -1074,7 +1343,7 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
           snapReason: '',
           relationHint: '',
           linkedVertices: [],
-          rail
+          rail: initialRail
         });
         return;
       }
@@ -1088,7 +1357,8 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
       startY: sy,
       lastX: sx,
       lastY: sy,
-      moved: false
+      moved: false,
+      isOrbiting: false
     };
   };
 
@@ -1118,17 +1388,34 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
       pointersRef.current.set(e.pointerId, { x: sx, y: sy });
     }
 
-    // 2-finger pinch zoom (ZERO React re-render!)
-    if (pointersRef.current.size === 2 && pinchStartDistRef.current) {
+    // 2-finger pinch zoom + 2-finger pan (ZERO React re-render!)
+    if (pointersRef.current.size === 2 && pinchLastDistRef.current && pinchLastCentroidRef.current) {
       const pts = Array.from(pointersRef.current.values());
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const centroid = { x: (pts[0].x + pts[1].x) * 0.5, y: (pts[0].y + pts[1].y) * 0.5 };
       if (dist > 10) {
-        const scale = pinchStartDistRef.current / dist;
-        cameraRef.current.radius = Math.max(4.5, Math.min(26, pinchStartRadiusRef.current * Math.pow(scale, sensitivity.zoom)));
+        const rawZoom = dist / pinchLastDistRef.current;
+        const scaledZoom = Math.max(0.65, Math.min(1.55, 1 + (rawZoom - 1) * sensitivity.zoom));
+        cameraRef.current.radius = Math.max(3.4, Math.min(28, cameraRef.current.radius / scaledZoom));
+
+        const panDx = centroid.x - pinchLastCentroidRef.current.x;
+        const panDy = centroid.y - pinchLastCentroidRef.current.y;
+        const { right, up } = getCameraBasis(cameraRef.current);
+        const panScale = cameraRef.current.radius * 0.0026 * sensitivity.zoom;
+        cameraRef.current.target = {
+          x: Math.max(-10, Math.min(10, cameraRef.current.target.x - right.x * panDx * panScale + up.x * panDy * panScale)),
+          y: Math.max(-4, Math.min(12, cameraRef.current.target.y - right.y * panDx * panScale + up.y * panDy * panScale)),
+          z: Math.max(-10, Math.min(10, cameraRef.current.target.z - right.z * panDx * panScale + up.z * panDy * panScale))
+        };
         scheduleRender();
       }
+      pinchLastDistRef.current = dist;
+      pinchLastCentroidRef.current = centroid;
       return;
     }
+
+    // Never jump into 1-finger orbit immediately after lifting 1 finger from a 2-finger pinch!
+    if (wasMultiTouchRef.current) return;
 
     const sess = dragSessionRef.current;
     if (!sess || sess.pointerId !== e.pointerId) return;
@@ -1137,103 +1424,49 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
     const dy = sy - sess.lastY;
     sess.lastX = sx;
     sess.lastY = sy;
-    if (Math.hypot(sx - sess.startX, sy - sess.startY) > 4) sess.moved = true;
+    const distFromStart = Math.hypot(sx - sess.startX, sy - sess.startY);
+    if (distFromStart > 3.5) sess.moved = true;
+
+    if (sess.type === 'pan') {
+      const { right, up } = getCameraBasis(cameraRef.current);
+      const panScale = cameraRef.current.radius * 0.0026 * sensitivity.zoom;
+      cameraRef.current.target = {
+        x: Math.max(-10, Math.min(10, cameraRef.current.target.x - right.x * dx * panScale + up.x * dy * panScale)),
+        y: Math.max(-4, Math.min(12, cameraRef.current.target.y - right.y * dx * panScale + up.y * dy * panScale)),
+        z: Math.max(-10, Math.min(10, cameraRef.current.target.z - right.z * dx * panScale + up.z * dy * panScale))
+      };
+      scheduleRender();
+      return;
+    }
 
     if (sess.type === 'orbit') {
-      const rotSpeed = 0.0085 * sensitivity.rotation;
-      cameraRef.current.theta -= dx * rotSpeed;
-      cameraRef.current.phi = Math.max(0.08, Math.min(Math.PI - 0.08, cameraRef.current.phi - dy * rotSpeed));
+      if (!sess.isOrbiting) {
+        if (distFromStart < 3.5) return;
+        sess.isOrbiting = true;
+        if (autoRotateRef.current) setAutoRotate(false);
+        setIsGrabbing(true);
+        const rotSpeed = 0.0112 * sensitivity.rotation;
+        cameraRef.current.theta = wrapTheta(cameraRef.current.theta - (sx - sess.startX) * rotSpeed);
+        cameraRef.current.phi = Math.max(0.06, Math.min(Math.PI - 0.06, cameraRef.current.phi - (sy - sess.startY) * rotSpeed));
+        scheduleRender();
+        return;
+      }
+      const rotSpeed = 0.0112 * sensitivity.rotation;
+      cameraRef.current.theta = wrapTheta(cameraRef.current.theta - dx * rotSpeed);
+      cameraRef.current.phi = Math.max(0.06, Math.min(Math.PI - 0.06, cameraRef.current.phi - dy * rotSpeed));
       scheduleRender();
       return;
     }
 
     if (sess.type === 'vertex' && sess.vertexName && sess.startWorldPos) {
-      const activeConstraint: DragConstraint3D = sess.isCustomEdgePoint ? 'segment' : dragConstraint;
-      const result = computeConstrainedDrag3D({
-        sx,
-        sy,
-        cam: cameraRef.current,
-        width: rect.width,
-        height: rect.height,
-        constraint: activeConstraint,
-        startPos: sess.startWorldPos,
-        rail: sess.rail || null,
-        dragSensitivity: sensitivity.drag,
-        snapEnabled,
-        shapeKey: snap.shapeKey,
-        draggedVertex: sess.vertexName,
-        originWorld,
-        registry: scene.pointRegistry
-      });
-
-      if (sess.isCustomEdgePoint && result.ratio !== undefined) {
-        const ratio = result.ratio;
-        setSnap((prev) => ({
-          ...prev,
-          customPoints: prev.customPoints.map((cp) => (cp.name === sess.vertexName ? { ...cp, ratio } : cp))
-        }));
-        setDragFeedback({
-          vertexName: sess.vertexName,
-          worldPos: result.pos,
-          isSnapped: result.snap.isSnapped,
-          snapReason: result.snap.reason,
-          relationHint: sess.rail ? `Trượt trên cạnh ${sess.rail.fromName}${sess.rail.toName}` : '',
-          linkedVertices: [],
-          rail: sess.rail || null
-        });
-        return;
-      }
-
-      if (sess.isCustomXyzPoint) {
-        const mPos = worldToMath(result.pos, originWorld);
-        setSnap((prev) => ({
-          ...prev,
-          customXYZPoints: prev.customXYZPoints.map((xp) =>
-            xp.name === sess.vertexName ? { ...xp, x: mPos.x, y: mPos.y, z: mPos.z } : xp
-          )
-        }));
-        setDragFeedback({
-          vertexName: sess.vertexName,
-          worldPos: result.pos,
-          isSnapped: result.snap.isSnapped,
-          snapReason: result.snap.reason,
-          relationHint: 'Điểm Oxyz tự do',
-          linkedVertices: [],
-          rail: sess.rail || null
-        });
-        return;
-      }
-
-      // Base solid vertex drag with optional Khóa hình geometric relationships
-      const prevPos = scene.pointRegistry[sess.vertexName] || sess.startWorldPos;
-      if (keepRelations) {
-        const rel = applyGeometricRelationships3D(snap.shapeKey, sess.vertexName, result.pos, prevPos, scene.pointRegistry);
-        setSnap((prev) => ({
-          ...prev,
-          vertexOverrides: { ...(prev.vertexOverrides || {}), ...rel.updates }
-        }));
-        setDragFeedback({
-          vertexName: sess.vertexName,
-          worldPos: result.pos,
-          isSnapped: result.snap.isSnapped,
-          snapReason: result.snap.reason,
-          relationHint: rel.relationHint,
-          linkedVertices: rel.linkedVertices,
-          rail: sess.rail || null
-        });
-      } else {
-        setSnap((prev) => ({
-          ...prev,
-          vertexOverrides: { ...(prev.vertexOverrides || {}), [sess.vertexName!]: result.pos }
-        }));
-        setDragFeedback({
-          vertexName: sess.vertexName,
-          worldPos: result.pos,
-          isSnapped: result.snap.isSnapped,
-          snapReason: result.snap.reason,
-          relationHint: 'Chế độ kéo tự do (không khóa hình)',
-          linkedVertices: [],
-          rail: sess.rail || null
+      // Coalesce high-frequency pointermove events to 1 update per display frame (smooth 60fps!)
+      pendingVertexMoveRef.current = { sx, sy, width: rect.width, height: rect.height };
+      if (vertexDragRafRef.current === null) {
+        vertexDragRafRef.current = requestAnimationFrame(() => {
+          vertexDragRafRef.current = null;
+          const move = pendingVertexMoveRef.current;
+          pendingVertexMoveRef.current = null;
+          if (move) applyVertexDragFrame(move.sx, move.sy, move.width, move.height);
         });
       }
     }
@@ -1246,11 +1479,26 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
     }
     pointersRef.current.delete(e.pointerId);
     if (pointersRef.current.size < 2) {
-      pinchStartDistRef.current = null;
+      pinchLastDistRef.current = null;
+      pinchLastCentroidRef.current = null;
+    }
+    if (pointersRef.current.size === 0) {
+      wasMultiTouchRef.current = false;
     }
 
     const sess = dragSessionRef.current;
     if (sess && sess.pointerId === e.pointerId) {
+      // Flush any final queued vertex drag frame before ending session
+      if (vertexDragRafRef.current !== null) {
+        cancelAnimationFrame(vertexDragRafRef.current);
+        vertexDragRafRef.current = null;
+      }
+      if (pendingVertexMoveRef.current && sess.type === 'vertex') {
+        const move = pendingVertexMoveRef.current;
+        pendingVertexMoveRef.current = null;
+        applyVertexDragFrame(move.sx, move.sy, move.width, move.height);
+      }
+
       if (sess.type === 'vertex' && sess.moved && sess.preDragSnap) {
         const pre = sess.preDragSnap;
         setUndoStack((u) => [...u.slice(-39), pre]);
@@ -1258,19 +1506,19 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
       } else if (sess.type === 'orbit' && !sess.moved && mode === 'view' && canvas) {
         // Tap a vertex in View mode to inspect its exact Oxyz coordinates!
         const rect = canvas.getBoundingClientRect();
-        const hitV = findNearestVertex(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
+        const hitV = findNearestVertex(
+          e.clientX - rect.left,
+          e.clientY - rect.top,
+          rect.width,
+          rect.height,
+          e.pointerType === 'touch'
+        );
         setInspectedVertex((prev) => (hitV && prev !== hitV ? hitV : null));
       }
       dragSessionRef.current = null;
       setDragFeedback(null);
+      setIsGrabbing(false);
     }
-  };
-
-  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    const factor = 1 + Math.sign(e.deltaY) * 0.08 * sensitivity.zoom;
-    cameraRef.current.radius = Math.max(4.5, Math.min(26, cameraRef.current.radius * factor));
-    scheduleRender();
   };
 
   // ===================== EXPORTS & SAVING =====================
@@ -1368,12 +1616,20 @@ export const Space3DWorkspace: React.FC<Space3DWorkspaceProps> = ({
       <canvas
         ref={canvasRef}
         className="studio-canvas"
-        style={{ cursor: mode === 'drag' ? 'grab' : mode === 'add_point' ? 'crosshair' : 'default' }}
+        style={{
+          cursor: isGrabbing
+            ? 'grabbing'
+            : mode === 'drag' || mode === 'view'
+            ? 'grab'
+            : mode === 'add_point'
+            ? 'crosshair'
+            : 'default'
+        }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        onWheel={handleWheel}
+        onContextMenu={(e) => e.preventDefault()}
       />
 
       {/* TOP FLOATING HUD */}

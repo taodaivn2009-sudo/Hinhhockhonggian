@@ -77,7 +77,7 @@ fun GeometryCanvasView(
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         val startPos = down.position
-                        val touchSlop = 6f * density
+                        val touchSlop = 3.5f * density
                         var activePointerId = down.id
                         var lastPos = startPos
                         var totalDistance = 0f
@@ -114,6 +114,7 @@ fun GeometryCanvasView(
                                     dragCaptured = false
                                 }
                                 isMultiTouch = true
+                                isOrbiting = false
                                 val zoom = event.calculateZoom()
                                 val pan = event.calculatePan()
                                 if (zoom != 1f || pan.x != 0f || pan.y != 0f) {
@@ -126,15 +127,19 @@ fun GeometryCanvasView(
                                         density = density
                                     )
                                 }
-                                // Keep anchor synced so lifting 1 finger never jumps
                                 val first = activePointers.first()
                                 activePointerId = first.id
                                 lastPos = first.position
                                 activePointers.forEach { if (it.positionChanged()) it.consume() }
                             } else {
                                 val change = activePointers.first()
-                                // If the active pointer switched (e.g. after lifting a finger from pinch),
-                                // re-anchor cleanly with zero delta jump!
+                                // After a 2-finger pinch/pan, never jump into 1-finger orbit when lifting 1 finger
+                                if (isMultiTouch) {
+                                    activePointerId = change.id
+                                    lastPos = change.position
+                                    if (change.positionChanged()) change.consume()
+                                    continue
+                                }
                                 if (change.id != activePointerId) {
                                     activePointerId = change.id
                                     lastPos = change.position
@@ -161,8 +166,11 @@ fun GeometryCanvasView(
                                     // Smooth 1-finger orbit works in VIEW mode and whenever dragging empty space in any mode
                                     if (!isOrbiting && totalDistance >= touchSlop) {
                                         isOrbiting = true
-                                    }
-                                    if (isOrbiting && stepDist > 0.05f) {
+                                        val initDx = curPos.x - startPos.x
+                                        val initDy = curPos.y - startPos.y
+                                        viewModel.orbitCamera(initDx, initDy, density)
+                                        change.consume()
+                                    } else if (isOrbiting && stepDist > 0.02f) {
                                         viewModel.orbitCamera(dx, dy, density)
                                         change.consume()
                                     }
@@ -196,16 +204,18 @@ fun GeometryCanvasView(
                     }
                 }
         ) {
-            // Observe active theme palette so Light/Dark/Preset/Accent changes redraw 3D immediately
+            // Observe active theme palette & liveCamera ONLY in draw phase -> ZERO recompositions while rotating!
             @Suppress("UNUSED_VARIABLE")
             val themeVersion = ActiveThemeState.current
+            val activeCam = viewModel.liveCamera
             drawIntoCanvas { canvas ->
                 GeometryRenderer.renderScene(
                     canvas = canvas.nativeCanvas,
                     width = size.width,
                     height = size.height,
                     density = density,
-                    uiState = uiState
+                    uiState = uiState,
+                    cameraOverride = activeCam
                 )
             }
         }

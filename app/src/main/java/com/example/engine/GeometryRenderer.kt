@@ -126,7 +126,8 @@ object GeometryRenderer {
         uiState: GeometryUiState,
         includeExportCard: Boolean = false,
         exportTitle: String = "",
-        transparentBackground: Boolean = false
+        transparentBackground: Boolean = false,
+        cameraOverride: CameraOrbitState? = null
     ) {
         if (width <= 2f || height <= 2f) return
         val canvasTheme = ActiveThemeState.current.canvas
@@ -139,8 +140,9 @@ object GeometryRenderer {
 
         val snap = uiState.snapshot
         val scene = uiState.scene
-        val camPos = snap.camera.cameraPosition()
-        val proj = CameraProjection(camPos, snap.camera.target, width, height)
+        val activeCam = cameraOverride ?: snap.camera
+        val camPos = activeCam.cameraPosition()
+        val proj = CameraProjection(camPos, activeCam.target, width, height)
 
         // 1. Dynamic radial background gradient (skipped for transparent export)
         if (!transparentBackground) {

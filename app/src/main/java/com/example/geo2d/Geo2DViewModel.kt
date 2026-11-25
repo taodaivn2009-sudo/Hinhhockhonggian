@@ -34,6 +34,8 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
     private var replayJob: Job? = null
     private var fullSnapshotBeforeReplay: Geo2DSnapshot? = null
     private var dragHistoryRecorded = false
+    private var dragOffsetWorldX = 0f
+    private var dragOffsetWorldY = 0f
     private var idSeq = 100
 
     private val palette = listOf(
@@ -772,6 +774,9 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
             val hit = findPointAtScreen(sx, sy, width, height, density)
             if (hit != null) {
                 dragHistoryRecorded = false
+                val pointerWorld = Geo2DRenderer.screenToWorld(sx, sy, st.snapshot.camera, width, height)
+                dragOffsetWorldX = hit.x - pointerWorld.x
+                dragOffsetWorldY = hit.y - pointerWorld.y
                 _uiState.update { it.copy(draggingPointId = hit.id) }
                 return true
             }
@@ -786,7 +791,8 @@ class Geo2DViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val dragId = st.draggingPointId ?: return
-        val rawWorld = Geo2DRenderer.screenToWorld(sx, sy, st.snapshot.camera, width, height)
+        val pointerWorld = Geo2DRenderer.screenToWorld(sx, sy, st.snapshot.camera, width, height)
+        val rawWorld = Vec2(pointerWorld.x + dragOffsetWorldX, pointerWorld.y + dragOffsetWorldY)
         val snapped = snapCoord(rawWorld, density)
         val existing = st.snapshot.points.firstOrNull { it.id == dragId } ?: return
         if (existing.x == snapped.x && existing.y == snapped.y) return
